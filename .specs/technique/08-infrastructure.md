@@ -94,8 +94,32 @@ demeure sur liste fermée (D11).
 
 ## GitHub
 
-**Dépôt privé.** L'outil est privé, ses specs décrivent une stratégie d'appel d'API tierce,
-et le dépôt portera des références de configuration. Rien ne justifie qu'il soit public.
+**Dépôt public, sous conditions.**
+
+Le réflexe serait de le passer en privé. En reprenant les arguments un par un, aucun ne tient :
+les specs ne contiennent rien de confidentiel, le dépôt ne porte que des *noms* de variables
+et jamais leurs valeurs, et les conditions d'utilisation de Google encadrent l'usage des
+**données**, pas la visibilité du **code**. Ce qui rend l'outil privé, c'est l'allowlist
+(D11), pas la visibilité du dépôt. L'offre Vercel Hobby, elle, se juge au caractère non
+commercial et non à la visibilité.
+
+Un dépôt public apporte même le scan de secrets et la protection au push gratuitement.
+
+**Mais l'asymétrie est réelle** : sur un dépôt public, un `.env` commité par erreur est
+moissonné par des robots en quelques minutes, et la clé Google est exploitée avant qu'on s'en
+aperçoive. D'où deux conditions non négociables :
+
+1. **Protection au push activée** — GitHub refuse le commit contenant un secret reconnu
+2. **Quota journalier Google plafonné** — ce qui borne les dégâts même si une clé fuit
+
+La seconde est déjà exigée par ailleurs. Elle prend ici un second rôle : ce n'est plus
+seulement une protection contre un bug, c'est le plafond de dégâts d'une clé compromise.
+
+**Identité des commits.** Le dépôt est un projet personnel : les commits ne doivent pas
+porter une adresse professionnelle. Outre l'exposition publique de l'adresse, attribuer un
+projet personnel à une identité d'entreprise brouille inutilement la question de la propriété
+intellectuelle. On utilise l'adresse `noreply` fournie par GitHub, configurée **au niveau du
+dépôt** pour ne pas affecter les autres projets.
 
 **Tâche planifiée mensuelle** — déclenche le balayage le 1er de chaque mois. Voir
 [`06-pipeline-ingestion.md`](06-pipeline-ingestion.md).
@@ -183,19 +207,21 @@ Actions manuelles, à réaliser hors du dépôt. Le repère ⚠️ signale ce qu
     à la base
 
 ### GitHub
-14. Créer le dépôt en **privé** et y pousser le code existant
-15. Ajouter les secrets nécessaires à la tâche mensuelle : clé Places et URL de base
+14. ⚠️ Configurer l'identité git du dépôt sur l'adresse `noreply` GitHub, **avant le premier
+    push** — après, l'adresse est publique et définitive
+15. ⚠️ Activer la **protection au push** *(Settings → Code security → Push protection)*
+16. Ajouter les secrets nécessaires à la tâche mensuelle : clé Places et URL de base
 
 ### Vercel
-16. Créer un compte, connecter le dépôt
-17. Renseigner les variables d'environnement destinées à la production
-18. Une fois le domaine attribué, **revenir compléter la restriction par référent de la clé
+17. Créer un compte, connecter le dépôt
+18. Renseigner les variables d'environnement destinées à la production
+19. Une fois le domaine attribué, **revenir compléter la restriction par référent de la clé
     Maps** et les URL de redirection Supabase
 
 ### Ensuite
-19. Créer les comptes des utilisateurs à la main depuis le tableau de bord Supabase — c'est
+20. Créer les comptes des utilisateurs à la main depuis le tableau de bord Supabase — c'est
     l'allowlist
-20. Après le premier balayage : vérifier en console de facturation que la consommation
+21. Après le premier balayage : vérifier en console de facturation que la consommation
     Enterprise est de l'ordre de 400 appels et que **rien n'a touché un palier supérieur**
 
 **Rien à faire pour SIRENE ni pour la BAN** : téléchargement direct et API sans clé.
