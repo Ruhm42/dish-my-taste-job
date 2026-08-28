@@ -198,6 +198,36 @@ tarifaire complet.
 
 ---
 
+## Étape intermédiaire : mettre le POC en ligne
+
+Décidé le 2026-08-29. Il ne s'agit pas encore de la mise en production décrite plus bas,
+mais d'une mise en ligne du prototype, **sur les seules données de démonstration**.
+
+**Ce qui est déployé** : 37 établissements **fictifs**, avec le bandeau qui le dit à
+l'écran. Aucune donnée Google réelle n'est en base.
+
+**Ce qui n'existe pas encore** : l'authentification. Il n'y a ni route de connexion, ni
+allowlist — la page est publiquement accessible.
+
+C'est acceptable *tant que la base ne contient que de la fiction*, et cela permet de faire
+dès maintenant le test de lisibilité prévu en
+[`fonctionnel/02`](../fonctionnel/02-recherche-carte-liste.md) : faire lire l'écran à la
+personne concernée.
+
+> ⚠️ **La ligne à ne pas franchir.** Le login devient bloquant **avant le premier balayage
+> réel**, pas avant. Une page publique alimentée par des données Places serait exactement
+> l'annuaire public que les CGU Google interdisent, et que D11 écarte. Charger de vraies
+> données sur un déploiement sans authentification annulerait d'un coup les précautions
+> prises depuis le début.
+
+Pour cette étape : créer le projet Supabase, y appliquer le schéma, y jouer `seed`,
+importer le dépôt sur Vercel avec `DATABASE_URL` et
+`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`, puis compléter la restriction par référent de la clé
+Maps avec le domaine attribué. Les points 5 à 8 et 11 à 17 ci-dessous ne s'appliquent
+qu'à la vraie mise en production.
+
+---
+
 ## Ce qu'il reste à faire, dans l'ordre
 
 Actions manuelles, hors du dépôt. Le repère ⚠️ signale ce qui protège du coût ou de la perte
