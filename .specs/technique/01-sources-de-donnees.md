@@ -79,6 +79,13 @@ et précisément chez les petites structures — là où l'information est la pl
 mécanisme de repli est décrit dans [`05-inference-des-horaires.md`](05-inference-des-horaires.md).
 Cette limite doit rester visible dans l'interface, jamais masquée derrière un verdict net.
 
+**Accès** : le **fichier stock des établissements** se télécharge directement, **sans compte
+ni clé**, en Parquet (~830 Mo) ou en ZIP (~1,1 Go). Le format Parquet est retenu : il se
+filtre sur place, sans décompresser plusieurs giga-octets de CSV.
+
+L'API Sirene existe aussi mais suppose un compte, une souscription et un jeton, pour une
+limite de 30 requêtes par minute. Le fichier stock évite tout cela (D13).
+
 **Coût** : gratuit, données ouvertes, redistribuables.
 
 ---

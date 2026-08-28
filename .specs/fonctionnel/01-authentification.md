@@ -18,11 +18,11 @@ supprime toute la mécanique de gestion des mots de passe oubliés.
 
 ## Qui peut avoir un compte
 
-**Une liste d'emails autorisés, tenue à la main.**
+**Une liste d'adresses autorisées, tenue à la main.**
 
-Une adresse qui n'y figure pas ne reçoit pas de lien de connexion. Le message affiché doit
-être clair et sans ambiguïté : l'accès est restreint, ce n'est pas une erreur technique de
-la part de l'utilisateur.
+Les comptes sont créés à la main, un par un. Une adresse qui n'y figure pas ne reçoit pas de
+lien de connexion. Le message affiché doit être clair et sans ambiguïté : l'accès est
+restreint, ce n'est pas une erreur technique de la part de l'utilisateur.
 
 Il n'y a **pas d'inscription**, pas de parrainage, pas de demande d'accès. Ajouter quelqu'un
 est une action manuelle de l'administrateur du projet.

@@ -33,6 +33,7 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 - [`05-inference-des-horaires.md`](technique/05-inference-des-horaires.md) — **le cœur fonctionnel**
 - [`06-pipeline-ingestion.md`](technique/06-pipeline-ingestion.md) — les scripts et leur ordre
 - [`07-stack-et-tests.md`](technique/07-stack-et-tests.md) — technos, vérification
+- [`08-infrastructure.md`](technique/08-infrastructure.md) — comptes, clés, **ce qu'il y a à faire à la main**
 
 ## Conventions d'écriture
 

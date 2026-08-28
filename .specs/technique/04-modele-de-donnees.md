@@ -2,8 +2,9 @@
 
 > **Statut** : acté · **Dernière mise à jour** : 2026-08-28
 
-Quatre tables. La lecture seule sur les établissements (D10) fait tomber toute la mécanique
-multi-sources et sa résolution de priorité qui avait été envisagée.
+Trois tables. La lecture seule sur les établissements (D10) fait tomber toute la mécanique
+multi-sources et sa résolution de priorité qui avait été envisagée ; l'allowlist est portée
+par le service d'authentification et n'a pas de table applicative (D14).
 
 ---
 
@@ -113,15 +114,15 @@ l'application.
 
 ---
 
-## `allowed_email` — allowlist
+## L'allowlist n'est pas une table
 
-| Champ | Rôle |
-|---|---|
-| `email` | Adresse autorisée, clé primaire |
-| `added_at` | Date d'ajout |
-| `note` | Qui c'est, pourquoi — pour s'y retrouver dans six mois |
+Elle est portée par le service d'authentification : l'inscription y est désactivée et les
+comptes sont créés à la main. Une demande de connexion pour une adresse inconnue est refusée
+sans créer de compte.
 
-Alimentée à la main. Une adresse absente ne reçoit pas de lien de connexion (D11).
+La liste des utilisateurs **est** l'allowlist. Une table applicative en parallèle serait une
+seconde source de vérité à tenir synchronisée, pour aucun gain (D14). Voir
+[`08-infrastructure.md`](08-infrastructure.md).
 
 ---
 
@@ -154,3 +155,5 @@ Traces des simplifications, pour ne pas les redécouvrir :
 - **Table de fenêtres horaires relationnelle** — jamais interrogée relationnellement, elle ne
   sert qu'à l'affichage de la grille. Un champ structuré sur `restaurant` suffit
 - **Types géographiques PostGIS** — deux flottants suffisent à cette échelle (D12)
+- **Table d'emails autorisés** — redondante avec la liste des comptes du service
+  d'authentification (D14)

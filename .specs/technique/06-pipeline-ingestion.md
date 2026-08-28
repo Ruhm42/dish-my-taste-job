@@ -27,7 +27,8 @@ gratuitement.
 
 ## 1. `ingest:sirene`
 
-Télécharge le stock SIRENE des établissements et filtre :
+Télécharge le **fichier stock des établissements au format Parquet** (~830 Mo, sans compte
+ni clé) et le filtre sur place :
 - Codes d'activité `56.10A`, `56.10B`, `56.10C`, `56.29A`, `56.29B`, `56.30Z`
 - Établissements en activité uniquement
 - Communes de la Métropole de Lyon (EPCI 200046977)

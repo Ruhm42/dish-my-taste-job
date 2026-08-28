@@ -257,3 +257,50 @@ similarité de noms lors de l'appariement.
 **Conséquences.** Une extension de moins, un type de moins, des requêtes lisibles par
 quiconque. Si un besoin réellement géométrique apparaît (recherche par polygone, isochrones),
 la décision se rouvrira — elle n'est pas coûteuse à revenir.
+
+---
+
+## D13 — SIRENE par fichier stock Parquet, pas par API
+
+**Contexte.** Il faut récupérer ~4 000 établissements de la Métropole de Lyon avec leur
+tranche d'effectifs. L'INSEE propose deux voies.
+
+**Options écartées**
+- *API Sirene* — nécessite un compte sur le portail INSEE, une souscription et un jeton, et
+  impose une limite de 30 requêtes par minute. Un compte de plus à créer et à maintenir, pour
+  une extraction faite une fois par trimestre.
+- *Fichier stock au format ZIP* — téléchargeable sans compte, mais impose de décompresser
+  plusieurs giga-octets de CSV pour n'en garder que quelques milliers de lignes.
+
+**Décision.** Le **fichier stock des établissements au format Parquet** (~830 Mo),
+téléchargeable directement sans compte ni clé, filtré sur place par code d'activité et
+commune.
+
+**Conséquences.** Aucune inscription supplémentaire, aucun jeton à stocker, aucune limite de
+débit à gérer. Le format Parquet permet de filtrer sans décompression préalable. En
+contrepartie, la donnée est mensuelle et non temps réel — sans importance ici : le registre
+des entreprises évolue lentement, une réextraction trimestrielle suffit.
+
+---
+
+## D14 — L'allowlist est portée par le service d'authentification
+
+**Contexte.** L'accès est restreint à une liste d'adresses (D11). Le modèle de données
+prévoyait initialement une table applicative d'emails autorisés.
+
+**Options écartées**
+- *Table applicative d'emails autorisés* — impose de la tenir synchronisée avec la liste
+  réelle des comptes. Deux sources de vérité pour la même information, donc une occasion de
+  divergence : une adresse retirée de la table mais dont le compte existe encore continuerait
+  d'accéder à l'outil.
+- *Inscription libre bridée par un contrôle applicatif* — le compte serait créé avant d'être
+  rejeté, laissant des comptes fantômes.
+
+**Décision.** L'inscription est **désactivée** au niveau du service d'authentification. Les
+comptes sont créés à la main. Une demande de connexion pour une adresse inconnue est refusée
+**sans créer de compte**. La liste des utilisateurs *est* l'allowlist.
+
+**Conséquences.** Une table de moins, et surtout une seule source de vérité. Retirer un accès
+est une action unique. L'ajout d'un utilisateur devient une opération manuelle dans un
+tableau de bord plutôt qu'une insertion en base — ce qui convient à un usage où l'on ajoute
+quelqu'un deux fois par an.
