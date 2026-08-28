@@ -304,3 +304,33 @@ comptes sont créés à la main. Une demande de connexion pour une adresse incon
 est une action unique. L'ajout d'un utilisateur devient une opération manuelle dans un
 tableau de bord plutôt qu'une insertion en base — ce qui convient à un usage où l'on ajoute
 quelqu'un deux fois par an.
+
+---
+
+## D15 — Mettre à zéro le quota des appels qu'on s'interdit
+
+**Contexte.** La décision D5 pose que le projet n'utilise que `Nearby Search`, jamais
+`Place Details`, `Text Search`, `Autocomplete` ni les photos. Écrite dans une spec, cette
+règle repose sur la discipline de celui qui code — or c'est précisément le genre d'erreur qui
+ne se voit qu'à la facture.
+
+**Options écartées**
+- *S'en tenir à la règle écrite et au field mask constant* — protège du champ ajouté par
+  mégarde, mais pas d'un appel au mauvais point d'entrée.
+- *Détecter après coup en console de facturation* — ne protège de rien, constate seulement.
+
+**Décision.** Plafonner à **0** les quotas journaliers de `GetPlaceRequest`,
+`SearchTextRequest`, `AutocompletePlacesRequest` et `GetPhotoMediaRequest`. Et fixer
+`SearchNearbyRequest` à **500/jour** — assez pour un balayage complet (~400 appels d'un
+seul tenant), 150 fois sous le défaut de 75 000.
+
+**Conséquences.** D5 cesse d'être une convention : un `Place Details` appelé par erreur
+échoue côté Google et ne coûte rien. Vérifié en conditions réelles — `HTTP 429`,
+`RESOURCE_EXHAUSTED`.
+
+Contrepartie assumée : si un besoin légitime de `Place Details` apparaît un jour, l'appel
+échouera avec un message de quota qui peut dérouter. C'est le prix de la garantie, et
+l'erreur pointe elle-même vers sa cause.
+
+> Corrige au passage une erreur de `technique/02` qui annonçait un plafond de ~100/jour :
+> un balayage complet aurait échoué.

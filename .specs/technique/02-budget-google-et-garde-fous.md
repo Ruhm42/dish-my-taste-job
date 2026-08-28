@@ -45,6 +45,11 @@ par appel**.
 | `Place Details` | ~4 000 | ~60 $ | ~60 $ |
 | **`Nearby Search`** | **~400** | **0 €** | **0 €** |
 
+**Mesuré sur le terrain** (Cordeliers, rayon 300 m, un seul appel) : **20 établissements
+renvoyés, dont 18 avec leurs horaires**. Soit 90 % de couverture sur des données lyonnaises
+réelles — ce qui lève le principal risque du projet, celui d'une couverture horaires trop
+faible pour que le filtrage ait un sens.
+
 400 appels, c'est 40 % du quota gratuit mensuel. Il reste donc de la marge pour une reprise
 après incident ou un second passage de contrôle dans le même mois.
 
@@ -78,10 +83,33 @@ décision consciente, vérifiée en console de facturation avant et après.
 À poser **avant le premier appel**, pas après le premier incident. Le calcul théorique peut
 être juste et le code buggé : une boucle accidentelle génère une facture en quelques minutes.
 
-**1. Quota dur côté Google.**
-Console GCP → *APIs & Services → Quotas* → plafonner `Nearby Search Enterprise requests per
-day` à environ 100. Au-delà, l'API renvoie une erreur HTTP. Un bug devient un échec de
-script, jamais une ligne de facture. **C'est la seule protection qui ne dépend de personne.**
+**1. Quotas durs côté Google.** — *posés et vérifiés le 2026-08-28*
+
+Plafonds journaliers par projet, sur la métrique `SearchNearbyRequest` et sur celles des
+appels qu'on s'est interdits :
+
+| Métrique | Défaut | Plafond posé | Pourquoi |
+|---|---|---|---|
+| `SearchNearbyRequest` | 75 000 | **500** | Le seul appel utilisé |
+| `GetPlaceRequest` | 125 000 | **0** | Place Details : 1 lieu par appel |
+| `SearchTextRequest` | 75 000 | **0** | Plus cher, sans gain |
+| `AutocompletePlacesRequest` | 175 000 | **0** | Non utilisé |
+| `GetPhotoMediaRequest` | 175 000 | **0** | Palier très cher, non utilisé |
+
+> **Correction d'une erreur de cette spec.** Un plafond de ~100/jour y était initialement
+> écrit. C'était faux : un balayage complet consomme ~400 appels **en une seule
+> exécution**, il aurait donc échoué. 500/jour laisse passer un sweep avec de la marge, tout
+> en restant 150 fois sous le défaut.
+
+**Les quatre métriques à zéro rendent la décision D5 structurelle** : un `Place Details`
+appelé par erreur ne coûte rien, il échoue. Ce n'est plus une convention à respecter, c'est
+une contrainte appliquée par Google.
+
+*Vérifié en conditions réelles* : `Nearby Search` répond `HTTP 200`, `Place Details` répond
+`HTTP 429 — RESOURCE_EXHAUSTED, Quota exceeded for quota metric 'GetPlaceRequest'`.
+
+**C'est la seule protection qui ne dépend de personne.** Les autres sont des pratiques ;
+celle-là est appliquée par la plateforme, indépendamment de la qualité du code.
 
 **2. Alerte budget à 1 $.**
 Sur le compte de facturation. Ne bloque rien, mais transforme une dérive silencieuse en

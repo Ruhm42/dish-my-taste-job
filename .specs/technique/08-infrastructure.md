@@ -185,18 +185,29 @@ celle-là est appliquée par Google, indépendamment de la qualité du code.
 
 Actions manuelles, à réaliser hors du dépôt. Le repère ⚠️ signale ce qui protège du coût.
 
-### Google Cloud
-1. Créer un compte Google Cloud (crédit d'ouverture de 300 $ sur 90 jours ; carte bancaire
-   exigée même en usage gratuit — le compte d'essai se ferme plutôt que de basculer en payant)
-2. Créer un projet dédié
-3. Activer **Places API (New)** — pas l'ancienne *Places API*
-4. Activer **Maps JavaScript API**
-5. Créer la clé **Places**, restreinte à *Places API (New)*
-6. Créer la clé **Maps**, restreinte à *Maps JavaScript API* + domaines référents
-   (production et `localhost`)
-7. ⚠️ **Plafonner le quota journalier** des requêtes Nearby Search Enterprise à ~100
-   *(Console → APIs & Services → Places API (New) → Quotas)*
-8. ⚠️ **Créer une alerte budget à 1 €** *(Console → Billing → Budgets & alerts)*
+### Google Cloud — ✅ fait le 2026-08-28
+1. ✅ Compte Google Cloud, sur une identité **personnelle** et non professionnelle
+2. ✅ Projet dédié `dish-my-taste-job`
+3. ✅ Compte de facturation lié
+4. ✅ **Places API (New)** activée — service distinct de l'ancienne *Places API*
+5. ✅ **Maps JavaScript API** activée
+6. ✅ ⚠️ **Quotas journaliers plafonnés** : `SearchNearbyRequest` à 500, et
+   `GetPlaceRequest` / `SearchTextRequest` / `AutocompletePlacesRequest` /
+   `GetPhotoMediaRequest` à **0**
+7. ✅ ⚠️ **Alerte budget à 1 €**, seuils 50 % et 100 %
+8. ✅ Clé **Places** (serveur), restreinte à *Places API (New)*
+9. ✅ Clé **Maps** (navigateur), restreinte à *Maps JavaScript API* + référents `localhost`
+
+> **Ordre volontaire** : les clés en dernier. Tant qu'aucune clé n'existe, aucun appel
+> facturable n'est possible — la fenêtre entre l'activation des API et la pose des quotas est
+> donc sans risque.
+
+> **Aucun crédit d'essai disponible** sur ce compte : le compte de facturation ouvert est un
+> compte payant, l'essai gratuit ayant déjà été consommé. Il n'y a donc **pas de matelas de
+> 300 $** — les quotas durs sont la seule protection, pas un simple filet.
+
+**Reste à faire sur ce bloc** : compléter la restriction par référent de la clé Maps avec le
+domaine de production, une fois Vercel configuré.
 
 ### Supabase
 9. Créer un compte et un projet, **région Europe**
