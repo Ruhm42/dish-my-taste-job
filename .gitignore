@@ -1,0 +1,84 @@
+# ─────────────────────────────────────────────────────────────
+# Secrets — la priorité de ce fichier
+# Clé Google Places (côté serveur), clé Google Maps (navigateur),
+# identifiants Supabase. Une fuite ici, c'est une facture.
+# ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+
+# ─────────────────────────────────────────────────────────────
+# Données d'ingestion
+# Stock SIRENE (plusieurs centaines de Mo), sorties de géocodage BAN,
+# réponses Google mises en cache, rapports de balayage.
+# Régénérables par les scripts, et le cache Google ne doit de toute
+# façon pas être conservé au-delà de 30 jours (cf. .specs/technique/
+# 02-budget-google-et-garde-fous.md).
+# ─────────────────────────────────────────────────────────────
+/data/
+/.cache/
+
+# ─────────────────────────────────────────────────────────────
+# Dépendances et build
+# ─────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/versions
+
+/.next/
+/out/
+/build/
+/dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# ─────────────────────────────────────────────────────────────
+# Tests et couverture
+# ─────────────────────────────────────────────────────────────
+/coverage/
+.vitest/
+
+# ─────────────────────────────────────────────────────────────
+# Déploiement
+# ─────────────────────────────────────────────────────────────
+.vercel
+
+# ─────────────────────────────────────────────────────────────
+# Logs
+# ─────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─────────────────────────────────────────────────────────────
+# Éditeurs et OS
+# ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*~
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# ─────────────────────────────────────────────────────────────
+# Ce qui reste versionné, volontairement
+# ─────────────────────────────────────────────────────────────
+# .specs/          — la référence du projet, jamais ignorée
+# drizzle/         — migrations, y compris drizzle/meta/
+# .github/         — la tâche planifiée du balayage mensuel
