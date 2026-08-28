@@ -8,19 +8,23 @@ L'accès à la plateforme nécessite d'être connecté. Aucun écran n'est consu
 
 ## Comment on se connecte
 
-**Par lien envoyé en email.** On saisit son adresse, on reçoit un lien, on clique, on est
-connecté.
+**Par email et mot de passe.** Deux champs, un bouton.
 
-Pas de mot de passe à choisir, pas de mot de passe à retenir, pas de mot de passe à
-réinitialiser, pas de formulaire d'inscription à remplir. C'est le mode de connexion le plus
-adapté à un public qui n'a pas envie d'apprendre une interface — et accessoirement celui qui
-supprime toute la mécanique de gestion des mots de passe oubliés.
+Le lien envoyé par email avait notre préférence — rien à retenir, rien à réinitialiser. Il a
+été écarté à l'usage : l'envoi d'emails est plafonné à quelques messages par heure sur
+l'offre gratuite, et un accès qui échoue parce qu'un quota d'emails est atteint est bien plus
+pénible qu'un mot de passe. Voir [`../DECISIONS.md`](../DECISIONS.md) — D20.
+
+Il n'y a pas de réinitialisation en ligne : le mot de passe est défini à la création du
+compte et se change au même endroit.
 
 ## Qui peut avoir un compte
 
 **Une liste d'adresses autorisées, tenue à la main.**
 
-Les comptes sont créés à la main, un par un. Une adresse qui n'y figure pas ne reçoit pas de
+Les comptes sont créés à la main, un par un, depuis le tableau de bord de l'hébergeur de
+la base. Il n'y a pas d'écran d'administration dans l'application : en construire un
+reviendrait à réécrire, moins bien, quelque chose qui existe déjà. Une adresse qui n'y figure pas ne reçoit pas de
 lien de connexion. Le message affiché doit être clair et sans ambiguïté : l'accès est
 restreint, ce n'est pas une erreur technique de la part de l'utilisateur.
 

@@ -462,3 +462,57 @@ zéro celui de GitHub.
 **Conséquences.** Un seul fichier à maintenir. Le workflow porte en commentaire l'explication
 de son double rôle : sans elle, il ressemble à du bruit et la prochaine personne qui le lira
 le supprimera — ce qui casserait le balayage soixante jours plus tard, très loin de la cause.
+
+---
+
+## D20 — Mot de passe plutôt que lien envoyé par email
+
+**Contexte.** D14 posait un accès par **lien magique** : on saisit son adresse, on reçoit un
+lien, on clique. Rien à retenir, rien à réinitialiser — c'était le plus adapté à un public
+qui n'a pas envie d'apprendre une interface.
+
+**Options écartées**
+- *Lien magique* — écarté à la mise en œuvre. Il dépend entièrement de l'envoi d'emails, or
+  le service intégré de l'offre gratuite est plafonné à quelques messages par heure. Un
+  accès qui échoue parce qu'un quota d'emails est atteint est bien plus pénible qu'un mot
+  de passe, et le diagnostic en est opaque pour l'utilisateur.
+- *Configurer un service SMTP tiers* — lèverait le plafond, mais ajoute un compte, une
+  configuration et un mode de panne supplémentaires pour deux utilisateurs.
+- *Mot de passe unique partagé, sans comptes* — le plus simple à écrire, mais supprime toute
+  notion d'identité : le suivi de candidatures, qui est personnel par nature, deviendrait
+  impossible à cloisonner.
+
+**Décision.** **Email et mot de passe**, comptes créés à la main depuis le tableau de bord
+de la base. Aucune réinitialisation en ligne : le mot de passe se définit et se change au
+même endroit.
+
+**Conséquences.** Aucune dépendance à l'envoi d'emails, donc aucun plafond à subir. Chaque
+utilisateur garde une identité propre, ce dont le suivi de candidatures a besoin. En
+contrepartie, il faut transmettre un mot de passe à chaque nouvel arrivant — acceptable
+quand on en ajoute deux par an.
+
+---
+
+## D21 — Pas d'écran d'administration des comptes
+
+**Contexte.** Un back-office pour ajouter des utilisateurs avait été demandé.
+
+**Options écartées**
+- *Écran d'administration dans l'application* — il faudrait une page protégée, la notion de
+  rôle administrateur, un formulaire de création, la gestion des erreurs et la clé de
+  service côté serveur. Soit une surface d'attaque et du code à maintenir, pour reproduire
+  moins bien quelque chose qui existe déjà.
+
+**Décision.** Le **tableau de bord de l'hébergeur de la base fait office de back-office**.
+Ajouter quelqu'un y est une opération de trois clics : adresse, mot de passe, valider.
+
+**Conséquences.** Zéro ligne de code, zéro surface d'attaque supplémentaire, et une
+interface mieux faite que la nôtre. En contrepartie, la gestion des comptes se fait hors de
+l'application — ce qui convient à un usage où l'on ajoute quelqu'un deux fois par an, et
+correspond exactement à ce que D14 avait déjà acté.
+
+> ⚠️ **Ce que cette décision suppose** : l'inscription en ligne doit être **désactivée** côté
+> service d'authentification. Tant qu'elle est ouverte, la liste des comptes n'est plus une
+> allowlist — n'importe qui peut s'en créer un, puisque la clé publiable est publique par
+> conception. C'est un réglage à faire à la main, et c'est la seule chose qui tient
+> réellement la porte fermée.

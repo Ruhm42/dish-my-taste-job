@@ -1,10 +1,12 @@
 import { asc, count } from 'drizzle-orm'
 import { Suspense } from 'react'
 import { db } from '@/lib/db/client'
+import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
 import { buildConditions, countActive, parseFilters } from '@/lib/filters'
 import type { ServiceWindow } from '@/lib/hours'
 import { CATEGORY_LABELS, CONFIDENCE_LABELS, SPLIT_SHIFT_BADGES } from '@/components/badges'
+import { Account } from '@/components/account'
 import { FiltersPanel } from '@/components/filters'
 import { RestaurantMap } from '@/components/map'
 import { WeekGrid } from '@/components/week-grid'
@@ -15,6 +17,7 @@ type Params = Promise<Record<string, string | string[] | undefined>>
 type RestaurantRow = typeof restaurant.$inferSelect
 
 export default async function SearchPage({ searchParams }: { searchParams: Params }) {
+  const user = await getUser()
   const filters = parseFilters(await searchParams)
   const where = buildConditions(filters)
 
@@ -30,10 +33,15 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
       <header className="mb-4">
-        <h1 className="text-2xl font-bold tracking-tight">Dish My Taste Job</h1>
-        <p className="text-sm text-stone-600">
-          Les restaurants de la Métropole de Lyon, filtrés par rythme de travail.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Dish My Taste Job</h1>
+            <p className="text-sm text-stone-600">
+              Les restaurants de la Métropole de Lyon, filtrés par rythme de travail.
+            </p>
+          </div>
+          {user?.email && <Account email={user.email} />}
+        </div>
         <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
           Données de démonstration — établissements fictifs, en attendant le premier balayage.
         </p>
