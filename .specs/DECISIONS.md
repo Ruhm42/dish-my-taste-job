@@ -39,11 +39,16 @@ restaurants.
   impossible à vérifier à la main.
 - *Une région* — volume ×10 sans gain de pertinence, la donnée se dégrade en zone rurale.
 
-**Décision.** Métropole de Lyon (EPCI 200046977, 59 communes), soit ~4 000 établissements.
+**Décision.** Métropole de Lyon (EPCI 200046977, 58 communes), soit ~4 000 établissements.
 La zone est un **paramètre de configuration**, jamais une valeur en dur.
 
 **Conséquences.** Volume vérifiable à la main. Le changement de ville est une modification de
 configuration et une réexécution des scripts, pas une réécriture.
+
+> **Amendée par [D16](#d16--réduire-le-périmètre-au-cœur-dense)** — la mesure a donné
+> **9 100 établissements et non ~4 000**, et le périmètre est ramené à Lyon 1er-9e +
+> Villeurbanne. Les chiffres ci-dessus sont conservés comme état de la connaissance au moment
+> de la décision.
 
 ---
 
@@ -105,7 +110,8 @@ field mask. Même tier, même quota — mais **jusqu'à 20 établissements par a
 
 **Conséquences.** ~400 appels pour couvrir tout Lyon au lieu de 4 000, soit 40 % du quota
 gratuit mensuel. C'est la décision qui rend le projet gratuit ; tout le reste en découle
-(D7). En contrepartie, `Nearby Search` plafonne à 20 résultats sans pagination et n'accepte
+(D7). *Chiffre revu à **692 appels** après mesure (D16, D17) — la décision elle-même reste
+entière, c'est son volume qui a changé.* En contrepartie, `Nearby Search` plafonne à 20 résultats sans pagination et n'accepte
 qu'une restriction circulaire : il faut un maillage adaptatif (D6).
 
 ---
@@ -130,6 +136,10 @@ partir de cette densité connue, en visant ≤ 15 établissements par cellule.
 d'établissements *devraient* remonter par cellule, ce qui donne un **détecteur de
 troncature**. Recoupé avec la distance du 20ᵉ résultat, le balayage devient auto-vérifiant.
 
+> **Amendée par [D17](#d17--maillage-par-courbe-de-hilbert-avec-plafond-de-rayon)** — le
+> critère « ≤ 15 établissements par cellule » s'est révélé insuffisant à la mesure : il faut
+> aussi **plafonner le rayon à 200 m**. Le principe du pilotage par SIRENE, lui, est validé.
+
 ---
 
 ## D7 — Re-balayage mensuel complet
@@ -147,9 +157,9 @@ donnée doit rester fraîche.
 **Décision.** Un balayage complet le **1er de chaque mois**, qui remplace intégralement les
 horaires stockés.
 
-**Conséquences.** ~400 appels sur les 1 000 gratuits : gratuit en régime permanent. La donnée
-n'a jamais plus de 30 jours, donc **la conformité aux CGU est obtenue par construction**, pas
-par vigilance. Le sweep est calé au 1er du mois pour que le remplacement précède l'expiration.
+**Conséquences.** 692 appels mesurés sur les 1 000 gratuits : gratuit en régime permanent,
+avec 308 d'avance. La donnée n'a jamais plus de 30 jours, donc **la conformité aux CGU est
+obtenue par construction**, pas par vigilance. Le sweep est calé au 1er du mois pour que le remplacement précède l'expiration.
 
 ---
 
@@ -321,8 +331,8 @@ ne se voit qu'à la facture.
 
 **Décision.** Plafonner à **0** les quotas journaliers de `GetPlaceRequest`,
 `SearchTextRequest`, `AutocompletePlacesRequest` et `GetPhotoMediaRequest`. Et fixer
-`SearchNearbyRequest` à **500/jour** — assez pour un balayage complet (~400 appels d'un
-seul tenant), 150 fois sous le défaut de 75 000.
+`SearchNearbyRequest` à **800/jour** — assez pour un balayage complet (692 appels d'un seul
+tenant, chiffre mesuré depuis), 94 fois sous le défaut de 75 000.
 
 **Conséquences.** D5 cesse d'être une convention : un `Place Details` appelé par erreur
 échoue côté Google et ne coûte rien. Vérifié en conditions réelles — `HTTP 429`,
@@ -334,3 +344,62 @@ l'erreur pointe elle-même vers sa cause.
 
 > Corrige au passage une erreur de `technique/02` qui annonçait un plafond de ~100/jour :
 > un balayage complet aurait échoué.
+
+---
+
+## D16 — Réduire le périmètre au cœur dense
+
+**Contexte.** D2 posait la Métropole entière (58 communes). La mesure a invalidé les chiffres
+qui fondaient cette décision : **9 100 établissements en périmètre et non ~4 000**, et un
+balayage sûr demanderait **1 200 à 1 900 appels par mois** contre 1 000 gratuits. La
+contrainte « zéro euro » ne tenait plus.
+
+**Options écartées**
+- *Accepter ~10 €/mois* — 300 appels au-delà du gratuit. Simple et complet, mais rompt une
+  contrainte posée comme ferme.
+- *Balayer tous les 2 mois* — rentre dans le gratuit, mais la donnée atteint 60 jours : cela
+  sort de la limite de cache de 30 jours des CGU et annule le bénéfice de D7.
+- *Restreindre les types Google au seul `restaurant`* — **mesuré** : ne fait passer les
+  cellules tronquées que de 6/8 à 5/8. La densité lyonnaise est réelle, pas un artefact du
+  choix de types.
+- *Exclure restauration rapide et débits de boissons* — aurait divisé le volume par deux,
+  mais ce sont précisément les établissements en service continu ou en service du soir, donc
+  **structurellement sans coupure** : les meilleures cibles pour l'utilisateur. Les retirer
+  aurait vidé le produit de sa valeur.
+
+**Décision.** Périmètre ramené à **Lyon 1er-9e + Villeurbanne** : 6 129 établissements
+géocodés sur ~62 km² au lieu de 534.
+
+**Conséquences.** **692 cellules**, soit 308 appels de marge sous le quota gratuit pour
+absorber les subdivisions sur troncature. Le « zéro euro » tient. C'est aussi la zone où la
+recherche d'emploi a réellement lieu, desservie par les transports. Les autres communes
+restent ajoutables plus tard, une par une, selon le quota restant — la zone demeure un
+paramètre de configuration (D2).
+
+---
+
+## D17 — Maillage par courbe de Hilbert, avec plafond de rayon
+
+**Contexte.** D6 posait un maillage adaptatif visant « ≤ 15 établissements par cellule ».
+Deux mesures ont montré que c'était insuffisant.
+
+**Options écartées**
+- *Quadtree* — implémenté puis abandonné : il découpe l'espace uniformément, donc une zone
+  dense force ses voisines clairsemées à se subdiviser. **1 316 cellules mesurées** pour un
+  minimum théorique de 564, soit 2,3 fois trop.
+- *Contrainte sur le seul nombre de points* — **réfutée par le calibrage** : sur 8 appels
+  réels, 6 cellules à 15 établissements SIRENE étaient déjà tronquées. Le ratio
+  Google/SIRENE vaut **1,16**, alors que la spec supposait implicitement moins de 1.
+
+**Décision.** Découpage le long d'une **courbe de Hilbert** — qui préserve la proximité
+géographique tout en permettant un découpage par nombre de points — sous **deux** contraintes :
+au plus 15 établissements par cellule **et un rayon plafonné à 200 m**, seuil au-delà duquel
+la troncature apparaît dans les mesures.
+
+**Conséquences.** 692 cellules au lieu de 1 316, avec un rayon médian de 134 m. C'est
+désormais la contrainte de rayon qui est dominante, pas celle du nombre de points — ce qui
+correspond à ce qu'on observe : la densité Google, pas la densité SIRENE, est le facteur
+limitant.
+
+> Le calibrage a coûté 16 appels, pris sur le quota gratuit. C'est ce qui a permis de
+> remplacer deux hypothèses fausses par des mesures avant d'engager un balayage complet.

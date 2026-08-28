@@ -72,10 +72,24 @@ de détecter les zones tronquées. Voir
   `56.10C` (restauration rapide), `56.29A` et `56.29B` (restauration collective),
   `56.30Z` (débits de boissons)
 - Établissements actifs uniquement
-- Communes de la Métropole de Lyon (EPCI 200046977, 59 communes)
+- **Lyon 1er-9e (`69381`-`69389`) + Villeurbanne (`69266`)** — périmètre resserré, voir D16
 
-**Limite majeure et assumée** : la tranche d'effectifs vaut très souvent **non renseignée**,
-et précisément chez les petites structures — là où l'information est la plus décisive. Le
+> ⚠️ **Piège des arrondissements, vérifié sur les données.** SIRENE code les établissements
+> lyonnais par **arrondissement** (`69381`-`69389`), jamais par la commune globale `69123` —
+> alors que l'API géographique de l'État, elle, ne renvoie que `69123` pour Lyon. Filtrer sur
+> la liste de communes telle qu'elle est fournie fait donc disparaître **la totalité de
+> Lyon** : 5 639 établissements, soit 55 % du jeu de données, dont toute la Presqu'île, le
+> Vieux Lyon et la Part-Dieu. Aucune erreur ne serait remontée, la base serait simplement
+> amputée. Marseille et Paris ont le même découpage.
+
+**Volumes mesurés** (extraction du 2026-08-28) : 10 328 établissements actifs en division 56
+sur la Métropole, dont **9 100 dans le périmètre d'activités retenu** — soit plus du double
+de l'estimation initiale de ~4 000. Après géocodage, **9 321 adresses positionnées de façon
+fiable (90,3 %)**, dont 6 129 dans le périmètre resserré.
+
+**Limite majeure et assumée, désormais chiffrée** : la tranche d'effectifs vaut **`NN` dans
+65,2 % des cas** — mesuré, et non plus supposé « souvent ». Elle manque précisément chez les
+petites structures — là où l'information est la plus décisive. Le
 mécanisme de repli est décrit dans [`05-inference-des-horaires.md`](05-inference-des-horaires.md).
 Cette limite doit rester visible dans l'interface, jamais masquée derrière un verdict net.
 

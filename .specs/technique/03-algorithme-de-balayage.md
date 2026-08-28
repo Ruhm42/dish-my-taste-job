@@ -30,13 +30,33 @@ SIRENE (gratuit, exhaustif) géocodé par la BAN (gratuit) donne la position d'e
 
 - **Zéro appel gaspillé.** Aucun cercle n'est posé sur les zones sans restaurants — parcs,
   zones industrielles, communes résidentielles, soit l'essentiel des 534 km² de la Métropole.
-- **Cellules calibrées.** Chaque cercle est dimensionné pour contenir **au plus 15
-  établissements**, marge de sécurité sous la limite de 20.
+- **Cellules calibrées sous DEUX contraintes** : au plus 15 établissements SIRENE **et un
+  rayon plafonné à 200 m**. La seconde est celle qui compte réellement — voir ci-dessous.
 - **Détecteur de troncature.** On sait combien d'établissements *devraient* remonter dans
   chaque cellule. Un écart important est un signal.
 
 Sans cette étape, il faudrait partir d'une grande cellule et subdiviser à l'aveugle, en
 dépensant des appels à chaque niveau.
+
+### Ce que le calibrage a corrigé
+
+16 appels réels, répartis sur des cellules de densités différentes, ont réfuté deux
+hypothèses de cette spec :
+
+| Hypothèse initiale | Mesure |
+|---|---|
+| Google renvoie moins d'établissements que SIRENE n'en compte | **ratio 1,16** — il en renvoie plus |
+| 15 établissements par cellule est une marge de sécurité | **6 cellules sur 8 déjà tronquées** |
+| Le quadtree est un maillage acceptable | **1 316 cellules** pour un minimum de 564 |
+
+La troncature apparaît à partir d'environ **265 m de rayon** ; à 168 m une cellule renvoie 18
+résultats, à 98 m elle en renvoie 17. D'où le plafond de rayon à 200 m, et le passage à un
+découpage le long d'une **courbe de Hilbert** (D17), qui donne 692 cellules là où le quadtree
+en demandait le double.
+
+**C'est la densité Google, pas la densité SIRENE, qui est le facteur limitant.** Le rayon
+médian retenu est de 134 m : la contrainte de rayon est atteinte avant celle du nombre de
+points.
 
 ---
 

@@ -98,9 +98,15 @@ présenté à l'utilisateur, ni même stocké (voir [`04`](04-modele-de-donnees.
 
 ### Le repli quand l'effectif est inconnu
 
-La tranche d'effectifs vaut **très souvent `NN`**, et précisément chez les petites structures
-— là où l'information est la plus décisive. C'est la principale limite de cette inférence, et
-elle doit rester visible.
+La tranche d'effectifs vaut **`NN` dans 65,2 % des cas** (mesuré sur les 10 328
+établissements lyonnais), et manque précisément chez les petites structures — là où
+l'information est la plus décisive. **Le repli est donc le cas dominant, pas l'exception.**
+C'est la principale limite de cette inférence, et elle doit rester visible.
+
+Répartition mesurée des tranches renseignées : **60,6 % de petites équipes** (≤ 5 salariés),
+32,5 % de moyennes, 6,9 % de grandes. Ce qui valide empiriquement le choix de replier vers
+l'hypothèse « petite équipe » : c'est le cas le plus fréquent, pas seulement le plus
+prudent.
 
 Repli, dans l'ordre :
 1. **Catégorie** — la restauration collective et la restauration rapide ont des rythmes

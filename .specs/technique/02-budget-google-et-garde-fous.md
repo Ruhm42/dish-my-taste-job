@@ -40,24 +40,32 @@ C'est la décision qui rend le projet gratuit (D5).
 champ `regularOpeningHours`, sur le même palier Enterprise, et renvoie **jusqu'à 20 lieux
 par appel**.
 
-| Approche | Appels pour ~4 000 établissements | Premier passage | Chaque mois |
+| Approche | Appels pour le périmètre retenu | Premier passage | Chaque mois |
 |---|---|---|---|
-| `Place Details` | ~4 000 | ~60 $ | ~60 $ |
-| **`Nearby Search`** | **~400** | **0 €** | **0 €** |
+| `Place Details` | ~6 100 | ~180 $ | ~180 $ |
+| **`Nearby Search`** | **692** | **0 €** | **0 €** |
+
+*Chiffres mesurés, pas estimés* : 6 129 établissements géocodés sur Lyon 1er-9e +
+Villeurbanne (D16), découpés en 692 cellules par courbe de Hilbert sous plafond de rayon
+(D17).
 
 **Mesuré sur le terrain** (Cordeliers, rayon 300 m, un seul appel) : **20 établissements
 renvoyés, dont 18 avec leurs horaires**. Soit 90 % de couverture sur des données lyonnaises
 réelles — ce qui lève le principal risque du projet, celui d'une couverture horaires trop
 faible pour que le filtrage ait un sens.
 
-400 appels, c'est 40 % du quota gratuit mensuel. Il reste donc de la marge pour une reprise
-après incident ou un second passage de contrôle dans le même mois.
+692 appels, c'est 69 % du quota gratuit mensuel — il reste **308 appels de marge** pour
+absorber les subdivisions déclenchées par une troncature, ou une reprise après incident.
+
+> Cette marge est plus étroite que prévu initialement, et c'est ce qui a imposé de resserrer
+> le périmètre géographique (D16). Sur les 58 communes de la Métropole, il aurait fallu
+> 1 200 à 1 900 appels — au-delà du gratuit.
 
 ### Conséquence en cascade sur la conformité
 
 Les conditions d'utilisation limitent la conservation du contenu Places à **30 jours**
 (l'identifiant de lieu seul étant stockable indéfiniment). Puisqu'un balayage complet coûte
-400 appels et qu'on en a 1 000 gratuits par mois, on peut **re-balayer intégralement tous les
+692 appels et qu'on en a 1 000 gratuits par mois, on peut **re-balayer intégralement tous les
 mois**.
 
 La donnée n'a donc jamais plus de 30 jours : **la conformité est obtenue par construction**,
@@ -90,16 +98,16 @@ appels qu'on s'est interdits :
 
 | Métrique | Défaut | Plafond posé | Pourquoi |
 |---|---|---|---|
-| `SearchNearbyRequest` | 75 000 | **500** | Le seul appel utilisé |
+| `SearchNearbyRequest` | 75 000 | **800** | Le seul appel utilisé |
 | `GetPlaceRequest` | 125 000 | **0** | Place Details : 1 lieu par appel |
 | `SearchTextRequest` | 75 000 | **0** | Plus cher, sans gain |
 | `AutocompletePlacesRequest` | 175 000 | **0** | Non utilisé |
 | `GetPhotoMediaRequest` | 175 000 | **0** | Palier très cher, non utilisé |
 
-> **Correction d'une erreur de cette spec.** Un plafond de ~100/jour y était initialement
-> écrit. C'était faux : un balayage complet consomme ~400 appels **en une seule
-> exécution**, il aurait donc échoué. 500/jour laisse passer un sweep avec de la marge, tout
-> en restant 150 fois sous le défaut.
+> **Deux corrections successives de cette spec.** Un plafond de ~100/jour y figurait
+> d'abord : faux, un balayage s'exécute d'un seul tenant. Puis 500/jour, avant que la mesure
+> ne révèle un besoin réel de **692 appels** par balayage. Le plafond est à **800/jour** —
+> assez pour un sweep complet en une exécution, et toujours 94 fois sous le défaut.
 
 **Les quatre métriques à zéro rendent la décision D5 structurelle** : un `Place Details`
 appelé par erreur ne coûte rien, il échoue. Ce n'est plus une convention à respecter, c'est
@@ -125,20 +133,18 @@ Le script calcule et affiche le nombre d'appels qu'il *ferait*, sans en émettre
 
 ---
 
-## Le crédit d'ouverture
+## Il n'y a pas de filet
 
-Un nouveau compte Google Cloud reçoit **300 $ valables 90 jours**. À 35 $ les 1 000 appels
-Nearby Search Enterprise, cela représente ~8 500 appels supplémentaires.
+Un nouveau compte Google Cloud reçoit habituellement 300 $ valables 90 jours. **Ce n'est pas
+le cas ici** : le compte de facturation utilisé est un compte payant classique, l'essai
+gratuit ayant déjà été consommé sur un compte aujourd'hui fermé.
 
-**Ce crédit est un filet pour la mise au point, pas le modèle de fonctionnement.** Le régime
-permanent n'en a pas besoin : il tient dans le quota gratuit récurrent. Le crédit sert à
-absorber les tâtonnements des premiers balayages — maillage mal calibré, script relancé,
-subdivisions imprévues.
+Conséquence directe : **tout dépassement du quota gratuit part sur la carte bancaire, dès le
+premier euro.** Les plafonds de quota ne sont donc pas une précaution supplémentaire — ils
+sont la seule chose qui sépare le projet d'une facture.
 
-Le compte d'essai se ferme automatiquement à l'épuisement du crédit ou au bout de 90 jours,
-sans basculer en payant sans action explicite. Une carte bancaire reste néanmoins exigée pour
-activer les API, même en usage 100 % gratuit — les garde-fous ci-dessus restent donc la vraie
-protection.
+C'est ce qui justifie leur sévérité : 800 appels par jour là où le défaut en autorise 75 000,
+et zéro sur tout ce que l'architecture n'utilise pas.
 
 ---
 
@@ -157,7 +163,7 @@ changement de filtre consommerait un chargement par clic.
 ## Vérification après chaque balayage
 
 - Appels réellement consommés **vs** annoncés par le `--dry-run`
-- Consommation Enterprise ≈ 400, et **aucune consommation sur le palier Atmosphere**
+- Consommation Enterprise ≈ 692, et **aucune consommation sur le palier Atmosphere**
 - Aucun dépassement de quota journalier
 
 Un écart significatif entre le `--dry-run` et le réel est un signal à traiter : soit le
