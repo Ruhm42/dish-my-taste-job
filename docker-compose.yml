@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: dmtj-db
+    environment:
+      POSTGRES_USER: dmtj
+      POSTGRES_PASSWORD: dmtj
+      POSTGRES_DB: dmtj
+    ports:
+      # 5433 pour ne pas entrer en conflit avec un Postgres local sur 5432
+      - "5434:5432"
+    volumes:
+      - dmtj-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dmtj"]
+      interval: 5s
+      retries: 10
+volumes:
+  dmtj-pgdata:
