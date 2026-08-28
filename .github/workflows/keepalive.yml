@@ -1,0 +1,82 @@
+# Maintien en vie — NE PAS SUPPRIMER.
+#
+# Ce workflow n'a aucun effet visible : il ressemble à du bruit, et c'est
+# exactement pourquoi ce commentaire existe. Il neutralise DEUX comptes à rebours
+# qui, sans lui, éteignent l'outil tout seuls et en silence.
+#
+# 1. SUPABASE met un projet en PAUSE après 7 jours sans activité sur la base, et
+#    une pause prolongée finit par la suppression du projet. Un outil consulté par
+#    deux personnes de façon sporadique atteint 7 jours sans effort.
+#    -> remède : ouvrir une connexion à la base chaque semaine.
+#
+# 2. GITHUB DÉSACTIVE un workflow planifié après 60 jours sans activité sur le
+#    DÉPÔT. Le balayage mensuel s'arrêterait donc de lui-même au bout de deux mois
+#    sans commit. Le piège : une exécution de workflow NE COMPTE PAS comme
+#    activité — seul un commit compte. Le balayage ne se maintient donc pas.
+#    -> remède : commiter un horodatage chaque semaine.
+#
+# Les deux remèdes tiennent dans un seul workflow hebdomadaire : c'est le job
+# ci-dessous. Le supprimer éteint l'outil, avec un mois de délai avant que ça se
+# voie. Voir .specs/technique/09-deploiement.md.
+
+name: Maintien en vie
+
+on:
+  schedule:
+    # Chaque lundi. Heure décalée : les planifications à l'heure ronde partent en
+    # file d'attente chez GitHub et peuvent être retardées de plusieurs dizaines
+    # de minutes. Une fréquence hebdomadaire laisse deux essais avant les 7 jours
+    # de Supabase.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+# Nécessaire pour pousser l'horodatage : c'est le commit, et lui seul, qui remet
+# à zéro le compteur d'inactivité de GitHub.
+permissions:
+  contents: write
+
+jobs:
+  maintien:
+    # Sur un fork, ni le secret ni le compteur ne sont ceux du projet.
+    if: github.repository == 'Ruhm42/dish-my-taste-job'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      # Compteur n°1. `select 1` suffit : c'est la CONNEXION qui compte comme
+      # activité, pas ce qu'on lit. Le client psql est préinstallé sur le runner,
+      # donc aucune dépendance du projet n'est nécessaire ici.
+      # Échec bruyant volontaire : une base qui ne répond pas signifie qu'elle est
+      # déjà en pause ou que l'URL a changé. C'est précisément ce qu'on veut
+      # apprendre par une alerte, et pas par un utilisateur.
+      - name: Réveiller la base
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: psql "$DATABASE_URL" --no-psqlrc --quiet -c 'select 1'
+
+      # Compteur n°2. Le contenu du fichier n'a aucun usage : c'est le COMMIT qui
+      # est l'objet du geste. Le fichier porte sa propre explication pour que la
+      # prochaine personne qui tombe dessus ne le prenne pas pour un résidu.
+      #
+      # Un push authentifié par GITHUB_TOKEN ne redéclenche aucun workflow : pas de
+      # boucle possible, et pas de redéploiement Vercel inutile chaque semaine.
+      - name: Commiter l'horodatage
+        run: |
+          {
+            echo "Horodatage écrit chaque semaine par .github/workflows/keepalive.yml."
+            echo "Son seul rôle est de produire un commit — voir l'en-tête de ce workflow."
+            date -u +'%Y-%m-%dT%H:%M:%SZ'
+          } > .github/derniere-activite.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/derniere-activite.txt
+          git diff --cached --quiet && exit 0
+          git commit -m 'chore: maintien en vie'
+          git push

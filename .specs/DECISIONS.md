@@ -403,3 +403,62 @@ limitant.
 
 > Le calibrage a coûté 16 appels, pris sur le quota gratuit. C'est ce qui a permis de
 > remplacer deux hypothèses fausses par des mesures avant d'engager un balayage complet.
+
+---
+
+## D18 — Le balayage écrit en production, on n'embarque pas d'instantané
+
+**Contexte.** Le quota Google est de 1 000 appels gratuits par mois et un balayage en
+consomme ~650. La production ne peut donc pas balayer de son côté : il faut balayer **une
+fois** et acheminer le résultat. Reste à choisir comment.
+
+**Options écartées**
+- *Embarquer un instantané des données dans le dépôt* — séduisant : les établissements sont
+  en lecture seule, ~6 000 lignes, moins d'1 Mo compressé. Vercel les servirait
+  statiquement, sans base de données, et le filtrage se ferait côté navigateur.
+  **Rédhibitoire** : les CGU Google limitent la conservation du contenu Places à 30 jours,
+  or l'historique git conserve indéfiniment — et le dépôt est public. Un instantané commité
+  aujourd'hui reste lisible dans deux ans. C'est exactement la limite que toute
+  l'architecture respecte par construction (D7).
+- *Balayer depuis la production, à la demande* — rappellerait Google à chaque consultation
+  et consommerait le quota de façon imprévisible.
+- *Déposer un instantané sur un stockage objet* — fonctionnerait, mais ajoute un support de
+  plus à administrer pour un résultat que la base fait déjà.
+
+**Décision.** Le balayage tourne dans **GitHub Actions** et **écrit directement dans la base
+Supabase de production**, dont le contenu est remplacé chaque mois. C'est cette écriture qui
+constitue l'« upload » du résultat.
+
+**Conséquences.** Le quota n'est consommé qu'une fois. La production ne rappelle jamais
+Google : elle lit une table. La donnée ne dépasse jamais 30 jours puisqu'elle est remplacée
+mensuellement. En contrepartie, la clé Places doit vivre dans les secrets du dépôt — ce qui
+reste préférable à un balayage manuel qu'on oublie de lancer.
+
+---
+
+## D19 — Une action hebdomadaire contre les deux mises en veille
+
+**Contexte.** Les deux offres gratuites utilisées mettent en veille ce qui ne sert pas :
+- **Supabase** met un projet en pause après **7 jours** d'inactivité, et une pause prolongée
+  finit en suppression du projet ;
+- **GitHub** désactive un workflow planifié après **60 jours** sans activité sur le dépôt —
+  or une exécution de workflow ne compte pas comme activité, seul un commit compte.
+
+Sur un outil consulté sporadiquement par deux personnes, les deux se déclencheraient. Le
+second est le plus vicieux : **le balayage mensuel s'arrêterait de lui-même, sans rien
+signaler**, et la base vieillirait en silence.
+
+**Options écartées**
+- *Compter sur les visites des utilisateurs* — c'est précisément l'hypothèse que le profil
+  d'usage contredit.
+- *Deux mécanismes séparés* — une tâche pour réveiller la base, une autre pour l'activité du
+  dépôt. Deux choses à maintenir pour un même besoin.
+- *Passer à une offre payante* — résout tout, mais rompt la contrainte du projet.
+
+**Décision.** **Une seule action hebdomadaire** qui interroge la base *et* commite un
+horodatage. La requête remet à zéro le compteur d'inactivité Supabase, le commit remet à
+zéro celui de GitHub.
+
+**Conséquences.** Un seul fichier à maintenir. Le workflow porte en commentaire l'explication
+de son double rôle : sans elle, il ressemble à du bruit et la prochaine personne qui le lira
+le supprimera — ce qui casserait le balayage soixante jours plus tard, très loin de la cause.

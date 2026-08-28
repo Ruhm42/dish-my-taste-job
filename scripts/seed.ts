@@ -8,6 +8,7 @@
  */
 import { calculerProfil, parserHoraires } from '../lib/horaires'
 import type { Categorie, GooglePeriode } from '../lib/horaires'
+import { colonnesProfil } from '../lib/profil-colonnes'
 import { db } from '../lib/db/client'
 import { restaurant } from '../lib/db/schema'
 
@@ -135,22 +136,7 @@ async function main() {
       rawOpeningHours: horaires,
       hoursFetchedAt: horaires ? maintenant : null,
       hoursExpiresAt: horaires ? expiration : null,
-      schedule: fenetres,
-      hasHours: profil.aDesHoraires,
-      openDaysCount: profil.joursOuverts,
-      closedDays: profil.joursFermes,
-      closedSaturday: profil.fermeSamedi,
-      closedSunday: profil.fermeDimanche,
-      closedWeekend: profil.fermeWeekend,
-      maxConsecutiveDaysOff: profil.reposConsecutifsMax,
-      splitDaysCount: profil.joursAvecCoupure,
-      coupureRisk: profil.risqueCoupure,
-      fiabilite: profil.fiabilite,
-      motifService: profil.motifService,
-      earliestOpenMin: profil.ouvertureMin,
-      latestCloseMin: profil.fermetureMax,
-      weeklyOpenMinutes: profil.minutesHebdo,
-      explication: profil.explication,
+      ...colonnesProfil(fenetres, profil),
       profileComputedAt: maintenant,
     }
   })

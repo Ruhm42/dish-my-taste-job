@@ -1,5 +1,5 @@
 import {
-  boolean, doublePrecision, integer, jsonb, pgEnum, pgTable, real,
+  boolean, doublePrecision, index, integer, jsonb, pgEnum, pgTable, real,
   smallint, text, timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core'
 
@@ -82,6 +82,61 @@ export const candidature = pgTable('candidature', {
 }, (t) => ({
   // Un établissement n'apparaît qu'une fois dans la liste de quelqu'un.
   unParUtilisateur: uniqueIndex('candidature_user_resto').on(t.userId, t.restaurantId),
+}))
+
+/**
+ * Registre SIRENE géocodé. Deux rôles distincts :
+ *  - fournir la tranche d'effectifs, seule source ouverte sur la taille des équipes (D4)
+ *  - piloter le maillage du balayage AVANT le premier appel Google (D6)
+ */
+export const sirene = pgTable('sirene_etablissement', {
+  siret: text('siret').primaryKey(),
+  siren: text('siren'),
+  nom: text('nom'),
+  naf: text('naf'),
+  effectifCode: text('effectif_code'),
+  codeCommune: text('code_commune').notNull(),
+  commune: text('commune'),
+  adresse: text('adresse'),
+  codePostal: text('code_postal'),
+  lat: doublePrecision('lat'),
+  lng: doublePrecision('lng'),
+  geocodeScore: real('geocode_score'),
+  /** Rempli par match:sirene. Nul tant que non apparié — mieux vide que faux. */
+  googlePlaceId: text('google_place_id'),
+  importeLe: timestamp('importe_le', { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  parCommune: index('sirene_commune').on(t.codeCommune),
+  parPosition: index('sirene_position').on(t.lat, t.lng),
+}))
+
+export const statutCelluleEnum = pgEnum('statut_cellule', [
+  'a_faire', 'faite', 'tronquee', 'irreductible', 'echec',
+])
+
+/**
+ * Une cellule du plan de balayage : un cercle à interroger.
+ * Conservées après coup — c'est la trace qui permet de repérer une zone
+ * silencieusement manquée, le seul défaut qui ne se voit pas dans l'interface.
+ */
+export const cellule = pgTable('cellule', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sweepRunId: uuid('sweep_run_id').notNull(),
+  lat: doublePrecision('lat').notNull(),
+  lng: doublePrecision('lng').notNull(),
+  rayon: doublePrecision('rayon').notNull(),
+  /** Nombre d'établissements SIRENE dans la cellule : le détecteur de troncature. */
+  sireneCount: integer('sirene_count').notNull().default(0),
+  /** Nombre de lieux réellement renvoyés par Google. 20 = tronquée. */
+  googleCount: integer('google_count'),
+  /** Distance du dernier résultat : révèle le rayon réellement couvert. */
+  distanceDernier: doublePrecision('distance_dernier'),
+  profondeur: smallint('profondeur').notNull().default(0),
+  parentId: uuid('parent_id'),
+  statut: statutCelluleEnum('statut').notNull().default('a_faire'),
+  interrogeeLe: timestamp('interrogee_le', { withTimezone: true }),
+}, (t) => ({
+  parRun: index('cellule_run').on(t.sweepRunId, t.statut),
 }))
 
 /** Journal de bord du seul poste coûteux du projet. */

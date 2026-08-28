@@ -98,16 +98,35 @@ appels qu'on s'est interdits :
 
 | Métrique | Défaut | Plafond posé | Pourquoi |
 |---|---|---|---|
-| `SearchNearbyRequest` | 75 000 | **800** | Le seul appel utilisé |
+| `SearchNearbyRequest` | 75 000 | **1 000** | Le seul appel utilisé |
 | `GetPlaceRequest` | 125 000 | **0** | Place Details : 1 lieu par appel |
 | `SearchTextRequest` | 75 000 | **0** | Plus cher, sans gain |
 | `AutocompletePlacesRequest` | 175 000 | **0** | Non utilisé |
 | `GetPhotoMediaRequest` | 175 000 | **0** | Palier très cher, non utilisé |
 
-> **Deux corrections successives de cette spec.** Un plafond de ~100/jour y figurait
+> **Trois corrections successives de cette spec.** Un plafond de ~100/jour y figurait
 > d'abord : faux, un balayage s'exécute d'un seul tenant. Puis 500/jour, avant que la mesure
-> ne révèle un besoin réel de **692 appels** par balayage. Le plafond est à **800/jour** —
-> assez pour un sweep complet en une exécution, et toujours 94 fois sous le défaut.
+> ne révèle un besoin réel de ~650 appels par balayage. Puis 800/jour — mais le plafond
+> local du script était fixé à 900, donc **au-dessus** : c'était le `HTTP 429` opaque de
+> Google qui se serait déclenché en premier, en plein milieu du balayage, et jamais notre
+> message explicite.
+
+### L'ordre de déclenchement compte autant que les valeurs
+
+```
+compteur du script (900)  <  quota Google journalier (1 000)  =  quota mensuel gratuit
+```
+
+Trois propriétés découlent de cet ordre :
+
+1. **Notre garde-fou parle avant celui de Google.** Un dépassement produit un message qui
+   nomme la cause, pas un code d'erreur à décoder.
+2. **Un balayage ne peut à lui seul provoquer aucune facturation** : 900 appels restent sous
+   les 1 000 gratuits mensuels, même si toutes les subdivisions sont consommées.
+3. Le plafond journalier Google reste le filet dur, indépendant de la qualité du code.
+
+Un plafond journalier ne protège pas du cumul mensuel — ce rôle revient au verrou de 25
+jours entre deux balayages et à l'alerte budget.
 
 **Les quatre métriques à zéro rendent la décision D5 structurelle** : un `Place Details`
 appelé par erreur ne coûte rien, il échoue. Ce n'est plus une convention à respecter, c'est
