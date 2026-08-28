@@ -1,3 +1,4 @@
+import { COMMUNE_CODES, COMMUNE_NAMES } from '@/lib/config'
 import type { Category, Confidence, SplitShiftRisk } from '@/lib/hours'
 
 /**
@@ -33,12 +34,17 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   bar: 'Bar', pizzeria: 'Pizzeria', other: 'Autre',
 }
 
-/** Zone filter chips. Commune names are proper nouns: the translation leaves them alone. */
-export const ZONES = [
-  { insee: '69381', label: 'Lyon 1er' }, { insee: '69382', label: 'Lyon 2e' },
-  { insee: '69383', label: 'Lyon 3e' }, { insee: '69384', label: 'Lyon 4e' },
-  { insee: '69385', label: 'Lyon 5e' }, { insee: '69386', label: 'Lyon 6e' },
-  { insee: '69387', label: 'Lyon 7e' }, { insee: '69388', label: 'Lyon 8e' },
-  { insee: '69389', label: 'Lyon 9e' }, { insee: '69266', label: 'Villeurbanne' },
-  { insee: '69029', label: 'Bron' }, { insee: '69259', label: 'Vénissieux' },
-]
+/**
+ * Zone filter chips, derived from the sweep perimeter rather than listed by hand.
+ *
+ * A hand-written list drifted once already: it still offered Bron and Vénissieux after
+ * D16 narrowed the perimeter, so those two chips could only ever return zero results.
+ * Deriving them makes that drift impossible — the filter cannot offer a commune the
+ * sweep never visits.
+ *
+ * Commune names are proper nouns: the translation to English leaves them alone.
+ */
+export const ZONES = COMMUNE_CODES.map((insee) => ({
+  insee,
+  label: COMMUNE_NAMES[insee] ?? insee,
+}))
