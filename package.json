@@ -11,7 +11,7 @@
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:up": "docker compose up -d && echo 'Postgres sur localhost:5434'",
+    "db:up": "docker compose up -d && echo 'Postgres on localhost:5434'",
     "db:down": "docker compose down",
     "db:push": "node --env-file=.env.local ./node_modules/drizzle-kit/bin.cjs push",
     "db:studio": "drizzle-kit studio",

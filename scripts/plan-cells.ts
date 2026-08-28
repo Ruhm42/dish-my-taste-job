@@ -1,228 +1,227 @@
 /**
- * plan:cells — calcule le plan de balayage à partir de la densité SIRENE connue,
- * et annonce ce qu'il coûterait en appels Google.
+ * plan:cells — computes the sweep plan from the known SIRENE density, and announces what
+ * it would cost in Google calls.
  *
- * Ce script ne consomme aucun quota, mais il DÉCIDE du quota que consommera
- * `sweep:google` : une cellule = un appel `Nearby Search`. C'est le point d'arrêt
- * du pipeline — on ne balaie pas un plan dont on n'a pas lu le coût.
+ * This script spends no quota, but it DECIDES the quota `sweep:google` will spend: one
+ * cell = one `Nearby Search` call. It is the pipeline's checkpoint — we do not sweep a
+ * plan whose cost has not been read.
  *
- *   node --env-file=.env.local --import tsx scripts/plan-cells.ts            (dry-run)
- *   node --env-file=.env.local --import tsx scripts/plan-cells.ts --write    (écrit)
+ *   node --env-file=.env.local --import tsx scripts/plan-cells.ts            (dry run)
+ *   node --env-file=.env.local --import tsx scripts/plan-cells.ts --write    (writes)
  */
 import { count, inArray } from 'drizzle-orm'
 import {
-  BALAYAGE, COMMUNES, MAILLAGE, NOM_COMMUNE, QUOTA_MENSUEL_GRATUIT,
-  RATIO_GOOGLE_SIRENE, RESULTATS_MAX_NEARBY,
+  COMMUNE_CODES, COMMUNE_NAMES, FREE_MONTHLY_QUOTA, GOOGLE_TO_SIRENE_RATIO,
+  GRID, MAX_NEARBY_RESULTS, SWEEP,
 } from '../lib/config'
 import { db } from '../lib/db/client'
-import { cellule, sirene, sweepRun } from '../lib/db/schema'
-import { planifierCellules } from '../lib/maillage'
-import type { Cellule, Point } from '../lib/maillage'
+import { cell, sireneEstablishment, sweepRun } from '../lib/db/schema'
+import { planCells } from '../lib/grid'
+import type { Cell, Point } from '../lib/grid'
 
-/** Part d'établissements écartés au-delà de laquelle le géocodage est suspect. */
-const SEUIL_ALERTE_ECARTES = 0.05
+/** Share of discarded establishments beyond which geocoding is suspect. */
+const DISCARDED_ALERT_THRESHOLD = 0.05
 
-function lireOptions() {
+function parseOptions() {
   const args = process.argv.slice(2)
-  const inconnues = args.filter((a) => a !== '--write' && a !== '--dry-run')
-  if (inconnues.length > 0) {
+  const unknown = args.filter((a) => a !== '--write' && a !== '--dry-run')
+  if (unknown.length > 0) {
     throw new Error(
-      `option inconnue : ${inconnues.join(' ')} — seules --dry-run (defaut) et --write existent`,
+      `unknown option: ${unknown.join(' ')} — only --dry-run (default) and --write exist`,
     )
   }
   if (args.includes('--write') && args.includes('--dry-run')) {
-    throw new Error('--write et --dry-run sont contradictoires : choisir l un ou l autre')
+    throw new Error('--write and --dry-run contradict each other: pick one')
   }
-  return { ecrire: args.includes('--write') }
+  return { write: args.includes('--write') }
 }
 
-/** Séparateurs de milliers en espaces ordinaires : le terminal rend mal les insécables. */
-const nb = (n: number) => n.toLocaleString('fr-FR').replace(/\u202f|\u00a0/g, ' ')
+const num = (n: number) => n.toLocaleString('en-US')
 
-const ligne = (label: string, valeur: string | number, suffixe = '') =>
-  console.log(`  ${label.padEnd(32)}${String(valeur).padStart(9)}${suffixe ? '  ' + suffixe : ''}`)
+const row = (label: string, value: string | number, suffix = '') =>
+  console.log(`  ${label.padEnd(32)}${String(value).padStart(9)}${suffix ? '  ' + suffix : ''}`)
 
-/** Quantile par rang le plus proche : pas d'interpolation, la valeur existe. */
-function quantile(triees: number[], q: number): number {
-  const i = Math.min(triees.length - 1, Math.max(0, Math.ceil(q * triees.length) - 1))
-  return triees[i]
+/** Nearest-rank quantile: no interpolation, the value exists. */
+function quantile(sorted: number[], q: number): number {
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))
+  return sorted[i]
 }
 
-async function chargerPoints() {
-  const [{ n: totalTable }] = await db.select({ n: count() }).from(sirene)
+async function loadPoints() {
+  const [{ n: rowsInTable }] = await db.select({ n: count() }).from(sireneEstablishment)
 
-  const lignes = await db
+  const rows = await db
     .select({
-      lat: sirene.lat,
-      lng: sirene.lng,
-      score: sirene.geocodeScore,
-      codeCommune: sirene.codeCommune,
+      lat: sireneEstablishment.lat,
+      lng: sireneEstablishment.lng,
+      score: sireneEstablishment.geocodeScore,
+      communeCode: sireneEstablishment.communeCode,
     })
-    .from(sirene)
-    .where(inArray(sirene.codeCommune, [...COMMUNES]))
+    .from(sireneEstablishment)
+    .where(inArray(sireneEstablishment.communeCode, [...COMMUNE_CODES]))
 
   const points: Point[] = []
-  const parCommune = new Map<string, number>()
-  let sansCoordonnees = 0
-  let scoreInsuffisant = 0
+  const byCommune = new Map<string, number>()
+  let withoutCoordinates = 0
+  let lowScore = 0
 
-  for (const l of lignes) {
-    if (l.lat === null || l.lng === null) {
-      sansCoordonnees++
+  for (const r of rows) {
+    if (r.lat === null || r.lng === null) {
+      withoutCoordinates++
       continue
     }
-    // Un point mal géocodé déplace une cellule : mieux vaut un trou connu qu'un
-    // cercle posé au mauvais endroit.
-    if ((l.score ?? 0) < MAILLAGE.scoreGeocodeMin) {
-      scoreInsuffisant++
+    // A badly geocoded point shifts a whole cell: a known hole beats a circle laid down
+    // in the wrong place.
+    if ((r.score ?? 0) < GRID.minGeocodeScore) {
+      lowScore++
       continue
     }
-    points.push({ lat: l.lat, lng: l.lng })
-    parCommune.set(l.codeCommune, (parCommune.get(l.codeCommune) ?? 0) + 1)
+    points.push({ lat: r.lat, lng: r.lng })
+    byCommune.set(r.communeCode, (byCommune.get(r.communeCode) ?? 0) + 1)
   }
 
   return {
-    totalTable,
-    enPerimetre: lignes.length,
-    horsPerimetre: totalTable - lignes.length,
-    sansCoordonnees,
-    scoreInsuffisant,
+    rowsInTable,
+    inPerimeter: rows.length,
+    outsidePerimeter: rowsInTable - rows.length,
+    withoutCoordinates,
+    lowScore,
     points,
-    parCommune,
+    byCommune,
   }
 }
 
-function afficherPlan(cellules: Cellule[], nbPoints: number) {
-  const rayons = cellules.map((c) => c.rayon).sort((a, b) => a - b)
-  const comptes = cellules.map((c) => c.sireneCount).sort((a, b) => a - b)
-  // Une cellule qui n'a pas atteint la cible a forcément été fermée par le
-  // rayon. C'est la répartition qui dit laquelle des deux contraintes domine.
-  const aLaCible = cellules.filter((c) => c.sireneCount >= MAILLAGE.cible).length
-  const parLeRayon = cellules.length - aLaCible
-  const risqueTroncature = cellules.filter(
-    (c) => c.sireneCount * RATIO_GOOGLE_SIRENE >= RESULTATS_MAX_NEARBY,
+function printPlan(cells: Cell[], pointCount: number) {
+  const radii = cells.map((c) => c.radius).sort((a, b) => a - b)
+  const counts = cells.map((c) => c.sireneCount).sort((a, b) => a - b)
+  // A cell that did not reach the target was necessarily closed by the radius. The split
+  // between the two is what tells which constraint dominates.
+  const atTarget = cells.filter((c) => c.sireneCount >= GRID.target).length
+  const byRadius = cells.length - atTarget
+  const truncationRisk = cells.filter(
+    (c) => c.sireneCount * GOOGLE_TO_SIRENE_RATIO >= MAX_NEARBY_RESULTS,
   ).length
-  const pct = (n: number) => `${Math.round((100 * n) / cellules.length)} %`
+  const pct = (n: number) => `${Math.round((100 * n) / cells.length)}%`
 
-  console.log('\nCELLULES')
-  ligne('nombre', nb(cellules.length))
-  ligne('rayon median', `${Math.round(quantile(rayons, 0.5))} m`)
-  ligne('rayon p95', `${Math.round(quantile(rayons, 0.95))} m`)
-  ligne('rayon min / max', `${Math.round(rayons[0])} / ${Math.round(rayons[rayons.length - 1])} m`)
-  ligne('points/cellule median', quantile(comptes, 0.5))
-  ligne('points/cellule p95 / max', `${quantile(comptes, 0.95)} / ${comptes[comptes.length - 1]}`)
-  ligne('points/cellule moyen', (nbPoints / cellules.length).toFixed(1))
+  console.log('\nCELLS')
+  row('count', num(cells.length))
+  row('median radius', `${Math.round(quantile(radii, 0.5))} m`)
+  row('p95 radius', `${Math.round(quantile(radii, 0.95))} m`)
+  row('min / max radius', `${Math.round(radii[0])} / ${Math.round(radii[radii.length - 1])} m`)
+  row('median points/cell', quantile(counts, 0.5))
+  row('p95 / max points/cell', `${quantile(counts, 0.95)} / ${counts[counts.length - 1]}`)
+  row('mean points/cell', (pointCount / cells.length).toFixed(1))
 
-  console.log('\nCE QUI FERME LES CELLULES')
-  ligne(`le rayon (plafond ${MAILLAGE.rayonMax} m)`, nb(parLeRayon), pct(parLeRayon))
-  ligne(`la cible de points (${MAILLAGE.cible})`, nb(aLaCible), pct(aLaCible))
-  ligne(`estimees >= ${RESULTATS_MAX_NEARBY} chez Google`, nb(risqueTroncature), `ratio mesure x${RATIO_GOOGLE_SIRENE}`)
+  console.log('\nWHAT CLOSES THE CELLS')
+  row(`the radius (${GRID.maxRadius} m ceiling)`, num(byRadius), pct(byRadius))
+  row(`the point target (${GRID.target})`, num(atTarget), pct(atTarget))
+  row(`estimated >= ${MAX_NEARBY_RESULTS} at Google`, num(truncationRisk), `measured ratio x${GOOGLE_TO_SIRENE_RATIO}`)
 }
 
-function afficherCout(cellules: Cellule[]) {
-  const appels = cellules.length
-  const marge = QUOTA_MENSUEL_GRATUIT - appels
+function printCost(cells: Cell[]) {
+  const calls = cells.length
+  const headroom = FREE_MONTHLY_QUOTA - calls
 
-  console.log('\nCOUT DU BALAYAGE')
-  ligne('appels Nearby Search', nb(appels))
-  ligne('plafond pose cote script', nb(BALAYAGE.appelsMax))
-  ligne('quota mensuel gratuit', nb(QUOTA_MENSUEL_GRATUIT))
-  ligne(
-    'marge pour les subdivisions',
-    nb(marge),
-    marge > 0 ? `${Math.round((100 * marge) / appels)} % des cellules` : 'DEPASSEMENT',
+  console.log('\nSWEEP COST')
+  row('Nearby Search calls', num(calls))
+  row('ceiling set on the script side', num(SWEEP.maxCalls))
+  row('free monthly quota', num(FREE_MONTHLY_QUOTA))
+  row(
+    'headroom for subdivisions',
+    num(headroom),
+    headroom > 0 ? `${Math.round((100 * headroom) / calls)}% of the cells` : 'OVER BUDGET',
   )
-  return appels
+  return calls
 }
 
-async function ecrirePlan(cellules: Cellule[]) {
+async function writePlan(cells: Cell[]) {
   const [run] = await db
     .insert(sweepRun)
-    .values({ cellsPlanned: cellules.length })
+    .values({ cellsPlanned: cells.length })
     .returning({ id: sweepRun.id })
 
-  await db.insert(cellule).values(
-    cellules.map((c) => ({
+  await db.insert(cell).values(
+    cells.map((c) => ({
       sweepRunId: run.id,
       lat: c.lat,
       lng: c.lng,
-      rayon: c.rayon,
+      radius: c.radius,
       sireneCount: c.sireneCount,
     })),
   )
 
-  console.log(`\n${nb(cellules.length)} cellules ecrites, rattachees au sweep_run ${run.id}`)
-  console.log('Les plans precedents ne sont pas touches : chaque execution cree son propre run.')
+  console.log(`\n${num(cells.length)} cells written, attached to sweep_run ${run.id}`)
+  console.log('Previous plans are left untouched: every run creates its own.')
 }
 
 async function main() {
-  const { ecrire } = lireOptions()
-  const source = await chargerPoints()
+  const { write } = parseOptions()
+  const source = await loadPoints()
 
   console.log(
-    ecrire ? '\nPLAN DE BALAYAGE — ECRITURE EN BASE' : '\nPLAN DE BALAYAGE — DRY-RUN (aucune ecriture)',
+    write ? '\nSWEEP PLAN — WRITING TO THE DATABASE' : '\nSWEEP PLAN — DRY RUN (nothing written)',
   )
 
-  console.log('\nPOINTS SIRENE')
-  ligne('lignes en base', nb(source.totalTable))
-  ligne('hors perimetre (ignorees)', nb(source.horsPerimetre))
-  ligne('en perimetre', nb(source.enPerimetre))
-  ligne('sans coordonnees (ecartees)', nb(source.sansCoordonnees))
-  ligne(`score < ${MAILLAGE.scoreGeocodeMin} (ecartees)`, nb(source.scoreInsuffisant))
-  ligne('retenues pour le maillage', nb(source.points.length))
+  console.log('\nSIRENE POINTS')
+  row('rows in the database', num(source.rowsInTable))
+  row('outside the perimeter (ignored)', num(source.outsidePerimeter))
+  row('inside the perimeter', num(source.inPerimeter))
+  row('without coordinates (discarded)', num(source.withoutCoordinates))
+  row(`score < ${GRID.minGeocodeScore} (discarded)`, num(source.lowScore))
+  row('kept for the grid', num(source.points.length))
 
   if (source.points.length === 0) {
     throw new Error(
-      'aucun etablissement geocode en perimetre, rien a mailler.\n' +
-        `  lignes dans sirene_etablissement : ${source.totalTable}\n` +
-        '  lancer d abord ingest:sirene puis ingest:geocode.',
+      'no geocoded establishment inside the perimeter, nothing to lay a grid on.\n' +
+        `  rows in sirene_establishment: ${source.rowsInTable}\n` +
+        '  run ingest:sirene then ingest:geocode first.',
     )
   }
 
-  // Un angle mort de géocodage est une zone jamais interrogée, et son absence ne
-  // se voit nulle part dans l'interface : elle se voit ici ou jamais.
-  const ecartees = source.sansCoordonnees + source.scoreInsuffisant
-  const tauxEcarte = ecartees / source.enPerimetre
-  if (tauxEcarte > SEUIL_ALERTE_ECARTES) {
+  // A geocoding blind spot is an area that is never queried, and its absence shows up
+  // nowhere in the UI: it shows up here or never.
+  const discarded = source.withoutCoordinates + source.lowScore
+  const discardedRate = discarded / source.inPerimeter
+  if (discardedRate > DISCARDED_ALERT_THRESHOLD) {
     console.log(
-      `\n! ${Math.round(100 * tauxEcarte)} % des etablissements en perimetre sont ecartes du maillage.` +
-        '\n  Autant de zones potentiellement jamais interrogees. Reprendre ingest:geocode' +
-        '\n  avant de balayer, sinon le trou restera invisible.',
+      `\n! ${Math.round(100 * discardedRate)}% of the establishments in the perimeter are discarded from the grid.` +
+        '\n  That many areas potentially never queried. Resume ingest:geocode before' +
+        '\n  sweeping, otherwise the hole stays invisible.',
     )
   }
 
-  const cellules = planifierCellules(source.points, MAILLAGE)
-  afficherPlan(cellules, source.points.length)
+  const cells = planCells(source.points, GRID)
+  printPlan(cells, source.points.length)
 
-  console.log('\nPOINTS PAR COMMUNE')
-  for (const [code, n] of [...source.parCommune].sort((a, b) => b[1] - a[1])) {
-    ligne(NOM_COMMUNE[code] ?? code, nb(n))
+  console.log('\nPOINTS PER COMMUNE')
+  for (const [code, n] of [...source.byCommune].sort((a, b) => b[1] - a[1])) {
+    row(COMMUNE_NAMES[code] ?? code, num(n))
   }
 
-  const appels = afficherCout(cellules)
+  const calls = printCost(cells)
 
-  if (appels > BALAYAGE.appelsMax) {
+  if (calls > SWEEP.maxCalls) {
     console.log(
-      `\n!!! AVERTISSEMENT — le plan demande ${nb(appels)} appels, au-dela du plafond de ` +
-        `${nb(BALAYAGE.appelsMax)}.\n` +
-        `    Le quota mensuel gratuit est de ${nb(QUOTA_MENSUEL_GRATUIT)} appels et les cellules\n` +
-        '    tronquees se subdivisent : le balayage consommera davantage que ce chiffre.\n' +
-        '    Retravailler MAILLAGE (cible, rayonMax) ou reduire le perimetre avant de balayer.',
+      `\n!!! WARNING — the plan asks for ${num(calls)} calls, beyond the ceiling of ` +
+        `${num(SWEEP.maxCalls)}.\n` +
+        `    The free monthly quota is ${num(FREE_MONTHLY_QUOTA)} calls and truncated cells\n` +
+        '    subdivide: the sweep will spend more than that figure.\n' +
+        '    Rework GRID (target, maxRadius) or shrink the perimeter before sweeping.',
     )
-    if (ecrire) {
+    if (write) {
       throw new Error(
-        'ecriture refusee : un plan au-dessus du plafond ne doit pas devenir executable.',
+        'write refused: a plan above the ceiling must not become executable.',
       )
     }
   }
 
-  if (ecrire) await ecrirePlan(cellules)
-  else console.log('\nDry-run : rien n a ete ecrit. Relancer avec --write pour enregistrer le plan.')
+  if (write) await writePlan(cells)
+  else console.log('\nDry run: nothing was written. Rerun with --write to store the plan.')
 
   process.exit(0)
 }
 
 main().catch((e) => {
-  console.error(`\nplan:cells a echoue — ${e instanceof Error ? e.message : e}`)
+  console.error(`\nplan:cells failed — ${e instanceof Error ? e.message : e}`)
   process.exit(1)
 })

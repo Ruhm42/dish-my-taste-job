@@ -1,32 +1,31 @@
-# Maintien en vie — NE PAS SUPPRIMER.
+# Keepalive — DO NOT DELETE.
 #
-# Ce workflow n'a aucun effet visible : il ressemble à du bruit, et c'est
-# exactement pourquoi ce commentaire existe. Il neutralise DEUX comptes à rebours
-# qui, sans lui, éteignent l'outil tout seuls et en silence.
+# This workflow has no visible effect: it looks like noise, and that is exactly why
+# this comment exists. It neutralises TWO countdowns that, without it, shut the tool
+# down on their own and in silence.
 #
-# 1. SUPABASE met un projet en PAUSE après 7 jours sans activité sur la base, et
-#    une pause prolongée finit par la suppression du projet. Un outil consulté par
-#    deux personnes de façon sporadique atteint 7 jours sans effort.
-#    -> remède : ouvrir une connexion à la base chaque semaine.
+# 1. SUPABASE PAUSES a project after 7 days without activity on the database, and a
+#    prolonged pause eventually ends in the project being deleted. A tool consulted
+#    sporadically by two people reaches 7 days effortlessly.
+#    -> remedy: open a connection to the database every week.
 #
-# 2. GITHUB DÉSACTIVE un workflow planifié après 60 jours sans activité sur le
-#    DÉPÔT. Le balayage mensuel s'arrêterait donc de lui-même au bout de deux mois
-#    sans commit. Le piège : une exécution de workflow NE COMPTE PAS comme
-#    activité — seul un commit compte. Le balayage ne se maintient donc pas.
-#    -> remède : commiter un horodatage chaque semaine.
+# 2. GITHUB DISABLES a scheduled workflow after 60 days without activity on the
+#    REPOSITORY. The monthly sweep would therefore stop by itself after two months
+#    without a commit. The trap: a workflow run DOES NOT COUNT as activity — only a
+#    commit does. So the sweep cannot keep itself alive.
+#    -> remedy: commit a timestamp every week.
 #
-# Les deux remèdes tiennent dans un seul workflow hebdomadaire : c'est le job
-# ci-dessous. Le supprimer éteint l'outil, avec un mois de délai avant que ça se
-# voie. Voir .specs/technique/09-deploiement.md.
+# Both remedies fit in a single weekly workflow: the job below. Deleting it shuts the
+# tool down, with a month's delay before anyone notices.
+# See .specs/technique/09-deploiement.md.
 
-name: Maintien en vie
+name: Keepalive
 
 on:
   schedule:
-    # Chaque lundi. Heure décalée : les planifications à l'heure ronde partent en
-    # file d'attente chez GitHub et peuvent être retardées de plusieurs dizaines
-    # de minutes. Une fréquence hebdomadaire laisse deux essais avant les 7 jours
-    # de Supabase.
+    # Every Monday. Off-the-hour time: schedules on a round hour queue up on GitHub's
+    # side and can be delayed by tens of minutes. A weekly cadence leaves two attempts
+    # before Supabase's 7 days.
     - cron: '17 5 * * 1'
   workflow_dispatch:
 
@@ -34,49 +33,49 @@ concurrency:
   group: keepalive
   cancel-in-progress: false
 
-# Nécessaire pour pousser l'horodatage : c'est le commit, et lui seul, qui remet
-# à zéro le compteur d'inactivité de GitHub.
+# Required to push the timestamp: the commit, and only the commit, resets GitHub's
+# inactivity counter.
 permissions:
   contents: write
 
 jobs:
-  maintien:
-    # Sur un fork, ni le secret ni le compteur ne sont ceux du projet.
+  keepalive:
+    # On a fork, neither the secret nor the counter belongs to this project.
     if: github.repository == 'Ruhm42/dish-my-taste-job'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Récupérer le dépôt
+      - name: Check out the repository
         uses: actions/checkout@v4
 
-      # Compteur n°1. `select 1` suffit : c'est la CONNEXION qui compte comme
-      # activité, pas ce qu'on lit. Le client psql est préinstallé sur le runner,
-      # donc aucune dépendance du projet n'est nécessaire ici.
-      # Échec bruyant volontaire : une base qui ne répond pas signifie qu'elle est
-      # déjà en pause ou que l'URL a changé. C'est précisément ce qu'on veut
-      # apprendre par une alerte, et pas par un utilisateur.
-      - name: Réveiller la base
+      # Countdown no. 1. `select 1` is enough: it is the CONNECTION that counts as
+      # activity, not what it reads. The psql client is preinstalled on the runner, so
+      # no project dependency is needed here.
+      # Failing loudly is deliberate: a database that does not answer means it is
+      # already paused, or the URL changed. That is precisely what we want to learn
+      # from an alert rather than from a user.
+      - name: Wake the database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: psql "$DATABASE_URL" --no-psqlrc --quiet -c 'select 1'
 
-      # Compteur n°2. Le contenu du fichier n'a aucun usage : c'est le COMMIT qui
-      # est l'objet du geste. Le fichier porte sa propre explication pour que la
-      # prochaine personne qui tombe dessus ne le prenne pas pour un résidu.
+      # Countdown no. 2. The file's content serves no purpose: the COMMIT is the point
+      # of the gesture. The file carries its own explanation so that the next person
+      # who stumbles on it does not take it for leftover junk.
       #
-      # Un push authentifié par GITHUB_TOKEN ne redéclenche aucun workflow : pas de
-      # boucle possible, et pas de redéploiement Vercel inutile chaque semaine.
-      - name: Commiter l'horodatage
+      # A push authenticated by GITHUB_TOKEN retriggers no workflow: no loop is
+      # possible, and no pointless Vercel redeploy every week.
+      - name: Commit the timestamp
         run: |
           {
-            echo "Horodatage écrit chaque semaine par .github/workflows/keepalive.yml."
-            echo "Son seul rôle est de produire un commit — voir l'en-tête de ce workflow."
+            echo "Timestamp written every week by .github/workflows/keepalive.yml."
+            echo "Its only role is to produce a commit — see the header of that workflow."
             date -u +'%Y-%m-%dT%H:%M:%SZ'
-          } > .github/derniere-activite.txt
+          } > .github/last-activity.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/derniere-activite.txt
+          git add .github/last-activity.txt
           git diff --cached --quiet && exit 0
-          git commit -m 'chore: maintien en vie'
+          git commit -m 'chore: keepalive'
           git push

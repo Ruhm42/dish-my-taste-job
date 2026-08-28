@@ -1,174 +1,172 @@
 /**
- * Étape 1 du pipeline : charge le registre SIRENE dans la table `sirene`.
+ * Pipeline step 1: load the SIRENE registry into the `sirene_establishment` table.
  *
- * Le fichier stock fait 2,2 Go et on n'en garde que ~6 000 lignes. DuckDB lit le
- * Parquet à distance en ne rapatriant que les colonnes et les blocs utiles : on
- * évite le téléchargement complet, l'extraction prend quelques secondes.
+ * The stock file weighs 2.2 GB and we only keep ~6,000 rows. DuckDB reads the Parquet
+ * remotely, pulling down only the columns and blocks it needs: no full download, and the
+ * extraction takes a few seconds.
  *
- * Gratuit, sans compte ni clé (D13). Rejouable autant de fois que nécessaire.
+ * Free, no account and no key (D13). Replayable as many times as needed.
  */
 import { DuckDBInstance } from '@duckdb/node-api'
 import { sql } from 'drizzle-orm'
-import { CODES_NAF, COMMUNES, NOM_COMMUNE, SIRENE_PARQUET } from '../lib/config'
+import { COMMUNE_CODES, COMMUNE_NAMES, NAF_CODES, SIRENE_PARQUET } from '../lib/config'
 import { db } from '../lib/db/client'
-import { sirene } from '../lib/db/schema'
+import { sireneEstablishment } from '../lib/db/schema'
 
 /**
- * En deçà de ce volume, le filtre ou l'URL du fichier stock a changé : la mesure
- * du 2026-08-28 donne 6 129 établissements sur le périmètre (D16). Charger 200
- * lignes sans broncher produirait un maillage amputé que rien ne signalerait.
+ * Below this volume, either the filter or the stock file URL has changed: the
+ * 2026-08-28 measurement gives 6,129 establishments over the perimeter (D16). Loading
+ * 200 rows without flinching would build a truncated grid that nothing would report.
  */
-const MINIMUM_ATTENDU = 3000
+const MINIMUM_EXPECTED_ROWS = 3000
 
 /**
- * Postgres plafonne à 65 535 paramètres liés par requête, soit 9 colonnes × 7 281
- * lignes ici. 1 000 laisse la marge nécessaire pour ajouter une colonne un jour.
+ * Postgres caps bound parameters at 65,535 per statement, i.e. 9 columns × 7,281 rows
+ * here. 1,000 leaves the headroom needed to add a column one day.
  */
-const TAILLE_LOT = 1000
+const BATCH_SIZE = 1000
 
-interface LigneSirene {
+interface SireneRow {
   siret: string
   siren: string | null
-  nom: string | null
+  name: string | null
   naf: string | null
-  effectifCode: string | null
-  codeCommune: string
+  headcountCode: string | null
+  communeCode: string
   commune: string | null
-  adresse: string | null
-  codePostal: string | null
+  address: string | null
+  postalCode: string | null
 }
 
 /**
- * '[ND]' est la marque SIRENE des établissements non diffusibles — 282 lignes du
- * périmètre, dont l'adresse vaut littéralement '[ND] [ND] [ND]'. La garder
- * enverrait cette chaîne au géocodeur et la donnerait comme nom à l'appariement :
- * mieux vaut vide que faux.
+ * '[ND]' is the SIRENE marker for non-disclosable establishments — 282 rows in the
+ * perimeter, whose address is literally '[ND] [ND] [ND]'. Keeping it would send that
+ * string to the geocoder and hand it to the matcher as a name: empty beats wrong.
  */
-function texte(valeur: unknown): string | null {
-  if (valeur === null || valeur === undefined) return null
-  const nettoye = String(valeur).trim()
-  return nettoye === '' || nettoye === '[ND]' ? null : nettoye
+function cleanText(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  const trimmed = String(value).trim()
+  return trimmed === '' || trimmed === '[ND]' ? null : trimmed
 }
 
-async function extraireDeSirene(): Promise<Record<string, unknown>[]> {
+async function extractFromSirene(): Promise<Record<string, unknown>[]> {
   const instance = await DuckDBInstance.create(':memory:')
-  const connexion = await instance.connect()
+  const connection = await instance.connect()
   try {
-    // httpfs donne à DuckDB la lecture HTTP par plages d'octets : sans elle, pas
-    // de Parquet distant.
-    await connexion.run('INSTALL httpfs')
-    await connexion.run('LOAD httpfs')
+    // httpfs gives DuckDB HTTP range reads: without it, no remote Parquet.
+    await connection.run('INSTALL httpfs')
+    await connection.run('LOAD httpfs')
 
-    const requete = `
+    const query = `
       SELECT siret, siren, codeCommuneEtablissement, libelleCommuneEtablissement,
              activitePrincipaleEtablissement, trancheEffectifsEtablissement,
              enseigne1Etablissement, denominationUsuelleEtablissement,
              numeroVoieEtablissement, typeVoieEtablissement, libelleVoieEtablissement,
              codePostalEtablissement
       FROM read_parquet('${SIRENE_PARQUET}')
-      WHERE codeCommuneEtablissement IN (${COMMUNES.map(() => '?').join(', ')})
+      WHERE codeCommuneEtablissement IN (${COMMUNE_CODES.map(() => '?').join(', ')})
         AND etatAdministratifEtablissement = 'A'
-        AND activitePrincipaleEtablissement IN (${CODES_NAF.map(() => '?').join(', ')})
+        AND activitePrincipaleEtablissement IN (${NAF_CODES.map(() => '?').join(', ')})
     `
-    const resultat = await connexion.runAndReadAll(requete, [...COMMUNES, ...CODES_NAF])
-    return resultat.getRowObjectsJS()
+    const result = await connection.runAndReadAll(query, [...COMMUNE_CODES, ...NAF_CODES])
+    return result.getRowObjectsJS()
   } finally {
-    connexion.closeSync()
+    connection.closeSync()
     instance.closeSync()
   }
 }
 
-function convertir(brut: Record<string, unknown>): LigneSirene {
-  const siret = texte(brut.siret)
-  const codeCommune = texte(brut.codeCommuneEtablissement)
-  if (!siret || !codeCommune) {
-    throw new Error(`Ligne SIRENE sans siret ou sans code commune : ${JSON.stringify(brut)}`)
+function toRow(raw: Record<string, unknown>): SireneRow {
+  const siret = cleanText(raw.siret)
+  const communeCode = cleanText(raw.codeCommuneEtablissement)
+  if (!siret || !communeCode) {
+    throw new Error(`SIRENE row without a siret or a commune code: ${JSON.stringify(raw)}`)
   }
 
-  const effectif = texte(brut.trancheEffectifsEtablissement)
+  const headcount = cleanText(raw.trancheEffectifsEtablissement)
 
   return {
     siret,
-    siren: texte(brut.siren),
-    // L'enseigne est le nom d'exploitation, celui affiché sur la devanture et donc
-    // celui que Google connaît. La dénomination usuelle n'est qu'un repli.
-    nom: texte(brut.enseigne1Etablissement) ?? texte(brut.denominationUsuelleEtablissement),
-    naf: texte(brut.activitePrincipaleEtablissement),
-    // 'NN' est le code SIRENE de « non renseigné » — 65,2 % des cas. On le ramène
-    // à NULL pour que les consommateurs n'aient pas à connaître cette sentinelle.
-    effectifCode: effectif === 'NN' ? null : effectif,
-    codeCommune,
-    // Le libellé SIRENE des arrondissements ('LYON 1') diffère de celui affiché
-    // dans l'application ('Lyon 1er') : on aligne sur ce dernier.
-    commune: NOM_COMMUNE[codeCommune] ?? texte(brut.libelleCommuneEtablissement),
-    adresse: texte([
-      brut.numeroVoieEtablissement,
-      brut.typeVoieEtablissement,
-      brut.libelleVoieEtablissement,
-    ].map(texte).filter(Boolean).join(' ')),
-    codePostal: texte(brut.codePostalEtablissement),
+    siren: cleanText(raw.siren),
+    // The trade name is the operating name, the one on the shopfront and therefore the
+    // one Google knows. The legal name is only a fallback.
+    name: cleanText(raw.enseigne1Etablissement) ?? cleanText(raw.denominationUsuelleEtablissement),
+    naf: cleanText(raw.activitePrincipaleEtablissement),
+    // 'NN' is the SIRENE code for "not provided" — 65.2% of the rows. We fold it to NULL
+    // so consumers never have to know about that sentinel.
+    headcountCode: headcount === 'NN' ? null : headcount,
+    communeCode,
+    // The SIRENE label for districts ('LYON 1') differs from the one the app displays
+    // ('Lyon 1er'): we align on the latter.
+    commune: COMMUNE_NAMES[communeCode] ?? cleanText(raw.libelleCommuneEtablissement),
+    address: cleanText([
+      raw.numeroVoieEtablissement,
+      raw.typeVoieEtablissement,
+      raw.libelleVoieEtablissement,
+    ].map(cleanText).filter(Boolean).join(' ')),
+    postalCode: cleanText(raw.codePostalEtablissement),
   }
 }
 
 async function main() {
-  console.log(`Extraction SIRENE : ${COMMUNES.length} communes, ${CODES_NAF.length} codes d'activité`)
-  const debut = Date.now()
+  console.log(`SIRENE extraction: ${COMMUNE_CODES.length} communes, ${NAF_CODES.length} activity codes`)
+  const startedAt = Date.now()
 
-  const bruts = await extraireDeSirene()
-  console.log(`${bruts.length} lignes extraites en ${((Date.now() - debut) / 1000).toFixed(1)} s`)
+  const rawRows = await extractFromSirene()
+  console.log(`${rawRows.length} rows extracted in ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
 
-  if (bruts.length < MINIMUM_ATTENDU) {
+  if (rawRows.length < MINIMUM_EXPECTED_ROWS) {
     throw new Error(
-      `Volume aberrant : ${bruts.length} lignes, ${MINIMUM_ATTENDU} attendues au minimum. ` +
-      "Le filtre ou l'URL du fichier stock a changé — vérifier SIRENE_PARQUET, COMMUNES " +
-      'et CODES_NAF dans lib/config.ts avant de rejouer. Rien n\'a été écrit en base.',
+      `Implausible volume: ${rawRows.length} rows, ${MINIMUM_EXPECTED_ROWS} expected at least. ` +
+      'The filter or the stock file URL has changed — check SIRENE_PARQUET, COMMUNE_CODES ' +
+      'and NAF_CODES in lib/config.ts before replaying. Nothing was written to the database.',
     )
   }
 
-  const lignes = bruts.map(convertir)
+  const rows = rawRows.map(toRow)
 
-  // Les SIRET déjà présents distinguent insertion et mise à jour, que l'upsert ne
-  // renvoie pas.
-  const dejaEnBase = new Set(
-    (await db.select({ siret: sirene.siret }).from(sirene)).map((l) => l.siret),
+  // The SIRETs already present tell inserts from updates, which the upsert does not
+  // report back.
+  const alreadyStored = new Set(
+    (await db.select({ siret: sireneEstablishment.siret }).from(sireneEstablishment)).map((r) => r.siret),
   )
 
-  for (let i = 0; i < lignes.length; i += TAILLE_LOT) {
-    await db.insert(sirene).values(lignes.slice(i, i + TAILLE_LOT)).onConflictDoUpdate({
-      target: sirene.siret,
-      // lat, lng et geocodeScore sont volontairement absents : le géocodage BAN
-      // est une étape séparée et longue, on ne la sacrifie pas à un réimport.
-      // googlePlaceId l'est pour la même raison, côté appariement.
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    await db.insert(sireneEstablishment).values(rows.slice(i, i + BATCH_SIZE)).onConflictDoUpdate({
+      target: sireneEstablishment.siret,
+      // lat, lng and geocodeScore are deliberately absent: BAN geocoding is a separate,
+      // slow step and we do not sacrifice it to a re-import. googlePlaceId is absent for
+      // the same reason, on the matching side.
       set: {
         siren: sql`excluded.siren`,
-        nom: sql`excluded.nom`,
+        name: sql`excluded.name`,
         naf: sql`excluded.naf`,
-        effectifCode: sql`excluded.effectif_code`,
-        codeCommune: sql`excluded.code_commune`,
+        headcountCode: sql`excluded.headcount_code`,
+        communeCode: sql`excluded.commune_code`,
         commune: sql`excluded.commune`,
-        adresse: sql`excluded.adresse`,
-        codePostal: sql`excluded.code_postal`,
-        importeLe: sql`now()`,
+        address: sql`excluded.address`,
+        postalCode: sql`excluded.postal_code`,
+        importedAt: sql`now()`,
       },
     })
   }
 
-  const inserees = lignes.filter((l) => !dejaEnBase.has(l.siret)).length
-  console.log(`${inserees} insérées, ${lignes.length - inserees} mises à jour`)
+  const inserted = rows.filter((r) => !alreadyStored.has(r.siret)).length
+  console.log(`${inserted} inserted, ${rows.length - inserted} updated`)
 
-  const parCommune = new Map<string, number>()
-  for (const l of lignes) parCommune.set(l.codeCommune, (parCommune.get(l.codeCommune) ?? 0) + 1)
-  console.log('\nRépartition par commune :')
-  for (const [code, nombre] of [...parCommune].sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${(NOM_COMMUNE[code] ?? code).padEnd(14)} ${String(nombre).padStart(5)}`)
+  const byCommune = new Map<string, number>()
+  for (const r of rows) byCommune.set(r.communeCode, (byCommune.get(r.communeCode) ?? 0) + 1)
+  console.log('\nBreakdown by commune:')
+  for (const [code, n] of [...byCommune].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${(COMMUNE_NAMES[code] ?? code).padEnd(14)} ${String(n).padStart(5)}`)
   }
 
-  const sansEffectif = lignes.filter((l) => !l.effectifCode).length
-  const sansNom = lignes.filter((l) => !l.nom).length
-  const sansAdresse = lignes.filter((l) => !l.adresse).length
+  const withoutHeadcount = rows.filter((r) => !r.headcountCode).length
+  const withoutName = rows.filter((r) => !r.name).length
+  const withoutAddress = rows.filter((r) => !r.address).length
   console.log(
-    `\nEffectif non renseigné : ${sansEffectif} (${(100 * sansEffectif / lignes.length).toFixed(1)} %)` +
-    ` · sans nom : ${sansNom} · sans adresse : ${sansAdresse}`,
+    `\nHeadcount not provided: ${withoutHeadcount} (${(100 * withoutHeadcount / rows.length).toFixed(1)}%)` +
+    ` · without a name: ${withoutName} · without an address: ${withoutAddress}`,
   )
 
   process.exit(0)

@@ -1,72 +1,72 @@
 /**
- * Paramètres de la zone et du balayage.
- * La zone est une configuration, jamais une valeur en dur (D2).
+ * Area and sweep parameters.
+ * The area is configuration, never a hard-coded value (D2).
  */
 
-/** Lyon 1er-9e + Villeurbanne — périmètre resserré, voir D16. */
-export const COMMUNES = [
+/** Lyon 1st-9th districts + Villeurbanne — narrowed perimeter, see D16. */
+export const COMMUNE_CODES = [
   '69381', '69382', '69383', '69384', '69385',
-  '69386', '69387', '69388', '69389', // Lyon 1er → 9e
+  '69386', '69387', '69388', '69389', // Lyon 1st → 9th
   '69266',                            // Villeurbanne
 ] as const
 
 /**
- * SIRENE code les établissements lyonnais par ARRONDISSEMENT (69381-69389),
- * jamais par la commune globale 69123 — que l'API géographique de l'État est
- * pourtant seule à renvoyer. Filtrer sur cette dernière ferait disparaître
- * 5 639 établissements sans la moindre erreur remontée.
+ * SIRENE codes Lyon establishments by DISTRICT (69381-69389), never by the
+ * global commune code 69123 — which is nonetheless the only one the French
+ * government geo API returns. Filtering on the latter silently drops 5,639
+ * establishments without raising a single error.
  */
-export const ARRONDISSEMENT_PAR_COMMUNE: Record<string, number | null> = {
+export const DISTRICT_BY_COMMUNE: Record<string, number | null> = {
   '69381': 1, '69382': 2, '69383': 3, '69384': 4, '69385': 5,
   '69386': 6, '69387': 7, '69388': 8, '69389': 9,
   '69266': null, // Villeurbanne
 }
 
-export const NOM_COMMUNE: Record<string, string> = {
+export const COMMUNE_NAMES: Record<string, string> = {
   '69381': 'Lyon 1er', '69382': 'Lyon 2e', '69383': 'Lyon 3e',
   '69384': 'Lyon 4e', '69385': 'Lyon 5e', '69386': 'Lyon 6e',
   '69387': 'Lyon 7e', '69388': 'Lyon 8e', '69389': 'Lyon 9e',
   '69266': 'Villeurbanne',
 }
 
-/** Codes d'activité retenus. 56.21Z (traiteurs) est exclu : pas de service en salle. */
-export const CODES_NAF = [
-  '56.10A', // restauration traditionnelle
-  '56.10B', // cafétérias et libres-services
-  '56.10C', // restauration rapide
-  '56.29A', // restauration collective sous contrat
-  '56.29B', // autres services de restauration
-  '56.30Z', // débits de boissons
+/** Activity codes we keep. 56.21Z (caterers) is excluded: no dining-room service. */
+export const NAF_CODES = [
+  '56.10A', // traditional restaurants
+  '56.10B', // cafeterias and self-service
+  '56.10C', // fast food
+  '56.29A', // contract catering
+  '56.29B', // other food services
+  '56.30Z', // drinking places
 ] as const
 
-/** Fichier stock SIRENE, téléchargeable sans compte ni clé (D13). */
+/** SIRENE stock file, downloadable without an account or a key (D13). */
 export const SIRENE_PARQUET =
   'https://static.data.gouv.fr/resources/base-sirene-des-entreprises-et-de-leurs-etablissements' +
   '-siren-siret/20260801-074451/stock-stocketablissement-parquet.parquet'
 
 export const BAN_CSV = 'https://api-adresse.data.gouv.fr/search/csv/'
 
-/** Paramètres du maillage — voir D17 et technique/03-algorithme-de-balayage.md */
-export const MAILLAGE = {
-  /** Établissements SIRENE visés par cellule. */
-  cible: 15,
+/** Grid parameters — see D17 and technique/03-algorithme-de-balayage.md */
+export const GRID = {
+  /** SIRENE establishments targeted per cell. */
+  target: 15,
   /**
-   * Rayon maximal en mètres. C'est la contrainte DOMINANTE, mesurée :
-   * au-delà de ~265 m Google tronque à 20 résultats, à 168 m il en renvoie 18.
-   * 200 m garde une marge sans multiplier les cellules.
+   * Maximum radius in meters. This is the DOMINANT constraint, and it is measured:
+   * beyond ~265 m Google truncates to 20 results, and at 168 m it already returns 18.
+   * 200 m keeps a margin without multiplying the number of cells.
    */
-  rayonMax: 200,
-  /** Un rayon nul ne cherche rien. */
-  rayonMin: 40,
-  /** Score de géocodage BAN en deçà duquel on n'utilise pas le point. */
-  scoreGeocodeMin: 0.6,
+  maxRadius: 200,
+  /** A zero radius searches nothing. */
+  minRadius: 40,
+  /** BAN geocoding score below which the point is not used. */
+  minGeocodeScore: 0.6,
 } as const
 
 /**
- * Field mask Google — CONSTANTE UNIQUE ET PARTAGÉE.
- * La facturation s'applique au champ le plus cher demandé : un `places.rating`
- * ajouté par mégarde bascule sur un palier supérieur. Ne jamais construire
- * cette liste dynamiquement.
+ * Google field mask — SINGLE SHARED CONSTANT.
+ * Billing follows the most expensive field requested: one `places.rating` added
+ * by mistake moves the whole call to a higher tier. Never build this list
+ * dynamically.
  */
 export const FIELD_MASK = [
   'places.id',
@@ -79,48 +79,48 @@ export const FIELD_MASK = [
   'places.nationalPhoneNumber',
 ].join(',')
 
-export const TYPES_GOOGLE = ['restaurant', 'cafe', 'bar', 'meal_takeaway'] as const
+export const GOOGLE_PLACE_TYPES = ['restaurant', 'cafe', 'bar', 'meal_takeaway'] as const
 
-/** Quota Enterprise gratuit par mois. Au-delà, c'est la carte bancaire — il n'y a pas de crédit. */
-export const QUOTA_MENSUEL_GRATUIT = 1000
-
-/**
- * Plafond dur de `Nearby Search` : 20 lieux par appel, le reste est perdu sans que
- * rien ne le signale. C'est la définition même de la troncature.
- */
-export const RESULTATS_MAX_NEARBY = 20
+/** Free Enterprise quota per month. Past it, it is the credit card — there is no trial credit. */
+export const FREE_MONTHLY_QUOTA = 1000
 
 /**
- * Mesuré (D16) : Google renvoie 1,16 établissement là où SIRENE en compte 1.
- * Partagé entre `plan:cells`, qui PRÉDIT la troncature, et `sweep:google`, qui la
- * DÉTECTE — deux valeurs divergentes feraient prévoir un coût que le balayage
- * ne consommerait pas, sans que rien ne le signale.
+ * Hard ceiling of `Nearby Search`: 20 places per call, the rest is lost with
+ * nothing signalling it. That is the very definition of truncation.
  */
-export const RATIO_GOOGLE_SIRENE = 1.16
+export const MAX_NEARBY_RESULTS = 20
 
 /**
- * Garde-fous du balayage.
- *
- * L'ordre de déclenchement compte autant que les valeurs :
- *
- *   appelsMax (900)  <  quota Google journalier (1 000)  =  QUOTA_MENSUEL_GRATUIT
- *
- * Notre compteur s'arrête donc AVANT le plafond Google, ce qui donne un message
- * explicite au lieu d'un HTTP 429 opaque en plein milieu du balayage. Et comme 900
- * reste sous le quota mensuel gratuit, **un balayage ne peut à lui seul provoquer
- * aucune facturation**, même s'il consomme tout son budget en subdivisions.
+ * Measured (D16): Google returns 1.16 establishments where SIRENE counts 1.
+ * Shared between `plan:cells`, which PREDICTS truncation, and `sweep:google`, which
+ * DETECTS it — two diverging values would forecast a cost the sweep never spends,
+ * with nothing signalling the gap.
  */
-export const BALAYAGE = {
-  /** Plafond dur côté script. Se déclenche avant le quota Google, volontairement. */
-  appelsMax: 900,
-  /** Profondeur de subdivision au-delà de laquelle une cellule est dite irréductible. */
-  profondeurMax: 4,
+export const GOOGLE_TO_SIRENE_RATIO = 1.16
+
+/**
+ * Sweep guard rails.
+ *
+ * The order in which they trip matters as much as the values:
+ *
+ *   maxCalls (900)  <  Google daily quota (1,000)  =  FREE_MONTHLY_QUOTA
+ *
+ * Our counter therefore stops BEFORE the Google ceiling, which yields an explicit
+ * message instead of an opaque HTTP 429 in the middle of the sweep. And because 900
+ * stays under the free monthly quota, **a single sweep can never on its own cause
+ * any billing**, even if it spends its entire budget on subdivisions.
+ */
+export const SWEEP = {
+  /** Hard ceiling on the script side. It trips before the Google quota, deliberately. */
+  maxCalls: 900,
+  /** Subdivision depth beyond which a cell is declared irreducible. */
+  maxDepth: 4,
   /**
-   * Un balayage réussi dans les N derniers jours bloque toute nouvelle exécution.
-   * Le quota est mensuel : deux balayages dans le mois le consommeraient entièrement.
+   * A sweep that succeeded within the last N days blocks any new run.
+   * The quota is monthly: two sweeps in one month would consume it entirely.
    */
-  joursEntreBalayages: 25,
+  daysBetweenSweeps: 25,
 } as const
 
-/** Durée de conservation du contenu Places imposée par les CGU Google (D7). */
-export const TTL_HORAIRES_JOURS = 30
+/** Places content retention period imposed by the Google terms of service (D7). */
+export const HOURS_TTL_DAYS = 30

@@ -1,26 +1,39 @@
-import type { Fiabilite, RisqueCoupure } from '@/lib/horaires'
+import type { Category, Confidence, SplitShiftRisk } from '@/lib/hours'
 
-/** Vocabulaire métier, jamais technique. Aucun score chiffré n'est affiché. */
-export const RISQUE: Record<RisqueCoupure, { label: string; couleur: string; classe: string }> = {
-  aucun:   { label: 'Sans coupure',          couleur: '#16a34a', classe: 'bg-green-100 text-green-900 border-green-300' },
-  faible:  { label: 'Coupure peu probable',  couleur: '#84cc16', classe: 'bg-lime-100 text-lime-900 border-lime-300' },
-  moyen:   { label: 'Coupure possible',      couleur: '#f59e0b', classe: 'bg-amber-100 text-amber-900 border-amber-300' },
-  eleve:   { label: 'Coupure probable',      couleur: '#dc2626', classe: 'bg-red-100 text-red-900 border-red-300' },
-  inconnu: { label: 'Horaires inconnus',     couleur: '#a8a29e', classe: 'bg-stone-100 text-stone-600 border-stone-300' },
+/**
+ * The one place where English enum values become French screen labels.
+ *
+ * The database, the inference engine and the URL all speak the enum; the reader is a
+ * French hospitality worker. Translating anywhere else would leak French into the data
+ * or English onto the screen.
+ *
+ * Wording is domain vocabulary, never technical: no numeric score is ever shown.
+ */
+export const SPLIT_SHIFT_BADGES: Record<
+  SplitShiftRisk,
+  { label: string; color: string; className: string }
+> = {
+  none:    { label: 'Sans coupure',          color: '#16a34a', className: 'bg-green-100 text-green-900 border-green-300' },
+  low:     { label: 'Coupure peu probable',  color: '#84cc16', className: 'bg-lime-100 text-lime-900 border-lime-300' },
+  medium:  { label: 'Coupure possible',      color: '#f59e0b', className: 'bg-amber-100 text-amber-900 border-amber-300' },
+  high:    { label: 'Coupure probable',      color: '#dc2626', className: 'bg-red-100 text-red-900 border-red-300' },
+  unknown: { label: 'Horaires inconnus',     color: '#a8a29e', className: 'bg-stone-100 text-stone-600 border-stone-300' },
 }
 
-export const FIABILITE: Record<Fiabilite, string> = {
-  confirme: 'Confirmé',
-  probable: 'Probable',
-  a_verifier: 'À vérifier',
+export const CONFIDENCE_LABELS: Record<Confidence, string> = {
+  confirmed: 'Confirmé',
+  likely: 'Probable',
+  unverified: 'À vérifier',
 }
 
-export const CATEGORIE_LABEL: Record<string, string> = {
-  bistrot: 'Bistrot', brasserie: 'Brasserie', gastronomique: 'Gastronomique',
-  rapide: 'Restauration rapide', collectivite: 'Restauration collective',
-  bar: 'Bar', pizzeria: 'Pizzeria', autre: 'Autre',
+/** Insertion order drives the filter chips, so it is also the order on screen. */
+export const CATEGORY_LABELS: Record<Category, string> = {
+  bistro: 'Bistrot', brasserie: 'Brasserie', fine_dining: 'Gastronomique',
+  fast_food: 'Restauration rapide', canteen: 'Restauration collective',
+  bar: 'Bar', pizzeria: 'Pizzeria', other: 'Autre',
 }
 
+/** Zone filter chips. Commune names are proper nouns: the translation leaves them alone. */
 export const ZONES = [
   { insee: '69381', label: 'Lyon 1er' }, { insee: '69382', label: 'Lyon 2e' },
   { insee: '69383', label: 'Lyon 3e' }, { insee: '69384', label: 'Lyon 4e' },

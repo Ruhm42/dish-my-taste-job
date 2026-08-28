@@ -1,132 +1,132 @@
 /**
- * cron:refresh — étape 7 du pipeline : le rafraîchissement mensuel.
+ * cron:refresh — pipeline step 7: the monthly refresh.
  *
- * Enchaîne `plan:cells`, `sweep:google`, `match:sirene` et `compute:profiles`.
- * `ingest:sirene` et `ingest:geocode` n'y sont pas : le registre d'entreprises évolue
- * lentement, une réexécution trimestrielle suffit (spec 06).
+ * Chains `plan:cells`, `sweep:google`, `match:sirene` and `compute:profiles`.
+ * `ingest:sirene` and `ingest:geocode` are not in it: the company registry moves slowly, a
+ * quarterly rerun is enough (spec 06).
  *
- * C'est ce script que déclenche .github/workflows/balayage.yml le 1er du mois. Le calage
- * au 1er garantit que le remplacement précède l'expiration des 30 jours des CGU (D7).
+ * This is the script .github/workflows/sweep.yml triggers on the 1st of the month. Firing
+ * on the 1st guarantees the replacement happens before the 30-day terms-of-service
+ * expiry (D7).
  *
- * IL CONSOMME DU QUOTA, par `sweep:google` interposé : `--dry-run` est donc son mode par
- * défaut, et `--go` la seule façon de dépenser. En dry-run il n'exécute QUE les deux
- * étapes qui savent ne rien écrire — le plan et le balayage à blanc.
+ * IT SPENDS QUOTA, through `sweep:google`: `--dry-run` is therefore its default mode, and
+ * `--go` the only way to spend. In dry run it only runs the two steps that know how to
+ * write nothing — the plan and the dry sweep.
  *
- *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts        # rien n'est dépensé
- *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts --go   # dépense réellement
+ *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts        # nothing is spent
+ *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts --go   # actually spends
  *
- * Chaque étape garde ses propres garde-fous : ils sont dans les scripts, pas ici. En
- * particulier, `sweep:google` refuse de rejouer un balayage réussi depuis moins de
- * BALAYAGE.joursEntreBalayages jours — un déclenchement manuel en cours de mois ne
- * dépensera rien.
+ * Each step keeps its own guard rails: they live in the scripts, not here. In particular,
+ * `sweep:google` refuses to replay a sweep that succeeded less than SWEEP.daysBetweenSweeps
+ * days ago — a manual trigger mid-month will spend nothing.
  */
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-const DOSSIER_SCRIPTS = dirname(fileURLToPath(import.meta.url))
+const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 
-interface Etape {
-  nom: string
-  fichier: string
-  /** Arguments en mode réel. */
+interface Step {
+  name: string
+  file: string
+  /** Arguments in live mode. */
   args: string[]
   /**
-   * Arguments en dry-run, ou `null` si l'étape n'a pas de mode sans écriture : elle est
-   * alors sautée. On ne fait pas semblant d'apparier sur une base qu'on n'a pas balayée.
+   * Arguments in dry run, or `null` when the step has no write-free mode: it is then
+   * skipped. We do not pretend to match against a database we have not swept.
    */
-  argsDryRun: string[] | null
+  dryRunArgs: string[] | null
 }
 
-const ETAPES: Etape[] = [
-  // Seule étape jouable à blanc, et la seule qui compte pour le budget : le nombre de
-  // cellules qu'elle annonce EST le nombre d'appels que le balayage consommera.
-  { nom: 'plan:cells', fichier: 'plan-cells.ts', args: ['--write'], argsDryRun: [] },
-  // Le dry-run de `sweep` lit le plan en base ; en dry-run le plan n'y est justement pas
-  // écrit. L'appeler quand même le ferait échouer sur « aucune cellule à faire », un échec
-  // qui ne dirait rien du balayage réel.
-  { nom: 'sweep:google', fichier: 'sweep.ts', args: ['--go'], argsDryRun: null },
-  { nom: 'match:sirene', fichier: 'match-sirene.ts', args: [], argsDryRun: null },
-  { nom: 'compute:profiles', fichier: 'compute-profiles.ts', args: [], argsDryRun: null },
+const STEPS: Step[] = [
+  // The only step playable dry, and the only one that matters for the budget: the number
+  // of cells it announces IS the number of calls the sweep will spend.
+  { name: 'plan:cells', file: 'plan-cells.ts', args: ['--write'], dryRunArgs: [] },
+  // The dry run of `sweep` reads the plan from the database; in dry run the plan is
+  // precisely not written there. Calling it anyway would fail on "no cell to do", a
+  // failure that says nothing about the real sweep.
+  { name: 'sweep:google', file: 'sweep.ts', args: ['--go'], dryRunArgs: null },
+  { name: 'match:sirene', file: 'match-sirene.ts', args: [], dryRunArgs: null },
+  { name: 'compute:profiles', file: 'compute-profiles.ts', args: [], dryRunArgs: null },
 ]
 
 /**
- * Chaque étape tourne dans son propre processus : c'est ce qui garantit qu'elle applique
- * bien ses garde-fous et son code de sortie, au lieu d'être court-circuitée par un appel
- * de fonction depuis ici. `--import tsx` et pas `npm run` : les scripts de package.json
- * embarquent `--env-file=.env.local`, qui n'existe pas en CI.
+ * Each step runs in its own process: that is what guarantees it applies its own guard
+ * rails and its own exit code, instead of being short-circuited by a function call from
+ * here. `--import tsx` rather than `npm run`: the package.json scripts carry
+ * `--env-file=.env.local`, which does not exist in CI.
  */
-function lancer(etape: Etape, args: string[]): void {
-  const chemin = join(DOSSIER_SCRIPTS, etape.fichier)
-  console.log(`\n=== ${etape.nom} ${args.join(' ')} ===\n`)
+function run(step: Step, args: string[]): void {
+  const path = join(SCRIPTS_DIR, step.file)
+  console.log(`\n=== ${step.name} ${args.join(' ')} ===\n`)
 
-  const resultat = spawnSync(process.execPath, ['--import', 'tsx', chemin, ...args], {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', path, ...args], {
     stdio: 'inherit',
     env: process.env,
   })
 
-  if (resultat.error) {
-    throw new Error(`${etape.nom} n'a pas pu démarrer : ${resultat.error.message}`)
+  if (result.error) {
+    throw new Error(`${step.name} could not start: ${result.error.message}`)
   }
-  if (resultat.signal) {
-    throw new Error(`${etape.nom} a été interrompu par le signal ${resultat.signal}`)
+  if (result.signal) {
+    throw new Error(`${step.name} was interrupted by signal ${result.signal}`)
   }
-  if (resultat.status !== 0) {
-    // Le cycle s'arrête net. Enchaîner sur `match:sirene` après un balayage incomplet
-    // apparierait une base amputée et afficherait un canari rassurant pour de mauvaises
-    // raisons — exactement le défaut qui ne se voit pas dans l'interface.
-    throw new Error(`${etape.nom} a échoué (code ${resultat.status}) — cycle interrompu`)
+  if (result.status !== 0) {
+    // The cycle stops dead. Chaining `match:sirene` after an incomplete sweep would match
+    // against a truncated database and display a reassuring canary for the wrong reasons —
+    // exactly the defect that does not show up in the UI.
+    throw new Error(`${step.name} failed (exit code ${result.status}) — cycle interrupted`)
   }
 }
 
 function main(): void {
   const args = process.argv.slice(2)
-  const inconnus = args.filter((a) => !['--go', '--dry-run'].includes(a))
-  if (inconnus.length > 0) {
-    console.error(`Options inconnues : ${inconnus.join(' ')}. Attendu : --go, --dry-run`)
+  const unknown = args.filter((a) => !['--go', '--dry-run'].includes(a))
+  if (unknown.length > 0) {
+    console.error(`Unknown options: ${unknown.join(' ')}. Expected: --go, --dry-run`)
     process.exit(1)
   }
   const go = args.includes('--go')
 
   if (!process.env.DATABASE_URL) {
-    console.error('DATABASE_URL manquante — voir .specs/technique/08-infrastructure.md')
+    console.error('DATABASE_URL is missing — see .specs/technique/08-infrastructure.md')
     process.exit(1)
   }
-  // Vérifiée ici plutôt qu'au milieu du cycle : découvrir la clé absente APRÈS avoir
-  // écrit un plan laisserait des cellules « a_faire » derrière soi.
+  // Checked here rather than mid-cycle: discovering the missing key AFTER writing a plan
+  // would leave "pending" cells behind.
   if (go && !process.env.GOOGLE_PLACES_API_KEY) {
-    console.error('GOOGLE_PLACES_API_KEY manquante — voir .specs/technique/08-infrastructure.md')
+    console.error('GOOGLE_PLACES_API_KEY is missing — see .specs/technique/08-infrastructure.md')
     process.exit(1)
   }
 
   console.log(go
-    ? 'RAFRAÎCHISSEMENT MENSUEL — MODE RÉEL, le balayage va dépenser du quota Google'
-    : 'RAFRAÎCHISSEMENT MENSUEL — DRY-RUN, aucun appel émis, rien écrit (ajouter --go pour dépenser)')
+    ? 'MONTHLY REFRESH — LIVE MODE, the sweep is going to spend Google quota'
+    : 'MONTHLY REFRESH — DRY RUN, no call made, nothing written (add --go to spend)')
 
-  const debut = Date.now()
+  const startedAt = Date.now()
 
-  for (const etape of ETAPES) {
-    const args_ = go ? etape.args : etape.argsDryRun
-    if (args_ === null) {
-      console.log(`\n=== ${etape.nom} — non jouée en dry-run ===`)
+  for (const step of STEPS) {
+    const stepArgs = go ? step.args : step.dryRunArgs
+    if (stepArgs === null) {
+      console.log(`\n=== ${step.name} — not played in dry run ===`)
       continue
     }
-    lancer(etape, args_)
+    run(step, stepArgs)
   }
 
-  const minutes = ((Date.now() - debut) / 60_000).toFixed(1)
+  const minutes = ((Date.now() - startedAt) / 60_000).toFixed(1)
   console.log(go
-    ? `\nCycle mensuel terminé en ${minutes} min. À contrôler : console de facturation ` +
-      '(consommation Enterprise ≈ nombre de cellules, RIEN sur le palier Atmosphere), ' +
-      'troncatures non résolues, taux de non-appariement SIRENE.'
-    : `\nDry-run terminé en ${minutes} min. Rien n'a été dépensé ni écrit.\n` +
-      "Le nombre de cellules annoncé ci-dessus est le nombre d'appels que --go consommerait.")
+    ? `\nMonthly cycle finished in ${minutes} min. To check: the billing console ` +
+      '(Enterprise usage ≈ number of cells, NOTHING on the Atmosphere tier), ' +
+      'unresolved truncations, SIRENE unmatched rate.'
+    : `\nDry run finished in ${minutes} min. Nothing was spent nor written.\n` +
+      'The number of cells announced above is the number of calls --go would spend.')
 }
 
 try {
   main()
   process.exit(0)
 } catch (e) {
-  console.error(`\nCYCLE MENSUEL EN ÉCHEC — ${e instanceof Error ? e.message : e}`)
+  console.error(`\nMONTHLY CYCLE FAILED — ${e instanceof Error ? e.message : e}`)
   process.exit(1)
 }

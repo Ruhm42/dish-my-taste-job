@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: dmtj
       POSTGRES_DB: dmtj
     ports:
-      # 5433 pour ne pas entrer en conflit avec un Postgres local sur 5432
+      # Off 5432 so a Postgres already installed locally keeps its default port.
       - "5434:5432"
     volumes:
       - dmtj-pgdata:/var/lib/postgresql/data

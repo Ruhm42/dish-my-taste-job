@@ -1,30 +1,30 @@
 /**
- * Géocodage des adresses SIRENE via la Base Adresse Nationale.
+ * Geocodes the SIRENE addresses through the Base Adresse Nationale.
  *
- * SIRENE donne des adresses, jamais des coordonnées. Or c'est la position qui
- * pilote le maillage du balayage, donc le seul poste coûteux du projet.
- * La BAN est gratuite et sans clé : aucune raison d'y mettre du Google.
+ * SIRENE gives addresses, never coordinates. Yet position is what drives the sweep grid,
+ * hence the project's only costly item. The BAN is free and keyless: no reason to spend
+ * Google on it.
  *
- * Reprise : seules les lignes sans `lat` sont envoyées. Une interruption se
- * rejoue sans redemander ce qui est déjà connu.
+ * Resumable: only rows without a `lat` are sent. An interrupted run replays without
+ * asking again for what is already known.
  */
 import { and, gte, isNull, sql } from 'drizzle-orm'
 import { db } from '../lib/db/client'
-import { sirene } from '../lib/db/schema'
-import { BAN_CSV, MAILLAGE } from '../lib/config'
+import { sireneEstablishment } from '../lib/db/schema'
+import { BAN_CSV, GRID } from '../lib/config'
 
-/** La BAN accepte de gros fichiers, mais c'est un service public : on reste raisonnable. */
-const TAILLE_LOT = 2000
+/** The BAN accepts large files, but it is a public service: stay reasonable. */
+const BATCH_SIZE = 2000
 const PAUSE_MS = 1000
-const TENTATIVES_MAX = 3
+const MAX_ATTEMPTS = 3
 
-interface Ligne {
+interface AddressRow {
   siret: string
-  adresse: string
-  codePostal: string | null
+  address: string
+  postalCode: string | null
 }
 
-interface Resultat {
+interface GeocodeResult {
   siret: string
   lat: number
   lng: number
@@ -32,91 +32,91 @@ interface Resultat {
 }
 
 /**
- * SIRENE remplace par « [ND] » les champs des etablissements non diffusibles.
- * Ce n'est pas une adresse incomplete : il n'y a rien a chercher, et les
- * renvoyer a la BAN a chaque execution ne ferait que gonfler les non-trouvees.
+ * SIRENE replaces the fields of non-disclosable establishments with '[ND]'. That is not
+ * an incomplete address: there is nothing to look up, and sending those to the BAN on
+ * every run would only inflate the not-found count.
  */
-const ADRESSE_CHERCHABLE = sql`coalesce(${sirene.adresse}, '') <> '' and ${sirene.adresse} not like '%[ND]%'`
-const ADRESSE_ABSENTE = sql`coalesce(${sirene.adresse}, '') = '' or ${sirene.adresse} like '%[ND]%'`
+const HAS_SEARCHABLE_ADDRESS = sql`coalesce(${sireneEstablishment.address}, '') <> '' and ${sireneEstablishment.address} not like '%[ND]%'`
+const HAS_NO_SEARCHABLE_ADDRESS = sql`coalesce(${sireneEstablishment.address}, '') = '' or ${sireneEstablishment.address} like '%[ND]%'`
 
-function champCsv(valeur: string | null): string {
-  return `"${(valeur ?? '').replace(/"/g, '""')}"`
+function csvField(value: string | null): string {
+  return `"${(value ?? '').replace(/"/g, '""')}"`
 }
 
-/** Un « [ND] » envoyé tel quel ferait chercher cette chaîne à la BAN. Mieux vaut un champ vide. */
-function sansNd(valeur: string | null): string | null {
-  return valeur?.includes('[ND]') ? null : valeur
+/** A '[ND]' sent as-is would make the BAN search for that string. An empty field is better. */
+function stripNotDisclosed(value: string | null): string | null {
+  return value?.includes('[ND]') ? null : value
 }
 
-function versCsv(lignes: Ligne[]): string {
-  const corps = lignes.map((l) =>
-    [champCsv(l.siret), champCsv(sansNd(l.adresse)), champCsv(sansNd(l.codePostal))].join(','),
+function toCsv(rows: AddressRow[]): string {
+  const body = rows.map((r) =>
+    [csvField(r.siret), csvField(stripNotDisclosed(r.address)), csvField(stripNotDisclosed(r.postalCode))].join(','),
   )
-  return ['siret,adresse,code_postal', ...corps].join('\n')
+  return ['siret,address,postal_code', ...body].join('\n')
 }
 
-/** Analyseur CSV minimal, mais qui gère les guillemets : les raisons sociales en contiennent. */
-function lireCsv(texte: string, separateur: string): string[][] {
-  const lignes: string[][] = []
-  let ligne: string[] = []
-  let champ = ''
-  let entreGuillemets = false
+/** Minimal CSV parser, but one that handles quotes: business names contain them. */
+function parseCsv(text: string, separator: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let inQuotes = false
 
-  for (let i = 0; i < texte.length; i++) {
-    const c = texte[i]
-    if (entreGuillemets) {
-      if (c !== '"') champ += c
-      else if (texte[i + 1] === '"') { champ += '"'; i++ }
-      else entreGuillemets = false
-    } else if (c === '"') entreGuillemets = true
-    else if (c === separateur) { ligne.push(champ); champ = '' }
-    else if (c === '\n') { ligne.push(champ); lignes.push(ligne); ligne = []; champ = '' }
-    else if (c !== '\r') champ += c
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (inQuotes) {
+      if (c !== '"') field += c
+      else if (text[i + 1] === '"') { field += '"'; i++ }
+      else inQuotes = false
+    } else if (c === '"') inQuotes = true
+    else if (c === separator) { row.push(field); field = '' }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = '' }
+    else if (c !== '\r') field += c
   }
-  if (champ !== '' || ligne.length > 0) { ligne.push(champ); lignes.push(ligne) }
-  return lignes
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row) }
+  return rows
 }
 
-async function appelerBan(lot: Ligne[]): Promise<string> {
-  const fichier = new Blob([versCsv(lot)], { type: 'text/csv' })
+async function callBan(batch: AddressRow[]): Promise<string> {
+  const file = new Blob([toCsv(batch)], { type: 'text/csv' })
 
-  for (let tentative = 1; ; tentative++) {
-    const formulaire = new FormData()
-    formulaire.append('data', fichier, 'adresses.csv')
-    formulaire.append('columns', 'adresse')
-    formulaire.append('postcode', 'code_postal')
+  for (let attempt = 1; ; attempt++) {
+    const form = new FormData()
+    form.append('data', file, 'addresses.csv')
+    form.append('columns', 'address')
+    form.append('postcode', 'postal_code')
 
     try {
-      const reponse = await fetch(BAN_CSV, {
+      const response = await fetch(BAN_CSV, {
         method: 'POST',
-        body: formulaire,
+        body: form,
         signal: AbortSignal.timeout(180_000),
       })
-      if (reponse.ok) return await reponse.text()
+      if (response.ok) return await response.text()
 
-      const detail = (await reponse.text()).slice(0, 500)
-      if (tentative >= TENTATIVES_MAX) {
-        throw new Error(`BAN a repondu ${reponse.status} apres ${tentative} tentatives : ${detail}`)
+      const detail = (await response.text()).slice(0, 500)
+      if (attempt >= MAX_ATTEMPTS) {
+        throw new Error(`BAN answered ${response.status} after ${attempt} attempts: ${detail}`)
       }
-      console.warn(`  BAN ${reponse.status}, nouvelle tentative (${tentative}/${TENTATIVES_MAX})`)
+      console.warn(`  BAN ${response.status}, retrying (${attempt}/${MAX_ATTEMPTS})`)
     } catch (e) {
-      if (tentative >= TENTATIVES_MAX) throw e
-      console.warn(`  echec reseau (${(e as Error).message}), nouvelle tentative (${tentative}/${TENTATIVES_MAX})`)
+      if (attempt >= MAX_ATTEMPTS) throw e
+      console.warn(`  network failure (${(e as Error).message}), retrying (${attempt}/${MAX_ATTEMPTS})`)
     }
-    await pause(PAUSE_MS * 5 * tentative)
+    await sleep(PAUSE_MS * 5 * attempt)
   }
 }
 
-function extraireResultats(csv: string): Resultat[] {
-  const separateur = (csv.split('\n', 1)[0].match(/;/g)?.length ?? 0) >
+function extractResults(csv: string): GeocodeResult[] {
+  const separator = (csv.split('\n', 1)[0].match(/;/g)?.length ?? 0) >
     (csv.split('\n', 1)[0].match(/,/g)?.length ?? 0) ? ';' : ','
-  const lignes = lireCsv(csv, separateur)
-  if (lignes.length === 0) throw new Error('BAN a renvoye un fichier vide')
+  const rows = parseCsv(csv, separator)
+  if (rows.length === 0) throw new Error('BAN returned an empty file')
 
-  const entete = lignes[0]
-  const col = (nom: string) => {
-    const i = entete.indexOf(nom)
-    if (i < 0) throw new Error(`colonne "${nom}" absente de la reponse BAN — entete : ${entete.join('|')}`)
+  const header = rows[0]
+  const col = (name: string) => {
+    const i = header.indexOf(name)
+    if (i < 0) throw new Error(`column "${name}" missing from the BAN response — header: ${header.join('|')}`)
     return i
   }
   const iSiret = col('siret')
@@ -124,95 +124,102 @@ function extraireResultats(csv: string): Resultat[] {
   const iLng = col('longitude')
   const iScore = col('result_score')
 
-  const resultats: Resultat[] = []
-  for (const ligne of lignes.slice(1)) {
-    if (ligne.length <= iScore) continue // ligne tronquée : rien à en tirer
-    const lat = Number(ligne[iLat])
-    const lng = Number(ligne[iLng])
-    // Adresse non trouvée : latitude vide. Ce n'est pas une erreur, la ligne repassera.
-    if (!ligne[iLat] || !Number.isFinite(lat) || !Number.isFinite(lng)) continue
-    resultats.push({ siret: ligne[iSiret], lat, lng, score: Number(ligne[iScore]) || 0 })
+  const results: GeocodeResult[] = []
+  for (const row of rows.slice(1)) {
+    if (row.length <= iScore) continue // truncated row: nothing usable in it
+    const lat = Number(row[iLat])
+    const lng = Number(row[iLng])
+    // Address not found: empty latitude. Not an error, the row will come back next run.
+    if (!row[iLat] || !Number.isFinite(lat) || !Number.isFinite(lng)) continue
+    results.push({ siret: row[iSiret], lat, lng, score: Number(row[iScore]) || 0 })
   }
-  return resultats
+  return results
 }
 
-/** Un seul aller-retour par lot : 2 000 UPDATE unitaires ne se justifient pas. */
-async function ecrire(resultats: Resultat[]): Promise<void> {
-  if (resultats.length === 0) return
-  const valeurs = resultats.map((r) =>
+/** A single round trip per batch: 2,000 individual UPDATEs would not be justified. */
+async function writeResults(results: GeocodeResult[]): Promise<void> {
+  if (results.length === 0) return
+  const values = results.map((r) =>
     sql`(${r.siret}::text, ${r.lat}::double precision, ${r.lng}::double precision, ${r.score}::real)`,
   )
   await db.execute(sql`
-    update ${sirene} as s
+    update ${sireneEstablishment} as s
        set lat = v.lat, lng = v.lng, geocode_score = v.score
-      from (values ${sql.join(valeurs, sql`, `)}) as v(siret, lat, lng, score)
+      from (values ${sql.join(values, sql`, `)}) as v(siret, lat, lng, score)
      where s.siret = v.siret
   `)
 }
 
-function pause(ms: number): Promise<void> {
+function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
 async function main() {
-  // Un registre vide n'est pas « rien à faire » : c'est le script précédent qui manque.
-  if (await db.$count(sirene) === 0) {
-    throw new Error('table sirene_etablissement vide — lancer ingest:sirene avant le geocodage')
+  // An empty registry is not "nothing to do": it is the previous script that is missing.
+  if (await db.$count(sireneEstablishment) === 0) {
+    throw new Error('sirene_establishment table is empty — run ingest:sirene before geocoding')
   }
 
-  const sansAdresse = await db.$count(sirene, and(isNull(sirene.lat), ADRESSE_ABSENTE))
+  const withoutAddress = await db.$count(
+    sireneEstablishment,
+    and(isNull(sireneEstablishment.lat), HAS_NO_SEARCHABLE_ADDRESS),
+  )
 
-  const aTraiter = await db
-    .select({ siret: sirene.siret, adresse: sirene.adresse, codePostal: sirene.codePostal })
-    .from(sirene)
-    .where(and(isNull(sirene.lat), ADRESSE_CHERCHABLE))
+  const pending = await db
+    .select({
+      siret: sireneEstablishment.siret,
+      address: sireneEstablishment.address,
+      postalCode: sireneEstablishment.postalCode,
+    })
+    .from(sireneEstablishment)
+    .where(and(isNull(sireneEstablishment.lat), HAS_SEARCHABLE_ADDRESS))
 
-  if (sansAdresse > 0) {
-    console.log(`${sansAdresse} etablissements sans adresse exploitable (non diffusibles) :`)
-    console.log('  ingeocodables par nature, ils ne serviront pas au maillage')
+  if (withoutAddress > 0) {
+    console.log(`${withoutAddress} establishments without a usable address (non-disclosable):`)
+    console.log('  ungeocodable by nature, they will not feed the grid')
   }
-  if (aTraiter.length === 0) {
-    console.log('rien a geocoder — toutes les lignes SIRENE avec adresse ont deja un point')
+  if (pending.length === 0) {
+    console.log('nothing to geocode — every SIRENE row with an address already has a point')
     return
   }
 
-  const nbLots = Math.ceil(aTraiter.length / TAILLE_LOT)
-  console.log(`${aTraiter.length} adresses a geocoder, ${nbLots} lot(s) de ${TAILLE_LOT}`)
+  const batchCount = Math.ceil(pending.length / BATCH_SIZE)
+  console.log(`${pending.length} addresses to geocode, ${batchCount} batch(es) of ${BATCH_SIZE}`)
 
-  let geocodees = 0
-  let fiables = 0
+  let geocoded = 0
+  let reliable = 0
 
-  for (let i = 0; i < nbLots; i++) {
-    const lot = aTraiter.slice(i * TAILLE_LOT, (i + 1) * TAILLE_LOT) as Ligne[]
-    const resultats = extraireResultats(await appelerBan(lot))
-    await ecrire(resultats)
+  for (let i = 0; i < batchCount; i++) {
+    const batch = pending.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE) as AddressRow[]
+    const results = extractResults(await callBan(batch))
+    await writeResults(results)
 
-    geocodees += resultats.length
-    fiables += resultats.filter((r) => r.score >= MAILLAGE.scoreGeocodeMin).length
-    console.log(`  lot ${i + 1}/${nbLots} : ${resultats.length}/${lot.length} positionnees`)
+    geocoded += results.length
+    reliable += results.filter((r) => r.score >= GRID.minGeocodeScore).length
+    console.log(`  batch ${i + 1}/${batchCount}: ${results.length}/${batch.length} located`)
 
-    if (i < nbLots - 1) await pause(PAUSE_MS)
+    if (i < batchCount - 1) await sleep(PAUSE_MS)
   }
 
-  const pct = (n: number) => `${((n / aTraiter.length) * 100).toFixed(1)} %`
-  console.log(`\nadresses traitees   : ${aTraiter.length}`)
-  console.log(`geocodees           : ${geocodees} (${pct(geocodees)})`)
-  console.log(`score >= ${MAILLAGE.scoreGeocodeMin}        : ${fiables} (${pct(fiables)}) — seules celles-ci serviront au maillage`)
+  const pct = (n: number) => `${((n / pending.length) * 100).toFixed(1)}%`
+  console.log(`\naddresses processed  : ${pending.length}`)
+  console.log(`geocoded             : ${geocoded} (${pct(geocoded)})`)
+  console.log(`score >= ${GRID.minGeocodeScore}         : ${reliable} (${pct(reliable)}) — only these will feed the grid`)
 
-  const faibles = geocodees - fiables
-  if (faibles > 0) {
-    console.log(`score faible        : ${faibles} — points conserves, ecartes du maillage`)
+  const lowScore = geocoded - reliable
+  if (lowScore > 0) {
+    console.log(`low score            : ${lowScore} — points kept, excluded from the grid`)
   }
-  if (geocodees < aTraiter.length) {
-    console.log(`non trouvees        : ${aTraiter.length - geocodees} — relancer le script les representera`)
+  if (geocoded < pending.length) {
+    console.log(`not found            : ${pending.length - geocoded} — rerunning the script will retry them`)
   }
 
-  // Après une reprise, les chiffres ci-dessus ne couvrent que le reliquat.
-  // C'est ce total qui se compare aux ~90 % attendus.
-  const total = await db.$count(sirene)
-  const exploitables = await db.$count(sirene, gte(sirene.geocodeScore, MAILLAGE.scoreGeocodeMin))
-  console.log(`\nregistre complet    : ${exploitables}/${total} exploitables pour le maillage ` +
-    `(${((exploitables / total) * 100).toFixed(1)} %)`)
+  // After a resume, the figures above only cover the leftovers. It is this total that
+  // compares against the ~90% expected.
+  const total = await db.$count(sireneEstablishment)
+  const usable = await db.$count(sireneEstablishment, gte(sireneEstablishment.geocodeScore, GRID.minGeocodeScore))
+  console.log(`\nwhole registry       : ${usable}/${total} usable for the grid ` +
+    `(${((usable / total) * 100).toFixed(1)}%)`)
 }
 
 main()

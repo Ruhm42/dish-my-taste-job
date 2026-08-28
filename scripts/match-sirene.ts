@@ -1,437 +1,434 @@
 /**
- * Appariement Google <-> SIRENE (étape 5 du pipeline).
+ * Google <-> SIRENE matching (pipeline step 5).
  *
- * Google donne les horaires, SIRENE donne la tranche d'effectifs. Sans cette dernière,
- * l'inférence de coupure n'a plus de pivot : un établissement ouvert midi ET soir est
- * signalé comme coupure quelle que soit la taille de l'équipe (D4).
+ * Google gives the opening hours, SIRENE gives the headcount bracket. Without the latter,
+ * split-shift inference loses its pivot: an establishment open at lunch AND at dinner is
+ * flagged as a split shift whatever the size of the team (D4).
  *
- * Deux critères combinés — proximité sous 75 m ET similarité de nom après normalisation.
- * En dessous du seuil on laisse l'effectif VIDE : un effectif attribué au mauvais
- * établissement produit un verdict de coupure faux, que l'utilisateur ne peut pas
- * détecter. Une information manquante, elle, s'affiche comme telle.
+ * Two combined criteria — proximity under 75 m AND name similarity after normalization.
+ * Below the threshold we leave the headcount EMPTY: a headcount pinned on the wrong
+ * establishment produces a false split-shift verdict the user cannot detect. Missing
+ * information, on the other hand, shows up as missing.
  *
- * Gratuit et rejouable : aucun appel réseau, aucun quota consommé.
+ * Free and replayable: no network call, no quota spent.
  *
- *   node --env-file=.env.local --import tsx scripts/match-sirene.ts [--dry-run] [--seuil=0.45]
+ *   node --env-file=.env.local --import tsx scripts/match-sirene.ts [--dry-run] [--threshold=0.45]
  */
 import { desc, eq, sql } from 'drizzle-orm'
 import { db } from '../lib/db/client'
 import { restaurant, sweepRun } from '../lib/db/schema'
-import { NOM_COMMUNE } from '../lib/config'
-import { calculerProfil, parserHoraires, tailleEquipe } from '../lib/horaires'
-import type { Categorie, GoogleHoraires } from '../lib/horaires'
-import { colonnesProfil } from '../lib/profil-colonnes'
+import { COMMUNE_NAMES } from '../lib/config'
+import { computeProfile, parseOpeningHours, teamSize } from '../lib/hours'
+import type { Category, GoogleOpeningHours } from '../lib/hours'
+import { profileColumns } from '../lib/profile-columns'
 
-/** Rayon d'appariement, en mètres. Au-delà, deux établissements sont voisins, pas identiques. */
-const DISTANCE_MAX = 75
+/** Matching radius, in meters. Beyond it, two establishments are neighbours, not the same. */
+const MAX_DISTANCE = 75
 
 /**
- * Seuil de similarité trigramme. Réglable — c'est le seul nombre de ce script qui
- * demandera un calibrage sur données réelles, d'où `--seuil`.
- * Trop bas, on attribue des effectifs faux ; trop haut, on perd des appariements
- * légitimes et le filtre de coupure retombe sur son mode dégradé.
+ * Trigram similarity threshold. Tunable — it is the one number in this script that will
+ * need calibrating against real data, hence `--threshold`.
+ * Too low and we pin wrong headcounts; too high and we lose legitimate matches, dropping
+ * the split-shift filter back to its degraded mode.
  */
-const SEUIL_DEFAUT = 0.45
+const DEFAULT_THRESHOLD = 0.45
 
-/** Mots vides du domaine : présents partout, donc discriminants nulle part. */
-const MOTS_VIDES = [
+/** Domain stop words: present everywhere, therefore discriminating nowhere. */
+const STOP_WORDS = [
   'restaurant', 'le', 'la', 'les', 'chez', 'aux', 'du', 'de', 'brasserie', 'bar', 'cafe',
 ]
 
 /**
- * Un nom que la normalisation réduit à moins de 3 caractères ne discrimine plus rien
- * (« Le Bar » devient vide) : on préfère ne pas apparier.
+ * A name that normalization shrinks below 3 characters discriminates nothing any more
+ * ("Le Bar" becomes empty): we would rather not match at all.
  */
-const LONGUEUR_NOM_MIN = 3
+const MIN_NAME_LENGTH = 3
 
-const METRES_PAR_DEGRE_LAT = 110574
-const METRES_PAR_DEGRE_LNG = 111320
+const METERS_PER_DEGREE_LAT = 110574
+const METERS_PER_DEGREE_LNG = 111320
 
-/** Au-delà de ce multiple du taux global, une commune n'est plus du bruit statistique. */
-const FACTEUR_CONCENTRATION = 1.5
-const NON_APPARIES_SIGNIFICATIFS = 20
+/** Past this multiple of the global rate, a commune is no longer statistical noise. */
+const CONCENTRATION_FACTOR = 1.5
+const SIGNIFICANT_UNMATCHED = 20
 
-const LOT = 500
+const BATCH_SIZE = 500
 
 /**
- * Normalisation des noms, en SQL pour que `similarity()` compare deux chaînes préparées
- * de la même façon. Écrite une fois et appliquée aux DEUX côtés : une divergence entre
- * les deux normalisations ferait chuter le taux d'appariement sans le moindre message.
+ * Name normalization, written in SQL so that `similarity()` compares two strings prepared
+ * the same way. Written once and applied to BOTH sides: a divergence between the two
+ * normalizations would sink the match rate without a single message.
  *
- * `unaccent` n'est pas installée (seule `pg_trgm` l'est), d'où le `translate` explicite.
- * Les ligatures passent avant, parce qu'elles se déplient en deux lettres.
+ * `unaccent` is not installed (only `pg_trgm` is), hence the explicit `translate`.
+ * Ligatures come first, because they unfold into two letters.
  */
-function nomNormalise(colonne: string): string {
+function normalizedName(column: string): string {
   return `btrim(regexp_replace(
     regexp_replace(
       regexp_replace(
-        translate(replace(replace(lower(${colonne}), 'œ', 'oe'), 'æ', 'ae'),
+        translate(replace(replace(lower(${column}), 'œ', 'oe'), 'æ', 'ae'),
                   'àáâãäåçèéêëìíîïñòóôõöùúûüýÿ',
                   'aaaaaaceeeeiiiinooooouuuuyy'),
         '[^a-z0-9]+', ' ', 'g'),
-      '\\y(${MOTS_VIDES.join('|')})\\y', ' ', 'g'),
+      '\\y(${STOP_WORDS.join('|')})\\y', ' ', 'g'),
     '\\s+', ' ', 'g'))`
 }
 
-interface Candidat {
+interface Candidate {
   restaurant_id: string
   google_place_id: string
   siret: string
-  effectif_code: string | null
+  headcount_code: string | null
   naf: string | null
   score: number
   distance: number
 }
 
 /**
- * Tous les couples plausibles, en une requête.
- *
- * Présélection par rectangle englobant sur lat/lng avant tout calcul de distance :
- * il n'y a pas de PostGIS (D12) et l'index `sirene_position` fait le travail.
- * Le rectangle est légèrement plus large que le disque de 75 m ; le filtre final sur
- * la distance réelle rattrape les coins.
+ * `similarity()` comes from `pg_trgm`, which has to be enabled by hand on Supabase
+ * (spec 08). Without this check, the failure shows up as a "function similarity(text,
+ * text) does not exist" in the middle of a 40-line query — true, but unreadable.
  */
-/**
- * `similarity()` vient de `pg_trgm`, qui s'active à la main sur Supabase (spec 08).
- * Sans ce contrôle, l'échec arrive sous la forme d'un « function similarity(text, text)
- * does not exist » au milieu d'une requête de 40 lignes — vrai, mais illisible.
- */
-async function verifierPgTrgm(): Promise<void> {
-  const [presente] = (await db.execute(
+async function checkPgTrgm(): Promise<void> {
+  const [present] = (await db.execute(
     sql`SELECT count(*) > 0 AS ok FROM pg_extension WHERE extname = 'pg_trgm'`,
   )) as unknown as { ok: boolean }[]
 
-  if (!presente?.ok) {
+  if (!present?.ok) {
     throw new Error(
-      "l'extension pg_trgm n'est pas installee sur cette base — l'appariement de noms en depend.\n"
-      + '  Activer avec : CREATE EXTENSION IF NOT EXISTS pg_trgm;\n'
-      + '  Voir .specs/technique/08-infrastructure.md',
+      'the pg_trgm extension is not installed on this database — name matching depends on it.\n'
+      + '  Enable it with: CREATE EXTENSION IF NOT EXISTS pg_trgm;\n'
+      + '  See .specs/technique/08-infrastructure.md',
     )
   }
 }
 
-async function chercherCandidats(seuil: number): Promise<Candidat[]> {
-  const deltaLat = DISTANCE_MAX / METRES_PAR_DEGRE_LAT
+/**
+ * Every plausible pair, in one query.
+ *
+ * Preselection by bounding box on lat/lng before any distance computation: there is no
+ * PostGIS (D12) and the `sirene_position` index does the work. The box is slightly wider
+ * than the 75 m disc; the final filter on the real distance trims the corners.
+ */
+async function findCandidates(threshold: number): Promise<Candidate[]> {
+  const deltaLat = MAX_DISTANCE / METERS_PER_DEGREE_LAT
 
-  const lignes = await db.execute(sql`
+  const rows = await db.execute(sql`
     WITH google AS (
       SELECT r.id, r.google_place_id, r.lat, r.lng,
-             ${sql.raw(nomNormalise('r.name'))} AS nom_norm
+             ${sql.raw(normalizedName('r.name'))} AS normalized_name
       FROM restaurant r
-    ), registre AS (
-      SELECT s.siret, s.effectif_code, s.naf, s.lat, s.lng,
-             ${sql.raw(nomNormalise('s.nom'))} AS nom_norm
-      FROM sirene_etablissement s
+    ), registry AS (
+      SELECT s.siret, s.headcount_code, s.naf, s.lat, s.lng,
+             ${sql.raw(normalizedName('s.name'))} AS normalized_name
+      FROM sirene_establishment s
       WHERE s.lat IS NOT NULL AND s.lng IS NOT NULL
-    ), candidats AS (
+    ), candidates AS (
       SELECT g.id AS restaurant_id,
              g.google_place_id,
              s.siret,
-             s.effectif_code,
+             s.headcount_code,
              s.naf,
-             similarity(g.nom_norm, s.nom_norm) AS score,
+             similarity(g.normalized_name, s.normalized_name) AS score,
              sqrt(
-               power((s.lat - g.lat) * ${METRES_PAR_DEGRE_LAT}, 2) +
-               power((s.lng - g.lng) * ${METRES_PAR_DEGRE_LNG} * cos(radians(g.lat)), 2)
+               power((s.lat - g.lat) * ${METERS_PER_DEGREE_LAT}, 2) +
+               power((s.lng - g.lng) * ${METERS_PER_DEGREE_LNG} * cos(radians(g.lat)), 2)
              ) AS distance
       FROM google g
-      JOIN registre s
+      JOIN registry s
         ON s.lat BETWEEN g.lat - ${deltaLat} AND g.lat + ${deltaLat}
-       AND s.lng BETWEEN g.lng - (${DISTANCE_MAX} / (${METRES_PAR_DEGRE_LNG} * cos(radians(g.lat))))
-                     AND g.lng + (${DISTANCE_MAX} / (${METRES_PAR_DEGRE_LNG} * cos(radians(g.lat))))
-      WHERE length(g.nom_norm) >= ${LONGUEUR_NOM_MIN}
-        AND length(s.nom_norm) >= ${LONGUEUR_NOM_MIN}
-        AND similarity(g.nom_norm, s.nom_norm) >= ${seuil}
+       AND s.lng BETWEEN g.lng - (${MAX_DISTANCE} / (${METERS_PER_DEGREE_LNG} * cos(radians(g.lat))))
+                     AND g.lng + (${MAX_DISTANCE} / (${METERS_PER_DEGREE_LNG} * cos(radians(g.lat))))
+      WHERE length(g.normalized_name) >= ${MIN_NAME_LENGTH}
+        AND length(s.normalized_name) >= ${MIN_NAME_LENGTH}
+        AND similarity(g.normalized_name, s.normalized_name) >= ${threshold}
     )
     SELECT restaurant_id::text AS restaurant_id,
-           google_place_id, siret, effectif_code, naf, score, distance
-    FROM candidats
-    WHERE distance <= ${DISTANCE_MAX}
+           google_place_id, siret, headcount_code, naf, score, distance
+    FROM candidates
+    WHERE distance <= ${MAX_DISTANCE}
     ORDER BY score DESC, distance ASC
   `)
 
-  return lignes as unknown as Candidat[]
+  return rows as unknown as Candidate[]
 }
 
 /**
- * Attribution gloutonne, meilleur score d'abord : un établissement Google et un
- * enregistrement SIRENE ne servent qu'une fois. Sans cette exclusivité, un même SIRENE
- * serait consommé par plusieurs fiches Google et le compte de non-appariés — le canari —
- * serait faussé dans le sens rassurant.
+ * Greedy assignment, best score first: a Google establishment and a SIRENE record are
+ * each used only once. Without that exclusivity, a single SIRENE record would be consumed
+ * by several Google entries and the unmatched count — the canary — would be skewed in the
+ * reassuring direction.
  *
- * Le score prime sur la distance : à moins de 75 m, c'est le nom qui discrimine.
+ * Score outranks distance: under 75 m, it is the name that discriminates.
  */
-function attribuer(candidats: Candidat[]): Map<string, Candidat> {
-  const retenus = new Map<string, Candidat>()
-  const siretsPris = new Set<string>()
+function assign(candidates: Candidate[]): Map<string, Candidate> {
+  const kept = new Map<string, Candidate>()
+  const takenSirets = new Set<string>()
 
-  for (const c of candidats) {
-    if (retenus.has(c.restaurant_id) || siretsPris.has(c.siret)) continue
-    retenus.set(c.restaurant_id, c)
-    siretsPris.add(c.siret)
+  for (const c of candidates) {
+    if (kept.has(c.restaurant_id) || takenSirets.has(c.siret)) continue
+    kept.set(c.restaurant_id, c)
+    takenSirets.add(c.siret)
   }
 
-  return retenus
+  return kept
 }
 
-function parLots<T>(items: T[], taille: number): T[][] {
-  const lots: T[][] = []
-  for (let i = 0; i < items.length; i += taille) lots.push(items.slice(i, i + taille))
-  return lots
+function chunk<T>(items: T[], size: number): T[][] {
+  const batches: T[][] = []
+  for (let i = 0; i < items.length; i += size) batches.push(items.slice(i, i + size))
+  return batches
 }
 
 /**
- * Écrit l'appariement, après avoir effacé le précédent.
+ * Writes the matching, after erasing the previous one.
  *
- * La remise à zéro est délibérée : le résultat doit dépendre du seul état courant des
- * deux tables, jamais d'une exécution passée. Un SIRENE radié ou un seuil resserré
- * doivent défaire un appariement, pas le laisser traîner.
+ * The reset is deliberate: the result must depend on the current state of the two tables
+ * alone, never on a past run. A struck-off SIRENE record or a tightened threshold must
+ * undo a match, not leave it lying around.
  */
-async function appliquer(retenus: Map<string, Candidat>): Promise<void> {
-  const couples = [...retenus.entries()]
+async function apply(kept: Map<string, Candidate>): Promise<void> {
+  const pairs = [...kept.entries()]
 
   await db.transaction(async (tx) => {
     await tx.execute(sql`
       UPDATE restaurant
-      SET siret = NULL, naf_code = NULL, effectif_code = NULL, match_score = NULL
+      SET siret = NULL, naf_code = NULL, headcount_code = NULL, match_score = NULL
     `)
     await tx.execute(sql`
-      UPDATE sirene_etablissement SET google_place_id = NULL WHERE google_place_id IS NOT NULL
+      UPDATE sirene_establishment SET google_place_id = NULL WHERE google_place_id IS NOT NULL
     `)
 
-    for (const lot of parLots(couples, LOT)) {
-      // Chaque valeur est castée : dans un VALUES, un NULL sans type laisse Postgres
-      // incapable de deviner la colonne.
-      const valeurs = lot.map(([id, c]) => sql`(
-        ${id}::uuid, ${c.siret}::text, ${c.naf}::text, ${c.effectif_code}::text, ${c.score}::real
+    for (const batch of chunk(pairs, BATCH_SIZE)) {
+      // Every value is cast: inside a VALUES, an untyped NULL leaves Postgres unable to
+      // guess the column.
+      const values = batch.map(([id, c]) => sql`(
+        ${id}::uuid, ${c.siret}::text, ${c.naf}::text, ${c.headcount_code}::text, ${c.score}::real
       )`)
       await tx.execute(sql`
         UPDATE restaurant AS r
-        SET siret = v.siret, naf_code = v.naf, effectif_code = v.effectif, match_score = v.score
-        FROM (VALUES ${sql.join(valeurs, sql`, `)}) AS v(id, siret, naf, effectif, score)
+        SET siret = v.siret, naf_code = v.naf, headcount_code = v.headcount, match_score = v.score
+        FROM (VALUES ${sql.join(values, sql`, `)}) AS v(id, siret, naf, headcount, score)
         WHERE r.id = v.id
       `)
 
-      const liens = lot.map(([, c]) => sql`(${c.siret}::text, ${c.google_place_id}::text)`)
+      const links = batch.map(([, c]) => sql`(${c.siret}::text, ${c.google_place_id}::text)`)
       await tx.execute(sql`
-        UPDATE sirene_etablissement AS s
+        UPDATE sirene_establishment AS s
         SET google_place_id = v.place_id
-        FROM (VALUES ${sql.join(liens, sql`, `)}) AS v(siret, place_id)
+        FROM (VALUES ${sql.join(links, sql`, `)}) AS v(siret, place_id)
         WHERE s.siret = v.siret
       `)
     }
   })
 }
 
-interface LigneResto {
+interface RestaurantRow {
   id: string
-  effectifCode: string | null
-  categorie: Categorie
+  headcountCode: string | null
+  category: Category
   rawOpeningHours: unknown
 }
 
 /**
- * Recalcule les profils des seuls établissements dont l'effectif vient de changer.
- * Le verdict de coupure croise horaires ET effectif : un effectif qui bouge invalide
- * le profil calculé avant lui.
+ * Recomputes the profiles of only those establishments whose headcount just changed.
+ * The split-shift verdict crosses opening hours WITH headcount: a headcount that moves
+ * invalidates the profile computed before it.
  */
-async function recalculerProfils(
-  lignes: LigneResto[],
-  effectifs: Map<string, string | null>,
+async function recomputeProfiles(
+  rows: RestaurantRow[],
+  headcounts: Map<string, string | null>,
 ): Promise<void> {
-  const maintenant = new Date()
+  const now = new Date()
 
   await db.transaction(async (tx) => {
-    for (const l of lignes) {
-      const fenetres = parserHoraires(l.rawOpeningHours as GoogleHoraires | null)
-      const profil = calculerProfil({
-        fenetres,
-        codeEffectif: effectifs.get(l.id) ?? null,
-        categorie: l.categorie,
+    for (const r of rows) {
+      const windows = parseOpeningHours(r.rawOpeningHours as GoogleOpeningHours | null)
+      const profile = computeProfile({
+        windows,
+        headcountCode: headcounts.get(r.id) ?? null,
+        category: r.category,
       })
 
       await tx.update(restaurant)
-        .set({ ...colonnesProfil(fenetres, profil), profileComputedAt: maintenant })
-        .where(eq(restaurant.id, l.id))
+        .set({ ...profileColumns(windows, profile), profileComputedAt: now })
+        .where(eq(restaurant.id, r.id))
     }
   })
 }
 
 const pct = (n: number, total: number): string =>
-  total === 0 ? '-' : `${((n / total) * 100).toFixed(1)} %`
+  total === 0 ? '-' : `${((n / total) * 100).toFixed(1)}%`
 
-/** L'effectif n'est exploitable que s'il se traduit en taille d'équipe : `NN` ne dit rien. */
-const effectifExploitable = (code: string | null): boolean => tailleEquipe(code) !== 'inconnu'
+/** A headcount is only usable if it maps to a team size: `NN` says nothing. */
+const hasUsableHeadcount = (code: string | null): boolean => teamSize(code) !== 'unknown'
 
-interface LigneSirene {
+interface SireneRow {
   siret: string
-  code_commune: string
-  geocode: boolean
+  commune_code: string
+  geocoded: boolean
 }
 
 /**
- * Le canari du balayage. Les non-appariés se répartissent normalement de façon diffuse ;
- * une commune qui décroche signale une zone que le balayage Google a manquée — c'est le
- * seul défaut qui ne se voit pas dans l'interface, puisqu'un établissement absent
- * n'affiche rien.
+ * The sweep's canary. Unmatched records normally spread out diffusely; a commune that
+ * breaks away signals an area the Google sweep missed — the one defect invisible in the
+ * UI, since a missing establishment displays nothing at all.
  *
- * On raisonne en TAUX et pas en volume : un compte brut ne ferait que classer les
- * communes par taille.
+ * We reason in RATES, not in volumes: a raw count would only rank communes by size.
  */
-function afficherCanari(registre: LigneSirene[], siretsApparies: Set<string>): number {
-  const geocodes = registre.filter((s) => s.geocode)
-  const sansPosition = registre.length - geocodes.length
-  const nonApparies = geocodes.filter((s) => !siretsApparies.has(s.siret))
-  const tauxGlobal = geocodes.length === 0 ? 0 : nonApparies.length / geocodes.length
+function printCanary(registry: SireneRow[], matchedSirets: Set<string>): number {
+  const geocoded = registry.filter((s) => s.geocoded)
+  const withoutPosition = registry.length - geocoded.length
+  const unmatched = geocoded.filter((s) => !matchedSirets.has(s.siret))
+  const globalRate = geocoded.length === 0 ? 0 : unmatched.length / geocoded.length
 
   console.log('')
-  console.log(`SIRENE non apparies : ${nonApparies.length} sur ${geocodes.length} geocodes `
-    + `(${pct(nonApparies.length, geocodes.length)})`)
-  if (sansPosition > 0) {
-    console.log(`  + ${sansPosition} sans coordonnees, hors appariement possible `
-      + `— relancer ingest:geocode si le chiffre surprend`)
+  console.log(`unmatched SIRENE records: ${unmatched.length} out of ${geocoded.length} geocoded `
+    + `(${pct(unmatched.length, geocoded.length)})`)
+  if (withoutPosition > 0) {
+    console.log(`  + ${withoutPosition} without coordinates, out of reach of any match `
+      + `— rerun ingest:geocode if that figure is a surprise`)
   }
 
-  const parCommune = new Map<string, { total: number; manquants: number }>()
-  for (const s of geocodes) {
-    const e = parCommune.get(s.code_commune) ?? { total: 0, manquants: 0 }
+  const byCommune = new Map<string, { total: number; missing: number }>()
+  for (const s of geocoded) {
+    const e = byCommune.get(s.commune_code) ?? { total: 0, missing: 0 }
     e.total += 1
-    if (!siretsApparies.has(s.siret)) e.manquants += 1
-    parCommune.set(s.code_commune, e)
+    if (!matchedSirets.has(s.siret)) e.missing += 1
+    byCommune.set(s.commune_code, e)
   }
 
-  const rangs = [...parCommune.entries()]
+  const ranked = [...byCommune.entries()]
     .map(([code, e]) => ({
-      libelle: NOM_COMMUNE[code] ?? code,
+      label: COMMUNE_NAMES[code] ?? code,
       ...e,
-      taux: e.total === 0 ? 0 : e.manquants / e.total,
+      rate: e.total === 0 ? 0 : e.missing / e.total,
     }))
-    .sort((a, b) => b.taux - a.taux)
+    .sort((a, b) => b.rate - a.rate)
 
-  console.log('  repartition par commune (taux de non-appariement) :')
-  for (const r of rangs) {
-    const suspect = r.manquants >= NON_APPARIES_SIGNIFICATIFS
-      && r.taux > tauxGlobal * FACTEUR_CONCENTRATION
+  console.log('  breakdown by commune (unmatched rate):')
+  for (const r of ranked) {
+    const suspect = r.missing >= SIGNIFICANT_UNMATCHED
+      && r.rate > globalRate * CONCENTRATION_FACTOR
     console.log(
-      `    ${r.libelle.padEnd(14)} ${String(r.manquants).padStart(5)} / ${String(r.total).padStart(5)}`
-      + `  ${pct(r.manquants, r.total).padStart(7)}`
-      + (suspect ? '   <-- concentration, zone probablement manquee par le balayage' : ''),
+      `    ${r.label.padEnd(14)} ${String(r.missing).padStart(5)} / ${String(r.total).padStart(5)}`
+      + `  ${pct(r.missing, r.total).padStart(7)}`
+      + (suspect ? '   <-- concentration, area probably missed by the sweep' : ''),
     )
   }
 
-  return nonApparies.length
+  return unmatched.length
 }
 
 /**
- * Le canari se relit après coup, à côté du balayage qui l'a produit : la colonne
- * `sirene_unmatched` existe pour ça et n'était écrite par personne. Sans elle, comparer
- * deux balayages successifs suppose de retrouver la sortie console du bon soir.
+ * The canary gets read back later, next to the sweep that produced it: the
+ * `sirene_unmatched` column exists for that and nobody was writing it. Without it,
+ * comparing two successive sweeps means digging up the console output of the right night.
  */
-async function consignerCanari(nonApparies: number): Promise<void> {
-  const [dernier] = await db.select({ id: sweepRun.id }).from(sweepRun)
+async function recordCanary(unmatched: number): Promise<void> {
+  const [last] = await db.select({ id: sweepRun.id }).from(sweepRun)
     .orderBy(desc(sweepRun.startedAt)).limit(1)
-  if (!dernier) return
-  await db.update(sweepRun).set({ sireneUnmatched: nonApparies }).where(eq(sweepRun.id, dernier.id))
+  if (!last) return
+  await db.update(sweepRun).set({ sireneUnmatched: unmatched }).where(eq(sweepRun.id, last.id))
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const dryRun = args.includes('--dry-run')
-  const seuil = lireSeuil(args)
+  const threshold = parseThreshold(args)
 
   const restaurants = await db.select({
     id: restaurant.id,
-    effectifCode: restaurant.effectifCode,
-    categorie: restaurant.categorie,
+    headcountCode: restaurant.headcountCode,
+    category: restaurant.category,
     rawOpeningHours: restaurant.rawOpeningHours,
   }).from(restaurant)
 
-  const registre = (await db.execute(sql`
-    SELECT siret, code_commune, (lat IS NOT NULL AND lng IS NOT NULL) AS geocode
-    FROM sirene_etablissement
-  `)) as unknown as LigneSirene[]
+  const registry = (await db.execute(sql`
+    SELECT siret, commune_code, (lat IS NOT NULL AND lng IS NOT NULL) AS geocoded
+    FROM sirene_establishment
+  `)) as unknown as SireneRow[]
 
-  console.log(`etablissements Google : ${restaurants.length}`)
-  console.log(`enregistrements SIRENE : ${registre.length}`
-    + ` (dont ${registre.filter((s) => s.geocode).length} geocodes)`)
+  console.log(`Google establishments: ${restaurants.length}`)
+  console.log(`SIRENE records: ${registry.length}`
+    + ` (${registry.filter((s) => s.geocoded).length} of them geocoded)`)
 
-  // Base vide : rien à apparier, et surtout rien à effacer. On sort sans écrire.
-  if (restaurants.length === 0 || registre.length === 0) {
-    const manque = restaurants.length === 0
-      ? 'la table restaurant est vide — lancer sweep:google avant'
-      : 'la table sirene_etablissement est vide — lancer ingest:sirene puis ingest:geocode avant'
-    console.log(`rien a apparier : ${manque}`)
+  // Empty database: nothing to match, and above all nothing to erase. We leave without writing.
+  if (restaurants.length === 0 || registry.length === 0) {
+    const missing = restaurants.length === 0
+      ? 'the restaurant table is empty — run sweep:google first'
+      : 'the sirene_establishment table is empty — run ingest:sirene then ingest:geocode first'
+    console.log(`nothing to match: ${missing}`)
     return
   }
 
-  if (!registre.some((s) => s.geocode)) {
-    console.log('rien a apparier : aucun enregistrement SIRENE geocode — lancer ingest:geocode avant')
+  if (!registry.some((s) => s.geocoded)) {
+    console.log('nothing to match: no geocoded SIRENE record — run ingest:geocode first')
     return
   }
 
-  console.log(`seuil de similarite : ${seuil}${dryRun ? '  (--dry-run : aucune ecriture)' : ''}`)
+  console.log(`similarity threshold: ${threshold}${dryRun ? '  (--dry-run: nothing written)' : ''}`)
 
-  await verifierPgTrgm()
-  const candidats = await chercherCandidats(seuil)
-  const retenus = attribuer(candidats)
-  const siretsApparies = new Set([...retenus.values()].map((c) => c.siret))
+  await checkPgTrgm()
+  const candidates = await findCandidates(threshold)
+  const kept = assign(candidates)
+  const matchedSirets = new Set([...kept.values()].map((c) => c.siret))
 
-  const effectifsAvant = new Map(restaurants.map((r) => [r.id, r.effectifCode]))
-  const effectifsApres = new Map(
-    restaurants.map((r) => [r.id, retenus.get(r.id)?.effectif_code ?? null]),
+  const headcountsBefore = new Map(restaurants.map((r) => [r.id, r.headcountCode]))
+  const headcountsAfter = new Map(
+    restaurants.map((r) => [r.id, kept.get(r.id)?.headcount_code ?? null]),
   )
-  const changes = restaurants.filter((r) => effectifsAvant.get(r.id) !== effectifsApres.get(r.id))
+  const changed = restaurants.filter((r) => headcountsBefore.get(r.id) !== headcountsAfter.get(r.id))
 
-  if (!dryRun) await appliquer(retenus)
-
-  console.log('')
-  console.log(`couples candidats examines : ${candidats.length}`)
-  console.log(`apparies : ${retenus.size} etablissements Google sur ${restaurants.length}`
-    + `  (taux d'appariement ${pct(retenus.size, restaurants.length)})`)
-
-  const nonApparies = afficherCanari(registre, siretsApparies)
-  if (!dryRun) await consignerCanari(nonApparies)
-
-  const exploitablesAvant = restaurants.filter((r) => effectifExploitable(effectifsAvant.get(r.id) ?? null))
-  const exploitablesApres = restaurants.filter((r) => effectifExploitable(effectifsApres.get(r.id) ?? null))
-  const gagnes = restaurants.filter((r) =>
-    effectifExploitable(effectifsApres.get(r.id) ?? null)
-    && !effectifExploitable(effectifsAvant.get(r.id) ?? null))
-  const apparieSansEffectif = retenus.size - exploitablesApres.length
+  if (!dryRun) await apply(kept)
 
   console.log('')
-  console.log(`effectif exploitable : ${exploitablesApres.length} etablissements`
-    + `  (${pct(exploitablesApres.length, restaurants.length)} de la base)`)
-  console.log(`  dont ${gagnes.length} gagnes par cet appariement`
-    + ` (${exploitablesAvant.length} en avaient deja un)`)
-  console.log(`  ${apparieSansEffectif} apparies mais tranche non renseignee cote SIRENE :`
-    + ` ils repartent sur le repli par amplitude`)
+  console.log(`candidate pairs examined: ${candidates.length}`)
+  console.log(`matched: ${kept.size} Google establishments out of ${restaurants.length}`
+    + `  (match rate ${pct(kept.size, restaurants.length)})`)
+
+  const unmatched = printCanary(registry, matchedSirets)
+  if (!dryRun) await recordCanary(unmatched)
+
+  const usableBefore = restaurants.filter((r) => hasUsableHeadcount(headcountsBefore.get(r.id) ?? null))
+  const usableAfter = restaurants.filter((r) => hasUsableHeadcount(headcountsAfter.get(r.id) ?? null))
+  const gained = restaurants.filter((r) =>
+    hasUsableHeadcount(headcountsAfter.get(r.id) ?? null)
+    && !hasUsableHeadcount(headcountsBefore.get(r.id) ?? null))
+  const matchedWithoutHeadcount = kept.size - usableAfter.length
+
+  console.log('')
+  console.log(`usable headcount: ${usableAfter.length} establishments`
+    + `  (${pct(usableAfter.length, restaurants.length)} of the database)`)
+  console.log(`  ${gained.length} of them gained by this matching`
+    + ` (${usableBefore.length} already had one)`)
+  console.log(`  ${matchedWithoutHeadcount} matched but with no bracket on the SIRENE side:`
+    + ` they fall back on the amplitude heuristic`)
 
   if (dryRun) {
     console.log('')
-    console.log(`--dry-run : ${changes.length} profils auraient ete recalcules, rien n'a ete ecrit`)
+    console.log(`--dry-run: ${changed.length} profiles would have been recomputed, nothing was written`)
     return
   }
 
   console.log('')
-  if (changes.length === 0) {
-    console.log('aucun effectif modifie : profils inchanges')
+  if (changed.length === 0) {
+    console.log('no headcount changed: profiles left untouched')
   } else {
-    await recalculerProfils(changes, effectifsApres)
-    console.log(`profils recalcules : ${changes.length} etablissements dont l'effectif a change`)
+    await recomputeProfiles(changed, headcountsAfter)
+    console.log(`profiles recomputed: ${changed.length} establishments whose headcount changed`)
   }
 }
 
-function lireSeuil(args: string[]): number {
-  const prefixe = '--seuil='
-  const arg = args.find((a) => a.startsWith(prefixe))
-  if (!arg) return SEUIL_DEFAUT
+function parseThreshold(args: string[]): number {
+  const prefix = '--threshold='
+  const arg = args.find((a) => a.startsWith(prefix))
+  if (!arg) return DEFAULT_THRESHOLD
 
-  const valeur = Number(arg.slice(prefixe.length))
-  if (!Number.isFinite(valeur) || valeur <= 0 || valeur > 1) {
-    throw new Error(`--seuil attend un nombre strictement entre 0 et 1, recu "${arg}"`)
+  const value = Number(arg.slice(prefix.length))
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`--threshold expects a number strictly between 0 and 1, received "${arg}"`)
   }
-  return valeur
+  return value
 }
 
 main()

@@ -1,272 +1,274 @@
 /**
- * Recalcule le profil de rythme de TOUS les établissements à partir des horaires brutes
- * déjà stockées.
+ * Recomputes the rhythm profile of EVERY establishment from the raw opening hours already
+ * stored.
  *
- *   node --env-file=.env.local --import tsx scripts/compute-profiles.ts [--verifier]
+ *   node --env-file=.env.local --import tsx scripts/compute-profiles.ts [--check]
  *
- * AUCUN appel réseau. C'est le script qu'on rejoue à volonté quand on ajuste les règles
- * d'inférence, sans redépenser un centime de quota Google — d'où l'absence de `--dry-run` :
- * il n'y a rien à protéger ici.
+ * NO network call. This is the script we replay at will while tuning the inference rules,
+ * without spending another cent of Google quota — hence the absence of a `--dry-run`:
+ * there is nothing to protect here.
  *
- * `--verifier` n'écrit rien : il compare le profil recalculé au profil stocké et liste les
- * divergences. C'est ce qui permet de mesurer l'effet d'un changement de règle AVANT de
- * l'appliquer à la base.
+ * `--check` writes nothing: it compares the recomputed profile with the stored one and
+ * lists the divergences. That is what makes it possible to measure the effect of a rule
+ * change BEFORE applying it to the database.
  *
- * Voir .specs/technique/05-inference-des-horaires.md et 06-pipeline-ingestion.md (étape 6).
+ * See .specs/technique/05-inference-des-horaires.md and 06-pipeline-ingestion.md (step 6).
  */
 import { eq } from 'drizzle-orm'
-import { deduireCategorie } from '../lib/categorie'
-import { calculerProfil, parserHoraires } from '../lib/horaires'
-import type { Categorie, Fenetre, Fiabilite, GoogleHoraires, Profil, RisqueCoupure } from '../lib/horaires'
-import { colonnesProfil } from '../lib/profil-colonnes'
+import { inferCategory } from '../lib/category'
+import { computeProfile, parseOpeningHours } from '../lib/hours'
+import type {
+  Category, Confidence, GoogleOpeningHours, RhythmProfile, ServiceWindow, SplitShiftRisk,
+} from '../lib/hours'
+import { profileColumns } from '../lib/profile-columns'
 import { db } from '../lib/db/client'
 import { restaurant } from '../lib/db/schema'
 
-type Ligne = typeof restaurant.$inferSelect
+type Row = typeof restaurant.$inferSelect
 
-const ORDRE_RISQUE: RisqueCoupure[] = ['aucun', 'faible', 'moyen', 'eleve', 'inconnu']
-const ORDRE_FIABILITE: Fiabilite[] = ['confirme', 'probable', 'a_verifier']
+const RISK_ORDER: SplitShiftRisk[] = ['none', 'low', 'medium', 'high', 'unknown']
+const CONFIDENCE_ORDER: Confidence[] = ['confirmed', 'likely', 'unverified']
 
-/** Nombre d'établissements détaillés dans le rapport de divergences avant repli sur un total. */
-const MAX_DETAIL = 40
+/** How many establishments the divergence report details before falling back to a total. */
+const MAX_DETAILED = 40
 
-/** Les mises à jour partent par lots : 6 000 UPDATE d'affilée sur une connexion, c'est long. */
-const TAILLE_LOT = 100
+/** Updates go out in batches: 6,000 UPDATEs in a row on one connection is slow. */
+const BATCH_SIZE = 100
 
-interface Recalcul {
-  ligne: Ligne
-  categorie: Categorie
-  fenetres: Fenetre[]
-  profil: Profil
+interface Recomputed {
+  row: Row
+  category: Category
+  windows: ServiceWindow[]
+  profile: RhythmProfile
 }
 
 /**
- * `autre` veut dire « aucun indice », pas « c'est autre chose » : une déduction muette ne
- * doit jamais effacer une catégorie déjà connue.
+ * `other` means "no clue", not "something else": a silent inference must never erase an
+ * already known category.
  */
-function choisirCategorie(ligne: Ligne): Categorie {
-  const deduite = deduireCategorie({
-    types: ligne.googleTypes,
-    naf: ligne.nafCode,
-    nom: ligne.name,
+function pickCategory(row: Row): Category {
+  const inferred = inferCategory({
+    types: row.googleTypes,
+    naf: row.nafCode,
+    name: row.name,
   })
-  return deduite === 'autre' ? ligne.categorie : deduite
+  return inferred === 'other' ? row.category : inferred
 }
 
-function recalculer(ligne: Ligne): Recalcul {
-  const fenetres = parserHoraires(ligne.rawOpeningHours as GoogleHoraires | null)
-  const categorie = choisirCategorie(ligne)
-  const profil = calculerProfil({ fenetres, codeEffectif: ligne.effectifCode, categorie })
-  return { ligne, categorie, fenetres, profil }
+function recompute(row: Row): Recomputed {
+  const windows = parseOpeningHours(row.rawOpeningHours as GoogleOpeningHours | null)
+  const category = pickCategory(row)
+  const profile = computeProfile({ windows, headcountCode: row.headcountCode, category })
+  return { row, category, windows, profile }
 }
 
 /**
- * Les colonnes que ce script possède. Tout le reste de la ligne lui est étranger.
- * `categorie` s'ajoute au tronc commun : elle n'est pas dérivée du profil, mais elle
- * lui sert d'entrée — la stocker autrement que ce qui a servi au calcul afficherait
- * un verdict sous une étiquette qui le contredit.
+ * The columns this script owns. The rest of the row is none of its business.
+ * `category` joins the shared set: it is not derived from the profile, but it feeds it —
+ * storing anything other than what went into the computation would show a verdict under a
+ * label that contradicts it.
  */
-function colonnesEcrites(r: Recalcul) {
-  return { categorie: r.categorie, ...colonnesProfil(r.fenetres, r.profil) }
+function writtenColumns(r: Recomputed) {
+  return { category: r.category, ...profileColumns(r.windows, r.profile) }
 }
 
 interface Divergence {
-  colonne: string
-  avant: unknown
-  apres: unknown
+  column: string
+  before: unknown
+  after: unknown
 }
 
 /**
- * Forme canonique pour la comparaison. Le tri des clés n'est pas cosmétique : Postgres
- * relit un `jsonb` dans SON ordre de clés, pas celui de l'écriture — `schedule` reviendrait
- * divergent à chaque exécution alors que rien n'a bougé.
+ * Canonical form for comparison. Sorting the keys is not cosmetic: Postgres reads a
+ * `jsonb` back in ITS key order, not the one it was written in — `schedule` would come
+ * back divergent on every run while nothing has moved.
  */
-function canonique(valeur: unknown): string {
-  const trier = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(trier)
+function canonical(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort)
     if (v && typeof v === 'object') {
       const o = v as Record<string, unknown>
-      return Object.fromEntries(Object.keys(o).sort().map((cle) => [cle, trier(o[cle])]))
+      return Object.fromEntries(Object.keys(o).sort().map((key) => [key, sort(o[key])]))
     }
     return v
   }
-  return JSON.stringify(trier(valeur ?? null))
+  return JSON.stringify(sort(value ?? null))
 }
 
-function divergences(r: Recalcul): Divergence[] {
-  const stocke = r.ligne as unknown as Record<string, unknown>
-  const trouvees: Divergence[] = []
+function divergences(r: Recomputed): Divergence[] {
+  const stored = r.row as unknown as Record<string, unknown>
+  const found: Divergence[] = []
 
-  for (const [colonne, apres] of Object.entries(colonnesEcrites(r))) {
-    const avant = stocke[colonne]
-    if (canonique(avant) !== canonique(apres)) trouvees.push({ colonne, avant, apres })
+  for (const [column, after] of Object.entries(writtenColumns(r))) {
+    const before = stored[column]
+    if (canonical(before) !== canonical(after)) found.push({ column, before, after })
   }
-  return trouvees
+  return found
 }
 
 // ─────────────────────────────────────────────────────────────
-// Affichage
+// Display
 // ─────────────────────────────────────────────────────────────
 
-function bref(valeur: unknown): string {
-  if (valeur === null || valeur === undefined) return '∅'
-  const texte = typeof valeur === 'string' ? valeur : canonique(valeur)
-  return texte.length > 70 ? `${texte.slice(0, 67)}…` : texte
+function brief(value: unknown): string {
+  if (value === null || value === undefined) return '∅'
+  const text = typeof value === 'string' ? value : canonical(value)
+  return text.length > 70 ? `${text.slice(0, 67)}…` : text
 }
 
-function afficherRepartition(titre: string, valeurs: string[], ordre: string[]): void {
-  const total = valeurs.length
-  const compte = new Map<string, number>()
-  for (const v of valeurs) compte.set(v, (compte.get(v) ?? 0) + 1)
+function printDistribution(title: string, values: string[], order: string[]): void {
+  const total = values.length
+  const counts = new Map<string, number>()
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1)
 
-  const cles = [...ordre.filter((c) => compte.has(c)), ...[...compte.keys()].filter((c) => !ordre.includes(c))]
+  const keys = [...order.filter((k) => counts.has(k)), ...[...counts.keys()].filter((k) => !order.includes(k))]
 
-  console.log(`\n${titre}`)
-  for (const cle of cles) {
-    const n = compte.get(cle) ?? 0
-    const part = total ? ((n / total) * 100).toFixed(1).replace('.', ',') : '0,0'
-    console.log(`  ${cle.padEnd(12)} ${String(n).padStart(5)}  (${part.padStart(5)} %)`)
+  console.log(`\n${title}`)
+  for (const key of keys) {
+    const n = counts.get(key) ?? 0
+    const share = total ? ((n / total) * 100).toFixed(1) : '0.0'
+    console.log(`  ${key.padEnd(12)} ${String(n).padStart(5)}  (${share.padStart(5)}%)`)
   }
 }
 
-function afficherTransitions(titre: string, transitions: Map<string, number>): void {
+function printTransitions(title: string, transitions: Map<string, number>): void {
   if (transitions.size === 0) return
-  console.log(`\n${titre}`)
-  for (const [passage, n] of [...transitions].sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${passage.padEnd(26)} ${String(n).padStart(5)}`)
+  console.log(`\n${title}`)
+  for (const [transition, n] of [...transitions].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${transition.padEnd(26)} ${String(n).padStart(5)}`)
   }
 }
 
 /**
- * Le contrôle qualité de l'inférence : ces trois chiffres se lisent après chaque
- * exécution. Voir « Contrôles après exécution » dans 06-pipeline-ingestion.md.
+ * The quality control of the inference: these three figures are read after every run.
+ * See "Contrôles après exécution" in 06-pipeline-ingestion.md.
  */
-function afficherControleQualite(recalculs: Recalcul[]): void {
-  afficherRepartition(
-    'repartition du risque de coupure :',
-    recalculs.map((r) => r.profil.risqueCoupure),
-    ORDRE_RISQUE,
+function printQualityCheck(recomputed: Recomputed[]): void {
+  printDistribution(
+    'split-shift risk distribution:',
+    recomputed.map((r) => r.profile.splitShiftRisk),
+    RISK_ORDER,
   )
-  afficherRepartition(
-    'repartition de la fiabilite :',
-    recalculs.map((r) => r.profil.fiabilite),
-    ORDRE_FIABILITE,
+  printDistribution(
+    'confidence distribution:',
+    recomputed.map((r) => r.profile.confidence),
+    CONFIDENCE_ORDER,
   )
 
-  const sansHoraires = recalculs.filter((r) => !r.profil.aDesHoraires).length
-  const part = recalculs.length ? ((sansHoraires / recalculs.length) * 100).toFixed(1).replace('.', ',') : '0,0'
-  console.log(`\netablissements sans horaires : ${sansHoraires} sur ${recalculs.length} (${part} %)`)
+  const withoutHours = recomputed.filter((r) => !r.profile.hasHours).length
+  const share = recomputed.length ? ((withoutHours / recomputed.length) * 100).toFixed(1) : '0.0'
+  console.log(`\nestablishments without opening hours: ${withoutHours} out of ${recomputed.length} (${share}%)`)
 }
 
 // ─────────────────────────────────────────────────────────────
 // Modes
 // ─────────────────────────────────────────────────────────────
 
-function verifier(recalculs: Recalcul[]): void {
-  const parColonne = new Map<string, number>()
-  const transitionsRisque = new Map<string, number>()
-  const transitionsFiabilite = new Map<string, number>()
-  const divergents: { r: Recalcul; d: Divergence[] }[] = []
+function check(recomputed: Recomputed[]): void {
+  const perColumn = new Map<string, number>()
+  const riskTransitions = new Map<string, number>()
+  const confidenceTransitions = new Map<string, number>()
+  const divergent: { r: Recomputed; d: Divergence[] }[] = []
 
-  for (const r of recalculs) {
+  for (const r of recomputed) {
     const d = divergences(r)
     if (d.length === 0) continue
-    divergents.push({ r, d })
+    divergent.push({ r, d })
 
-    for (const { colonne, avant, apres } of d) {
-      parColonne.set(colonne, (parColonne.get(colonne) ?? 0) + 1)
-      const cle = `${String(avant)} -> ${String(apres)}`
-      if (colonne === 'coupureRisk') transitionsRisque.set(cle, (transitionsRisque.get(cle) ?? 0) + 1)
-      if (colonne === 'fiabilite') transitionsFiabilite.set(cle, (transitionsFiabilite.get(cle) ?? 0) + 1)
+    for (const { column, before, after } of d) {
+      perColumn.set(column, (perColumn.get(column) ?? 0) + 1)
+      const key = `${String(before)} -> ${String(after)}`
+      if (column === 'splitShiftRisk') riskTransitions.set(key, (riskTransitions.get(key) ?? 0) + 1)
+      if (column === 'confidence') confidenceTransitions.set(key, (confidenceTransitions.get(key) ?? 0) + 1)
     }
   }
 
-  console.log(`\n--verifier : aucune ecriture en base.`)
-  console.log(`${divergents.length} etablissement(s) divergent(s) sur ${recalculs.length}`)
+  console.log(`\n--check: nothing written to the database.`)
+  console.log(`${divergent.length} divergent establishment(s) out of ${recomputed.length}`)
 
-  for (const { r, d } of divergents.slice(0, MAX_DETAIL)) {
-    console.log(`\n  ${r.ligne.name} [${r.ligne.googlePlaceId}]`)
-    for (const { colonne, avant, apres } of d) {
-      console.log(`    ${colonne} : ${bref(avant)}  ->  ${bref(apres)}`)
+  for (const { r, d } of divergent.slice(0, MAX_DETAILED)) {
+    console.log(`\n  ${r.row.name} [${r.row.googlePlaceId}]`)
+    for (const { column, before, after } of d) {
+      console.log(`    ${column} : ${brief(before)}  ->  ${brief(after)}`)
     }
   }
-  if (divergents.length > MAX_DETAIL) {
-    console.log(`\n  … et ${divergents.length - MAX_DETAIL} autre(s) etablissement(s) non detaille(s)`)
+  if (divergent.length > MAX_DETAILED) {
+    console.log(`\n  … and ${divergent.length - MAX_DETAILED} other divergent establishment(s) not detailed`)
   }
 
-  if (parColonne.size > 0) {
-    console.log('\ndivergences par colonne :')
-    for (const [colonne, n] of [...parColonne].sort((a, b) => b[1] - a[1])) {
-      console.log(`  ${colonne.padEnd(24)} ${String(n).padStart(5)}`)
+  if (perColumn.size > 0) {
+    console.log('\ndivergences per column:')
+    for (const [column, n] of [...perColumn].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${column.padEnd(24)} ${String(n).padStart(5)}`)
     }
   }
-  afficherTransitions('transitions du risque de coupure :', transitionsRisque)
-  afficherTransitions('transitions de la fiabilite :', transitionsFiabilite)
+  printTransitions('split-shift risk transitions:', riskTransitions)
+  printTransitions('confidence transitions:', confidenceTransitions)
 }
 
-async function ecrire(recalculs: Recalcul[]): Promise<void> {
-  const modifies = recalculs.filter((r) => divergences(r).length > 0).length
-  const maintenant = new Date()
+async function write(recomputed: Recomputed[]): Promise<void> {
+  const modified = recomputed.filter((r) => divergences(r).length > 0).length
+  const now = new Date()
 
-  // On réécrit TOUTES les lignes, y compris inchangées : `profile_computed_at` doit dater
-  // le dernier calcul, pas la dernière modification — sinon on ne sait plus si une ligne
-  // a été passée au crible ou simplement oubliée.
-  for (let i = 0; i < recalculs.length; i += TAILLE_LOT) {
-    const lot = recalculs.slice(i, i + TAILLE_LOT)
+  // We rewrite EVERY row, unchanged ones included: `profile_computed_at` must date the
+  // last computation, not the last modification — otherwise we can no longer tell a row
+  // that was put through the mill from one that was simply forgotten.
+  for (let i = 0; i < recomputed.length; i += BATCH_SIZE) {
+    const batch = recomputed.slice(i, i + BATCH_SIZE)
     await Promise.all(
-      lot.map((r) =>
+      batch.map((r) =>
         db
           .update(restaurant)
-          .set({ ...colonnesEcrites(r), profileComputedAt: maintenant })
-          .where(eq(restaurant.id, r.ligne.id)),
+          .set({ ...writtenColumns(r), profileComputedAt: now })
+          .where(eq(restaurant.id, r.row.id)),
       ),
     )
   }
 
-  console.log(`\n${recalculs.length} profil(s) ecrit(s), dont ${modifies} reellement modifie(s)`)
+  console.log(`\n${recomputed.length} profile(s) written, ${modified} of them actually modified`)
 }
 
 // ─────────────────────────────────────────────────────────────
 
 async function main() {
   const args = process.argv.slice(2)
-  const modeVerification = args.includes('--verifier')
-  const inconnus = args.filter((a) => a !== '--verifier')
-  if (inconnus.length > 0) {
-    console.error(`Option inconnue : ${inconnus.join(', ')}`)
-    console.error('Usage : node --env-file=.env.local --import tsx scripts/compute-profiles.ts [--verifier]')
+  const checkMode = args.includes('--check')
+  const unknown = args.filter((a) => a !== '--check')
+  if (unknown.length > 0) {
+    console.error(`Unknown option: ${unknown.join(', ')}`)
+    console.error('Usage: node --env-file=.env.local --import tsx scripts/compute-profiles.ts [--check]')
     process.exit(1)
   }
 
-  const lignes = await db.select().from(restaurant)
-  console.log(`${lignes.length} etablissement(s) lu(s)`)
-  if (lignes.length === 0) {
-    console.error('Base vide — lancer `npm run seed` ou le pipeline d ingestion avant.')
+  const rows = await db.select().from(restaurant)
+  console.log(`${rows.length} establishment(s) read`)
+  if (rows.length === 0) {
+    console.error('Empty database — run `npm run seed` or the ingestion pipeline first.')
     process.exit(1)
   }
 
-  // On calcule TOUT avant d'écrire quoi que ce soit : une horaire brute malformée doit
-  // faire échouer le script en entier, pas laisser la base à moitié recalculée.
-  const recalculs: Recalcul[] = []
-  const echecs: string[] = []
-  for (const ligne of lignes) {
+  // We compute EVERYTHING before writing anything: one malformed raw opening-hours payload
+  // must fail the whole script, not leave the database half recomputed.
+  const recomputed: Recomputed[] = []
+  const failures: string[] = []
+  for (const row of rows) {
     try {
-      recalculs.push(recalculer(ligne))
+      recomputed.push(recompute(row))
     } catch (e) {
-      echecs.push(`  ${ligne.name} [${ligne.googlePlaceId}] : ${e instanceof Error ? e.message : String(e)}`)
+      failures.push(`  ${row.name} [${row.googlePlaceId}]: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  if (echecs.length > 0) {
-    console.error(`\n${echecs.length} etablissement(s) impossible(s) a traiter — rien n a ete ecrit :`)
-    console.error(echecs.join('\n'))
+  if (failures.length > 0) {
+    console.error(`\n${failures.length} establishment(s) impossible to process — nothing was written:`)
+    console.error(failures.join('\n'))
     process.exit(1)
   }
 
-  if (modeVerification) verifier(recalculs)
-  else await ecrire(recalculs)
+  if (checkMode) check(recomputed)
+  else await write(recomputed)
 
-  afficherControleQualite(recalculs)
+  printQualityCheck(recomputed)
   process.exit(0)
 }
 

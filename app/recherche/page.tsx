@@ -2,28 +2,29 @@ import { asc, count } from 'drizzle-orm'
 import { Suspense } from 'react'
 import { db } from '@/lib/db/client'
 import { restaurant } from '@/lib/db/schema'
-import { compterActifs, construireConditions, lireFiltres } from '@/lib/filtres'
-import type { Fenetre } from '@/lib/horaires'
-import { CATEGORIE_LABEL, FIABILITE, RISQUE } from '@/components/badges'
-import { PanneauFiltres } from '@/components/filtres'
-import { Carte } from '@/components/carte'
-import { GrilleHoraire } from '@/components/grille-horaire'
+import { buildConditions, countActive, parseFilters } from '@/lib/filters'
+import type { ServiceWindow } from '@/lib/hours'
+import { CATEGORY_LABELS, CONFIDENCE_LABELS, SPLIT_SHIFT_BADGES } from '@/components/badges'
+import { FiltersPanel } from '@/components/filters'
+import { RestaurantMap } from '@/components/map'
+import { WeekGrid } from '@/components/week-grid'
 
 export const dynamic = 'force-dynamic'
 
 type Params = Promise<Record<string, string | string[] | undefined>>
+type RestaurantRow = typeof restaurant.$inferSelect
 
-export default async function Recherche({ searchParams }: { searchParams: Params }) {
-  const filtres = lireFiltres(await searchParams)
-  const where = construireConditions(filtres)
+export default async function SearchPage({ searchParams }: { searchParams: Params }) {
+  const filters = parseFilters(await searchParams)
+  const where = buildConditions(filters)
 
-  const [resultats, [{ total }]] = await Promise.all([
+  const [results, [{ total }]] = await Promise.all([
     db.select().from(restaurant).where(where).orderBy(asc(restaurant.name)).limit(200),
     db.select({ total: count() }).from(restaurant).where(where),
   ])
 
-  const points = resultats.map((r) => ({
-    id: r.id, name: r.name, lat: r.lat, lng: r.lng, coupureRisk: r.coupureRisk,
+  const points = results.map((r) => ({
+    id: r.id, name: r.name, lat: r.lat, lng: r.lng, splitShiftRisk: r.splitShiftRisk,
   }))
 
   return (
@@ -40,7 +41,7 @@ export default async function Recherche({ searchParams }: { searchParams: Params
 
       <div className="grid gap-6 lg:grid-cols-[16rem_1fr]">
         <Suspense fallback={<div className="text-sm text-stone-400">Chargement des filtres…</div>}>
-          <PanneauFiltres nbActifs={compterActifs(filtres)} />
+          <FiltersPanel activeCount={countActive(filters)} />
         </Suspense>
 
         <main className="space-y-4">
@@ -49,7 +50,7 @@ export default async function Recherche({ searchParams }: { searchParams: Params
               : `${total} établissement${total > 1 ? 's' : ''}`}
           </p>
 
-          <Carte points={points} />
+          <RestaurantMap points={points} />
 
           {total === 0 ? (
             <p className="rounded-lg border border-stone-200 bg-white p-6 text-sm text-stone-600">
@@ -57,7 +58,7 @@ export default async function Recherche({ searchParams }: { searchParams: Params
             </p>
           ) : (
             <ul className="space-y-2">
-              {resultats.map((r) => <Ligne key={r.id} r={r} />)}
+              {results.map((r) => <ResultRow key={r.id} row={r} />)}
             </ul>
           )}
         </main>
@@ -66,28 +67,28 @@ export default async function Recherche({ searchParams }: { searchParams: Params
   )
 }
 
-function Ligne({ r }: { r: typeof restaurant.$inferSelect }) {
-  const risque = RISQUE[r.coupureRisk]
+function ResultRow({ row }: { row: RestaurantRow }) {
+  const risk = SPLIT_SHIFT_BADGES[row.splitShiftRisk]
   return (
     <li className="rounded-lg border border-stone-200 bg-white">
       <details className="group">
         <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 p-3 hover:bg-stone-50">
           <span
             className="h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ background: risque.couleur }}
+            style={{ background: risk.color }}
             aria-hidden
           />
-          <span className="font-medium">{r.name}</span>
-          <span className="text-sm text-stone-500">{r.commune}</span>
-          <span className={`rounded border px-1.5 py-0.5 text-xs ${risque.classe}`}>
-            {risque.label}
+          <span className="font-medium">{row.name}</span>
+          <span className="text-sm text-stone-500">{row.commune}</span>
+          <span className={`rounded border px-1.5 py-0.5 text-xs ${risk.className}`}>
+            {risk.label}
           </span>
-          {r.closedWeekend && (
+          {row.closedWeekend && (
             <span className="rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-xs text-sky-900">
               Week-end libre
             </span>
           )}
-          {r.maxConsecutiveDaysOff >= 2 && (
+          {row.maxConsecutiveDaysOff >= 2 && (
             <span className="rounded border border-stone-300 bg-stone-50 px-1.5 py-0.5 text-xs text-stone-700">
               2 jours d’affilée
             </span>
@@ -96,14 +97,14 @@ function Ligne({ r }: { r: typeof restaurant.$inferSelect }) {
         </summary>
 
         <div className="space-y-3 border-t border-stone-100 p-4">
-          <p className="text-sm text-stone-800">{r.explication}</p>
+          <p className="text-sm text-stone-800">{row.explanation}</p>
           <p className="text-xs text-stone-500">
-            Fiabilité : {FIABILITE[r.fiabilite]}
-            {' · '}{CATEGORIE_LABEL[r.categorie] ?? r.categorie}
-            {r.telephone && <> · <a className="underline" href={`tel:${r.telephone.replace(/\s/g, '')}`}>{r.telephone}</a></>}
+            Fiabilité : {CONFIDENCE_LABELS[row.confidence]}
+            {' · '}{CATEGORY_LABELS[row.category]}
+            {row.phone && <> · <a className="underline" href={`tel:${row.phone.replace(/\s/g, '')}`}>{row.phone}</a></>}
           </p>
-          <GrilleHoraire fenetres={(r.schedule ?? []) as Fenetre[]} />
-          <p className="text-xs text-stone-400">{r.formattedAddress}</p>
+          <WeekGrid windows={(row.schedule ?? []) as ServiceWindow[]} />
+          <p className="text-xs text-stone-400">{row.formattedAddress}</p>
         </div>
       </details>
     </li>
