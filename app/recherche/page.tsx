@@ -3,10 +3,11 @@ import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
 import { countActive, parseFilters } from '@/lib/filters'
-import { countResults, fetchPage, fetchPoints, fetchSweepProgress } from '@/lib/results'
+import { countResults, fetchHoursFreshness, fetchPage, fetchPoints, fetchSweepProgress } from '@/lib/results'
 import { Account } from '@/components/account'
 import { SearchScreen } from '@/components/search-screen'
 import { SweepBanner } from '@/components/sweep-banner'
+import { HoursFreshnessBanner } from '@/components/hours-freshness-banner'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,6 +44,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   const progress = await fetchSweepProgress()
   const sweepUnfinished = progress.pending + progress.truncated > 0
 
+  // And how old what it brought back is. The two are independent: a converged sweep can
+  // still be serving hours past the 30 days the terms of service allow, and that window is
+  // exactly the one where nothing else on this page would say so.
+  const freshness = await fetchHoursFreshness()
+
   // The search as the user expressed it, handed to the API verbatim so the next pages come
   // from exactly the same query. Rebuilding it from the parsed filters would risk drifting.
   const query = new URLSearchParams(
@@ -70,9 +76,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
           <p className="mt-1.5 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
             Données de démonstration — établissements fictifs, en attendant le premier balayage.
           </p>
-        ) : sweepUnfinished ? (
-          <div className="mt-1.5">
-            <SweepBanner progress={progress} />
+        ) : sweepUnfinished || freshness.expired > 0 ? (
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {sweepUnfinished && <SweepBanner progress={progress} />}
+            {freshness.expired > 0 && <HoursFreshnessBanner freshness={freshness} />}
           </div>
         ) : null}
       </header>

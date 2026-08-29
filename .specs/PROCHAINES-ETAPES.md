@@ -31,9 +31,15 @@ au moins 1 200 à faire ; le quota gratuit est de 1 000 par mois.
 
 ## 1. Le balayage ne repartira pas tout seul — il est en interblocage
 
-> **Spécifié le 29 août** — voir D28 et
+> **Corrigé le 29 août** — voir D28 et
 > [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md), qui couvre
-> aussi les axes 2 et 3 ci-dessous. Reste à construire.
+> aussi les axes 2 et 3 ci-dessous. Le plafond compte désormais le mois calendaire, et un
+> second plafond journalier passe sous les 800/jour de D15. Vérifié à sec sur une copie de
+> la production : une reprise simulée au 1er septembre part de zéro et annonce 601 cellules
+> et 750 appels disponibles, là où l'ancien compteur refusait le premier appel.
+>
+> **Ce qui reste** : l'axe 3 ci-dessous. Le balayage repart, mais ne converge toujours pas
+> dans une seule période.
 
 **Constat.** Le plafond de 900 appels est compté **par balayage**, pas par mois :
 `previousCalls` est repris depuis `sweep_run.calls_made`, et le garde-fou compare le cumul
@@ -65,7 +71,16 @@ centre-ville sous-compté (voir plus bas).
 **Ce que je ferais.** La première option. Le garde-fou doit être adossé à la période du quota
 qu'il protège ; aujourd'hui il protège un quota mensuel avec un compteur qui n'a pas de mois.
 
+*Retenu.* Le décompte se lit dans `cell.queried_at` — une cellule interrogée est un appel —
+plutôt que dans un registre à tenir à jour : la mesure ne peut pas diverger du réel, et elle
+retrouve exactement les 248 appels du 28 août et les 652 du 29.
+
 ## 2. Les horaires expirent le 27 septembre, et rien ne le verra
+
+> **Corrigé le 29 août.** La péremption est comptée, affichée dans un bandeau à côté de
+> l'avancement du balayage, et rapportée par le cycle mensuel à chaque exécution — y compris
+> quand une étape échoue, ce qui sera le cas tant que le balayage n'aura pas convergé. Le
+> cycle échoue si un balayage **convergé** laisse une seule fiche périmée.
 
 **Constat.** Les horaires ont été récupérés les 28 et 29 août ; `hours_expires_at` est donc
 posé aux 27 et 28 septembre — les 30 jours de rétention imposés par les CGU (D7). Or
@@ -107,10 +122,15 @@ mères, 212 tronquées, 664 filles créées au premier niveau, 184 au second. 90
 d'une sur quatre. Il reste donc de l'ordre de **1 200 appels pour converger**, soit deux mois
 de quota, sans compter le re-balayage mensuel que D7 impose ensuite.
 
-Un chiffre le confirme au passage : `GOOGLE_TO_SIRENE_RATIO` vaut 1,16 dans la configuration,
+Un chiffre le confirme au passage : `GOOGLE_TO_SIRENE_RATIO` valait 1,16 dans la configuration,
 alors que le ratio observé est de **0,78** (4 465 pour 5 720). Le commentaire de `GRID.maxRadius`
-cite toujours le calibrage sur 8 cellules que D22 a invalidé. Une constante fausse ne fait pas
-de mal ici : elle fait juste mentir la prévision de coût du plan, qui est l'outil de décision.
+citait toujours le calibrage sur 8 cellules que D22 a invalidé. **Les deux sont corrigés.**
+
+La constante ne servait pas qu'à la prévision, contrairement à ce qui était écrit ici : elle
+pilote aussi le *second* signal de troncature du balayage, dont elle relève le seuil de 18 à
+26 établissements SIRENE par cellule. Mesuré avant de la changer : sur les 900 cellules déjà
+interrogées, **2 seulement** ont atteint l'état où ce signal décide seul, et aucune ne bascule
+à l'un ou l'autre ratio. La distance du dernier résultat fait tout le travail.
 
 **Pourquoi ça compte.** Le « zéro euro » est posé comme contrainte ferme. Il ne tient plus
 arithmétiquement au périmètre actuel. Continuer sans le dire, c'est découvrir la facture.
@@ -235,8 +255,8 @@ toucher au quota.
 
 ## Ordre proposé
 
-1. **Axe 1** — sans lui rien n'avance, et l'échéance est le 1er septembre.
-2. **Axe 2** — l'échéance est le 27 septembre, et la mesure coûte presque rien.
+1. ~~**Axe 1**~~ — fait le 29 août. Le balayage repartira le 1er septembre.
+2. ~~**Axe 2**~~ — fait le 29 août. La péremption est mesurée, dite et rapportée.
 3. **Axe 4** — régression sur la promesse centrale, correction bornée.
 4. **Axe 3** — arbitrage périmètre/euros, à instruire avec le coût d'un plan convergé.
 5. **Axe 5** puis **6** — ce qui fait revenir l'utilisateur, et le terrain où il est.
