@@ -88,6 +88,55 @@ export async function fetchPage(filters: Filters, cursor: Cursor | null): Promis
   }
 }
 
+/**
+ * Exactly what a marker needs, and nothing else.
+ *
+ * The map carries the WHOLE result set — up to 4,465 rows — so every extra column is paid
+ * 4,465 times. `explanation` and `schedule` in particular are the two heaviest fields on
+ * screen, and neither belongs on a marker: what a click opens is the detail panel, which
+ * fetches the full row for one establishment. See D27.
+ */
+const POINT_COLUMNS = {
+  id: restaurant.id,
+  name: restaurant.name,
+  lat: restaurant.lat,
+  lng: restaurant.lng,
+  splitShiftRisk: restaurant.splitShiftRisk,
+  category: restaurant.category,
+}
+
+export type PointRow = {
+  [K in keyof typeof POINT_COLUMNS]: (typeof restaurant.$inferSelect)[K]
+}
+
+/**
+ * Every establishment matching the filters, for the map. Deliberately NOT paginated.
+ *
+ * The list is read line by line, so it arrives in pages; a spread is read at a glance, so
+ * it has to arrive whole. Feeding the map the loaded rows instead — 50 of them, ordered by
+ * name — drew a geographically random sample and quietly broke the one promise the map
+ * makes.
+ *
+ * No LIMIT here on purpose: a cap would be exactly the silent subset the spec forbids. If
+ * the perimeter ever grows enough for this to hurt, it must become a stated limit on
+ * screen, not a hidden one here.
+ */
+export async function fetchPoints(filters: Filters): Promise<PointRow[]> {
+  return db.select(POINT_COLUMNS).from(restaurant).where(buildConditions(filters))
+}
+
+/**
+ * One establishment, in full, by id.
+ *
+ * This is what a marker click opens. The map holds thousands of points while the list has
+ * loaded fifty rows, so the panel cannot depend on the row being present: it asks for the
+ * one it needs.
+ */
+export async function fetchOne(id: string): Promise<ResultRow | null> {
+  const [row] = await db.select(COLUMNS).from(restaurant).where(eq(restaurant.id, id)).limit(1)
+  return row ?? null
+}
+
 /** Total matching the filters, independent of pagination. */
 export async function countResults(filters: Filters): Promise<number> {
   const [row] = await db.select({ n: count() }).from(restaurant).where(buildConditions(filters))

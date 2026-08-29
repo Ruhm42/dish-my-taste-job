@@ -4,10 +4,10 @@ import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
 import { countActive, parseFilters } from '@/lib/filters'
-import { countResults, fetchPage, fetchSweepProgress } from '@/lib/results'
+import { countResults, fetchPage, fetchPoints, fetchSweepProgress } from '@/lib/results'
 import { Account } from '@/components/account'
 import { FiltersPanel } from '@/components/filters'
-import { Results } from '@/components/results'
+import { SearchScreen } from '@/components/search-screen'
 import { SweepBanner } from '@/components/sweep-banner'
 
 export const dynamic = 'force-dynamic'
@@ -28,6 +28,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   // failing after two minutes. That took production down once; see D23.
   const page = await fetchPage(filters, null)
   const total = await countResults(filters)
+
+  // The map gets the whole search, the list gets it in slices (D27). This is the one query
+  // on the page that is not paginated, deliberately: a spread cannot be read from a sample.
+  const points = await fetchPoints(filters)
 
   // Both banners are derived rather than hard-coded: a banner someone has to remember to
   // remove is a banner that eventually lies about what is on screen. Neither is filtered —
@@ -51,40 +55,43 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   ).toString()
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6">
-      <header className="mb-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Dish My Taste Job</h1>
-            <p className="text-sm text-stone-600">
+    // The screen is the viewport: the list scrolls inside its own column rather than
+    // dragging the header, the filters and the map away with it.
+    <div className="flex h-[100dvh] flex-col bg-stone-50">
+      <header className="shrink-0 border-b border-stone-200 bg-white px-3 py-2">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-bold tracking-tight">Dish My Taste Job</h1>
+            <p className="hidden text-xs text-stone-600 sm:block">
               Les restaurants de la Métropole de Lyon, filtrés par rythme de travail.
             </p>
           </div>
           {user?.email && <Account email={user.email} />}
         </div>
         {demo > 0 ? (
-          <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+          <p className="mt-1.5 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
             Données de démonstration — établissements fictifs, en attendant le premier balayage.
           </p>
         ) : sweepUnfinished ? (
-          <SweepBanner progress={progress} />
+          <div className="mt-1.5">
+            <SweepBanner progress={progress} />
+          </div>
         ) : null}
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[16rem_1fr]">
-        <Suspense fallback={<div className="text-sm text-stone-400">Chargement des filtres…</div>}>
-          <FiltersPanel activeCount={countActive(filters)} />
-        </Suspense>
-
-        <Results
-          // Keyed on the search: a new query must reset the list rather than append to it.
-          key={query}
-          initialRows={page.rows}
-          initialCursor={page.nextCursor}
-          total={total}
-          query={query}
-        />
-      </div>
+      <SearchScreen
+        initialRows={page.rows}
+        initialCursor={page.nextCursor}
+        total={total}
+        points={points}
+        query={query}
+        activeFilterCount={countActive(filters)}
+        filters={
+          <Suspense fallback={<div className="text-sm text-stone-400">Chargement des filtres…</div>}>
+            <FiltersPanel activeCount={countActive(filters)} />
+          </Suspense>
+        }
+      />
     </div>
   )
 }

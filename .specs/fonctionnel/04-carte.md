@@ -146,10 +146,15 @@ mesure qu'on approche du bas, et un bouton permet de demander la suite au clavie
 
 ## Ce que ça coûte
 
-**Rien.** Les marqueurs ne sont pas facturés, quel qu'en soit le nombre : seule l'instanciation
-de la carte l'est, et elle reste unique. Afficher 4 465 points au lieu de 50 ajoute une lecture
-en base de trois informations par établissement — position, identité, risque de coupure — et
-pas un seul appel Google.
+**Rien chez Google.** Les marqueurs ne sont pas facturés, quel qu'en soit le nombre : seule
+l'instanciation de la carte l'est, et elle reste unique. Afficher 4 465 points au lieu de 50
+ajoute une lecture en base de trois informations par établissement — position, identité,
+risque de coupure — et pas un seul appel Google.
+
+Ce que ça pèse, mesuré : **688 Ko bruts, 209 Ko compressés** pour la recherche sans aucun
+filtre, qui est le pire cas. Une recherche réelle est bien plus légère — 51 Ko bruts pour
+« sans coupure et week-end libre ». C'est le prix d'une carte qui ne ment pas sur ce qu'elle
+montre, et il se paie une fois par recherche, pas une fois par page.
 
 C'est la conséquence directe du choix d'architecture : le coût est adossé au nombre de
 balayages, jamais au nombre de visites ni à ce qu'on affiche.

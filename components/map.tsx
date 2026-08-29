@@ -1,10 +1,17 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { CATEGORY_LABELS, CATEGORY_SHAPES, SHAPE_LEGEND, SPLIT_SHIFT_BADGES, googleMapsUrl } from './badges'
-import { headcountLabel } from '@/lib/hours'
+import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { CATEGORY_LABELS, CATEGORY_SHAPES, SHAPE_LEGEND, SPLIT_SHIFT_BADGES } from './badges'
 import type { Category, SplitShiftRisk } from '@/lib/hours'
 
+/**
+ * What a marker needs — and nothing else.
+ *
+ * The map carries the whole result set, so this shape is paid thousands of times. The
+ * establishment's own information lives in the detail panel, which fetches one row when a
+ * point is clicked. See lib/results.ts and D27.
+ */
 export interface MapPoint {
   id: string
   name: string
@@ -12,12 +19,17 @@ export interface MapPoint {
   lng: number
   splitShiftRisk: SplitShiftRisk
   category: Category
-  commune: string | null
-  explanation: string
-  headcountCode: string | null
-  phone: string | null
-  googlePlaceId: string
-  cuisine: string | null
+}
+
+interface Props {
+  /** Every establishment that passes the filters. Never a page, never a sample. */
+  points: MapPoint[]
+  /** Reframe when the SEARCH changes, not when the list loads another page. */
+  fitKey: string
+  selectedId: string | null
+  hoveredId: string | null
+  onSelect: (id: string) => void
+  onHover: (id: string | null) => void
 }
 
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -27,15 +39,9 @@ const NO_API_KEY = 'no-api-key'
 
 const LEGEND_ORDER: SplitShiftRisk[] = ['none', 'low', 'medium', 'high', 'unknown']
 
-/**
- * A "map load" is billed per map instantiation, not per pan or zoom. The map is
- * therefore created ONCE and only its markers are swapped: otherwise every filter
- * change would spend a billable load.
- * See .specs/technique/02-budget-google-et-garde-fous.md
- */
-export function RestaurantMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
-  if (!API_KEY) return <MapFallback points={points} reason={NO_API_KEY} />
-  return <GoogleMap points={points} fitKey={fitKey} />
+export function RestaurantMap(props: Props) {
+  if (!API_KEY) return <MapFallback points={props.points} reason={NO_API_KEY} />
+  return <GoogleMap {...props} />
 }
 
 /**
@@ -74,13 +80,62 @@ function loadMapsScript(apiKey: string): Promise<void> {
   return scriptPromise
 }
 
-function GoogleMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
+type Emphasis = 'none' | 'hover' | 'selected'
+
+/** Colour is the split-shift risk, shape is the kind of place, size is the emphasis. */
+function iconFor(p: MapPoint, emphasis: Emphasis): google.maps.Symbol {
+  const selected = emphasis === 'selected'
+  return {
+    path: CATEGORY_SHAPES[p.category],
+    scale: emphasis === 'none' ? 0.85 : selected ? 1.5 : 1.2,
+    fillColor: SPLIT_SHIFT_BADGES[p.splitShiftRisk].color,
+    fillOpacity: 1,
+    strokeColor: selected ? '#1c1917' : '#fff',
+    strokeWeight: selected ? 2.5 : 1.5,
+  }
+}
+
+/**
+ * A cluster carries a NUMBER, never a colour.
+ *
+ * Colour is the verdict on the split shift. Averaging thirty verdicts into one tint would
+ * present a mean as a fact — which is exactly what the product refuses to do everywhere
+ * else. To judge a neighbourhood, filter: the density of what remains is the answer (D27).
+ */
+const clusterRenderer = {
+  render: ({ count, position }: { count: number; position: google.maps.LatLng }) =>
+    new google.maps.Marker({
+      position,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 12 + Math.min(12, Math.log10(count) * 9),
+        fillColor: '#57534e',
+        fillOpacity: 0.92,
+        strokeColor: '#ffffff',
+        strokeWeight: 2,
+      },
+      label: { text: String(count), color: '#ffffff', fontSize: '12px', fontWeight: '600' },
+      title: `${count} établissements`,
+      // Above the individual markers, below an emphasised one.
+      zIndex: 500,
+    }),
+}
+
+function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<google.maps.Map | null>(null)
   const markers = useRef<Map<string, google.maps.Marker>>(new Map())
-  const infoWindow = useRef<google.maps.InfoWindow | null>(null)
+  const clusterer = useRef<MarkerClusterer | null>(null)
+  const emphasised = useRef<Set<string>>(new Set())
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Through refs: a marker listener is registered once, but the parent hands down a new
+  // function on every render. Without this, every render would rebuild every marker.
+  const handlers = useRef({ onSelect, onHover })
+  handlers.current = { onSelect, onHover }
+
+  const pointById = useMemo(() => new Map(points.map((p) => [p.id, p])), [points])
 
   useEffect(() => {
     let mounted = true
@@ -90,7 +145,13 @@ function GoogleMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
     return () => { mounted = false }
   }, [])
 
-  // Single instantiation — see the billing note above.
+  /**
+   * Single instantiation.
+   *
+   * A map load is billed per `new google.maps.Map()`, never per pan or zoom. The map is
+   * created once and only its markers change; otherwise every filter change would spend a
+   * billable load. See .specs/technique/02-budget-google-et-garde-fous.md
+   */
   useEffect(() => {
     if (!ready || !container.current || map.current) return
     map.current = new google.maps.Map(container.current, {
@@ -101,51 +162,86 @@ function GoogleMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
     })
   }, [ready])
 
-  // Markers are reconciled, not rebuilt.
-  //
-  // Infinite scroll appends: rebuilding every marker on each page would recreate hundreds
-  // of Google objects for the sake of fifty new ones, and the map would stutter more the
-  // further you scrolled.
+  // Markers are reconciled, not rebuilt: changing one filter usually keeps most of the
+  // points, and rebuilding four thousand Google objects to add ten is what makes a map
+  // stutter.
   useEffect(() => {
     if (!ready || !map.current) return
-    infoWindow.current ??= new google.maps.InfoWindow()
 
-    const wanted = new Set(points.map((p) => p.id))
     for (const [id, marker] of markers.current) {
-      if (!wanted.has(id)) { marker.setMap(null); markers.current.delete(id) }
+      if (pointById.has(id)) continue
+      marker.setMap(null)
+      markers.current.delete(id)
     }
 
     for (const p of points) {
       if (markers.current.has(p.id)) continue
+      // No `map` option: the clusterer owns what is actually drawn.
       const marker = new google.maps.Marker({
-        map: map.current,
         position: { lat: p.lat, lng: p.lng },
         title: p.name,
-        icon: {
-          // Two dimensions on one marker: colour is the split-shift risk, shape is the
-          // kind of place.
-          path: CATEGORY_SHAPES[p.category],
-          scale: 0.85,
-          fillColor: SPLIT_SHIFT_BADGES[p.splitShiftRisk].color,
-          fillOpacity: 1,
-          strokeColor: '#fff',
-          strokeWeight: 1.5,
-        },
+        icon: iconFor(p, 'none'),
       })
-      marker.addListener('click', () => {
-        // A DOM node rather than an HTML string: establishment names come from Google and
-        // are not ours to trust with innerHTML.
-        infoWindow.current!.setContent(buildCard(p))
-        infoWindow.current!.open({ map: map.current!, anchor: marker })
-      })
+      marker.addListener('click', () => handlers.current.onSelect(p.id))
+      marker.addListener('mouseover', () => handlers.current.onHover(p.id))
+      marker.addListener('mouseout', () => handlers.current.onHover(null))
       markers.current.set(p.id, marker)
     }
-  }, [ready, points])
+
+    clusterer.current ??= new MarkerClusterer({
+      map: map.current,
+      renderer: clusterRenderer,
+      // maxZoom: past it, points stand alone — a street is read point by point, not in bulk.
+      algorithm: new SuperClusterAlgorithm({ radius: 70, maxZoom: 17 }),
+    })
+    clusterer.current.clearMarkers(true)
+    clusterer.current.addMarkers([...markers.current.values()])
+  }, [ready, points, pointById])
+
+  // Emphasis: only the markers entering or leaving it are restyled. Touching all of them
+  // would cost four thousand redraws for a mouse moving down the list.
+  useEffect(() => {
+    if (!ready) return
+    const next = new Set([selectedId, hoveredId].filter((id): id is string => !!id))
+
+    for (const id of emphasised.current) {
+      if (next.has(id)) continue
+      const point = pointById.get(id)
+      const marker = markers.current.get(id)
+      if (point && marker) {
+        marker.setIcon(iconFor(point, 'none'))
+        marker.setZIndex(undefined)
+      }
+    }
+
+    for (const id of next) {
+      const point = pointById.get(id)
+      const marker = markers.current.get(id)
+      if (!point || !marker) continue
+      marker.setIcon(iconFor(point, id === selectedId ? 'selected' : 'hover'))
+      marker.setZIndex(id === selectedId ? 1000 : 900)
+    }
+
+    emphasised.current = next
+  }, [ready, selectedId, hoveredId, pointById])
+
+  // A row picked in the list must be findable on the map. We pan only when the point is
+  // off-screen: recentring on every click would move the map under a reader who is
+  // comparing two places side by side.
+  useEffect(() => {
+    if (!ready || !map.current || !selectedId) return
+    const point = pointById.get(selectedId)
+    if (!point) return
+    const position = { lat: point.lat, lng: point.lng }
+    const bounds = map.current.getBounds()
+    if (bounds && !bounds.contains(position)) map.current.panTo(position)
+  }, [ready, selectedId, pointById])
 
   // Framing follows the SEARCH, not the scroll.
   //
-  // Refitting on every points change would yank the map back to a new frame each time the
-  // reader loaded another page — the map jumping under you as you scroll the list.
+  // Refitting whenever the points change would yank the map back to a new frame while the
+  // reader is browsing. It now has every result from the start, so the frame it computes is
+  // the true extent of the search rather than that of the first fifty names.
   useEffect(() => {
     if (!ready || !map.current || points.length === 0) return
     const bounds = new google.maps.LatLngBounds()
@@ -166,84 +262,16 @@ function GoogleMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
   if (error) return <MapFallback points={points} reason={error} />
 
   return (
-    <div className="relative h-[28rem] w-full overflow-hidden rounded-lg bg-stone-200">
+    <div className="relative h-full w-full overflow-hidden rounded-lg bg-stone-200">
       <div ref={container} className="h-full w-full" />
       {!ready && (
         <p className="absolute inset-0 flex items-center justify-center text-sm text-stone-500">
           Chargement de la carte…
         </p>
       )}
-      <Legend className="absolute bottom-2 left-2 rounded bg-white/90 px-2 py-1 shadow" />
+      <Legend className="absolute bottom-2 left-2 max-w-[calc(100%-1rem)] rounded bg-white/90 px-2 py-1 shadow" />
     </div>
   )
-}
-
-/**
- * The card shown when a marker is clicked: what you need to decide whether the place is
- * worth a walk, without leaving the map.
- *
- * Built with DOM nodes rather than an HTML string. Establishment names come from Google,
- * and a name containing markup would otherwise be injected straight into the page.
- */
-function buildCard(p: MapPoint): HTMLElement {
-  const root = document.createElement('div')
-  root.style.cssText = 'font: 13px/1.45 system-ui, sans-serif; max-width: 15rem; color: #1c1917'
-
-  const title = document.createElement('div')
-  title.textContent = p.name
-  title.style.cssText = 'font-weight: 600; margin-bottom: 2px'
-  root.append(title)
-
-  const context = [p.commune, CATEGORY_LABELS[p.category], p.cuisine].filter(Boolean).join(' · ')
-  if (context) {
-    const line = document.createElement('div')
-    line.textContent = context
-    line.style.cssText = 'color: #78716c; font-size: 12px'
-    root.append(line)
-  }
-
-  const risk = SPLIT_SHIFT_BADGES[p.splitShiftRisk]
-  const badge = document.createElement('div')
-  badge.textContent = risk.label
-  badge.style.cssText = 'margin: 6px 0 4px; display: inline-block; padding: 1px 6px; '
-    + 'border-radius: 4px; font-size: 12px; color: #fff; background: ' + risk.color
-  root.append(badge)
-
-  const why = document.createElement('div')
-  why.textContent = p.explanation
-  why.style.cssText = 'font-size: 12px'
-  root.append(why)
-
-  // The headcount is what turns opening hours into a verdict about the staff: showing it
-  // lets the reader judge the reasoning instead of taking the badge on faith.
-  const staff = document.createElement('div')
-  staff.textContent = 'Effectif : ' + (headcountLabel(p.headcountCode) ?? 'inconnu (estimé)')
-  staff.style.cssText = 'margin-top: 4px; color: #78716c; font-size: 12px'
-  root.append(staff)
-
-  const actions = document.createElement('div')
-  actions.style.cssText = 'margin-top: 8px; display: flex; gap: 10px; font-size: 12px'
-
-  if (p.phone) {
-    const tel = document.createElement('a')
-    tel.href = 'tel:' + p.phone.replace(/\s/g, '')
-    tel.textContent = p.phone
-    actions.append(tel)
-  }
-
-  const maps = googleMapsUrl(p.googlePlaceId)
-  if (maps) {
-    const link = document.createElement('a')
-    link.href = maps
-    link.target = '_blank'
-    // noopener: the page we open must not get a handle back on ours.
-    link.rel = 'noopener noreferrer'
-    link.textContent = 'Voir sur Google Maps ↗'
-    actions.append(link)
-  }
-
-  if (actions.childElementCount > 0) root.append(actions)
-  return root
 }
 
 /**
@@ -261,7 +289,7 @@ function MapFallback({ points, reason }: { points: MapPoint[]; reason: string })
   const width = Math.max(bounds.east - bounds.west, 1e-4)
 
   return (
-    <div className="flex h-[28rem] flex-col rounded-lg border border-dashed border-stone-300 bg-white p-3">
+    <div className="flex h-full flex-col rounded-lg border border-dashed border-stone-300 bg-white p-3">
       <p className="mb-2 text-xs text-stone-500">
         {reason === NO_API_KEY
           ? 'Aperçu de la répartition — la carte Google s’activera dès que la clé sera configurée.'
