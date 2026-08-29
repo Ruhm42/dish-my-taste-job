@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useTransition } from 'react'
 import { CATEGORY_LABELS, FILTERABLE_CATEGORIES, ZONES } from './badges'
+import { JobBoards } from './job-boards'
 
 /**
  * Filters live in the URL: a search can be bookmarked and shared.
@@ -104,6 +105,9 @@ export function FiltersPanel({ activeCount }: { activeCount: number }) {
           ['moyen', '6 à 19'], ['grand', '20 et plus'],
         ]} value={valueOf('taille')} onChange={(x) => set('taille', x)} />
       </Section>
+
+      {/* Last, and deliberately outside every Section: it filters nothing. */}
+      <JobBoards />
     </aside>
   )
 }

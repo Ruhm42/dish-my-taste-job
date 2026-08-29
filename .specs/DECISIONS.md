@@ -658,3 +658,70 @@ confirme que seule la catégorisation a bougé.
 palier Pro, or `regularOpeningHours` place déjà l'appel en Enterprise et la facturation suit
 le champ le plus cher. Le prochain balayage aura donc la classification officielle de Google
 au lieu de la déduire de `types[0]`.
+
+---
+
+## D25 — Liens sortants vers les sites d'offres, par métier et jamais par établissement
+
+**Contexte.** D1 assume que l'outil ne dit jamais si un établissement recrute : « c'est à
+l'utilisateur d'aller voir ». Mais aller voir, aujourd'hui, c'est quitter l'outil et retaper
+sa recherche ailleurs. Le manque n'est pas une donnée de plus, c'est un **panneau
+indicateur**.
+
+Deux points rendent la chose recevable. D1 a écarté le signal « recrute actuellement » pour
+son **coût d'obtention et sa fiabilité**, pas par principe — un lien statique n'a ni l'un ni
+l'autre défaut. Et le lien sortant est déjà un motif accepté : D10 affiche un établissement
+« horaires inconnus » *avec un lien vers sa fiche Google*, parce qu'« un établissement marqué
+à vérifier se vérifie en un clic ».
+
+**Options écartées**
+- *Un lien de recherche par nom sur chaque fiche* — l'option la plus évidente, et la plus
+  mauvaise. Les sites d'offres n'ont pas d'identifiant stable par établissement : ce serait
+  une recherche sur « Le Bistrot », cas que le commentaire de `googleMapsUrl` a déjà tranché
+  — *pire que pas de lien du tout*. S'y ajoute un faux négatif propre au sujet : une
+  recherche vide se lit « il ne recrute pas », ce que l'outil n'a pas le droit de laisser
+  entendre.
+- *Le signal « recrute » via une API ou du scraping* — rejeté par D1, et incompatible avec
+  `technique/00` : l'app en ligne n'appelle aucune API externe.
+- *Une page dédiée* — `app/layout.tsx` n'a aucune navigation. En ajouter une pour trois
+  liens coûte plus que la fonctionnalité ne rapporte.
+- *Suivre le filtre Zone* — inutile : 10 km depuis le centre de Lyon couvrent déjà tout le
+  périmètre de D16.
+
+**Décision.** Un bloc **« Trouver des offres »** en bas du panneau de filtres. Huit puces-
+liens par métier vers **La Bonne Boîte** — service public, gratuit, conçu pour la candidature
+spontanée, et qui classe les entreprises par potentiel d'embauche, soit exactement la
+prémisse de D1. Puis deux liens : **Indeed**, pré-filtré sur Lyon, et **L'Hôtellerie
+Restauration**, la référence du secteur. L'état vide y renvoie par une ancre, sans dupliquer
+le bloc.
+
+Rien de tout cela ne porte sur un établissement. `lib/job-boards.ts` ne prend jamais un
+restaurant en argument : la contrainte tient dans les signatures, pas dans la discipline.
+
+**Conséquences.** Aucun coût, aucune colonne, aucune dépendance à un tiers qui devrait
+alimenter la plateforme. En contrepartie **les URL tierces peuvent casser en silence** — un
+lien mort ne lève rien. C'est le prix assumé de ne pas appeler d'API ; les trois cibles ont
+été vérifiées à la main le 2026-08-29 et devront l'être à nouveau si quelqu'un les touche.
+
+Deux limites relevées à la vérification, et inscrites dans le code plutôt que découvertes
+deux fois :
+
+> **La Bonne Boîte veut `citycode=69123`** — le code commune global de Lyon, soit l'exact
+> inverse de la règle SIRENE, qui code Lyon par arrondissement (`69381`-`69389`) et jamais
+> `69123`. Brancher `COMMUNE_CODES` sur cette URL renverrait une page vide sans lever
+> d'erreur. Un test verrouille le point.
+>
+> **L'Hôtellerie Restauration ne se pré-filtre pas.** Sa recherche est un formulaire POST
+> portant un jeton anti-CSRF, et le site n'a pas de page d'atterrissage par région : aucune
+> chaîne de requête ne reproduit une recherche filtrée. On lie la racine de la rubrique et le
+> lecteur choisit sa région.
+
+Enfin, les **codes ROME ne se devinent pas** : un code faux renvoie silencieusement le mauvais
+métier. Les huit ont été relus dans l'autocomplétion de La Bonne Boîte. « Cuisinier » simple
+manque à l'appel — `G1606` et `G1607` sont les métiers *de collectivité*, un piège assez
+proche pour être documenté.
+
+**Sur les CGU Google.** Afficher des données Places à côté de liens vers des sites d'emploi
+rapproche visuellement l'outil d'un agrégateur. La ligne rouge de `technique/09` reste
+pourtant à distance : l'accès demeure fermé derrière l'allowlist (D11), et ce sont des liens
+sortants vers des recherches, pas de la donnée tierce republiée.

@@ -38,6 +38,7 @@ and inconsistency makes the codebase unsearchable.
 | maillage / cellule | grid / cell | The search circles the sweep walks through |
 | fiabilité | confidence | How much to trust an inferred verdict |
 | candidature | application | A job application the user tracks |
+| métier | trade | A hospitality job title, keyed by its ROME code |
 
 ## Cost constraints — read before touching `scripts/`
 

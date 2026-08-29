@@ -53,6 +53,22 @@ on s'est enfermé dans une combinaison qui ne donne rien.
 **Les filtres se retrouvent dans l'adresse de la page.** Une recherche peut donc être mise en
 favori et rouverte telle quelle le lendemain, ou envoyée à quelqu'un.
 
+## Trouver des offres
+
+Tout en bas du panneau, après les filtres et bien séparé d'eux — il ne filtre rien.
+
+Un bloc qui dit d'emblée ce que l'annuaire ne fait pas : *« Cet annuaire ne dit pas qui
+recrute. Pour les offres publiées : »*. Suivent des liens par **métier** — serveur, chef de
+cuisine, commis, plongeur, barman, maître d'hôtel, équipier de restauration rapide,
+pizzaïolo — puis deux sites d'offres généralistes du secteur.
+
+Les liens ouvrent un nouvel onglet et portent sur un métier dans l'agglomération, **jamais
+sur un établissement de la liste**. C'est la limite qui fait tenir la promesse de D1 : on
+indique où chercher, on ne dit pas qui recrute. Quand la recherche ne renvoie rien, l'écran
+renvoie vers ce bloc.
+
+Voir D25.
+
 ## La carte
 
 **Les points sont colorés selon le risque de coupure.** C'est le seul enrichissement visuel

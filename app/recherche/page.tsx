@@ -117,6 +117,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
           {total === 0 ? (
             <p className="rounded-lg border border-stone-200 bg-white p-6 text-sm text-stone-600">
               Essaie d’élargir un critère — le bouton « Tout effacer » remet la recherche à zéro.
+              {/* An anchor rather than a second <JobBoards />: two copies of the block on
+                  screen at once would each ask to be read first. */}
+              {' '}Ou regarde les offres publiées ailleurs :{' '}
+              <a href="#offres" className="underline">Trouver des offres</a>, en bas des filtres.
             </p>
           ) : (
             <ul className="space-y-2">
