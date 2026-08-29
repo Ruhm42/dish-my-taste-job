@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { SPLIT_SHIFT_BADGES } from './badges'
-import type { SplitShiftRisk } from '@/lib/hours'
+import { CATEGORY_LABELS, CATEGORY_SHAPES, SHAPE_LEGEND, SPLIT_SHIFT_BADGES, googleMapsUrl } from './badges'
+import { headcountLabel } from '@/lib/hours'
+import type { Category, SplitShiftRisk } from '@/lib/hours'
 
 export interface MapPoint {
   id: string
@@ -10,6 +11,12 @@ export interface MapPoint {
   lat: number
   lng: number
   splitShiftRisk: SplitShiftRisk
+  category: Category
+  commune: string | null
+  explanation: string
+  headcountCode: string | null
+  phone: string | null
+  googlePlaceId: string
 }
 
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -70,6 +77,7 @@ function GoogleMap({ points }: { points: MapPoint[] }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<google.maps.Map | null>(null)
   const markers = useRef<google.maps.Marker[]>([])
+  const infoWindow = useRef<google.maps.InfoWindow | null>(null)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -96,19 +104,32 @@ function GoogleMap({ points }: { points: MapPoint[] }) {
   useEffect(() => {
     if (!ready || !map.current) return
     markers.current.forEach((m) => m.setMap(null))
-    markers.current = points.map((p) => new google.maps.Marker({
-      map: map.current!,
-      position: { lat: p.lat, lng: p.lng },
-      title: p.name,
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: 7,
-        fillColor: SPLIT_SHIFT_BADGES[p.splitShiftRisk].color,
-        fillOpacity: 1,
-        strokeColor: '#fff',
-        strokeWeight: 1.5,
-      },
-    }))
+    infoWindow.current ??= new google.maps.InfoWindow()
+
+    markers.current = points.map((p) => {
+      const marker = new google.maps.Marker({
+        map: map.current!,
+        position: { lat: p.lat, lng: p.lng },
+        title: p.name,
+        icon: {
+          // Two dimensions on one marker: colour is the split-shift risk, shape is the
+          // kind of place.
+          path: CATEGORY_SHAPES[p.category],
+          scale: 0.85,
+          fillColor: SPLIT_SHIFT_BADGES[p.splitShiftRisk].color,
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 1.5,
+        },
+      })
+      marker.addListener('click', () => {
+        // A DOM node rather than an HTML string: establishment names come from Google and
+        // are not ours to trust with innerHTML.
+        infoWindow.current!.setContent(buildCard(p))
+        infoWindow.current!.open({ map: map.current!, anchor: marker })
+      })
+      return marker
+    })
     if (points.length) {
       const bounds = new google.maps.LatLngBounds()
       points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }))
@@ -138,6 +159,74 @@ function GoogleMap({ points }: { points: MapPoint[] }) {
       <Legend className="absolute bottom-2 left-2 rounded bg-white/90 px-2 py-1 shadow" />
     </div>
   )
+}
+
+/**
+ * The card shown when a marker is clicked: what you need to decide whether the place is
+ * worth a walk, without leaving the map.
+ *
+ * Built with DOM nodes rather than an HTML string. Establishment names come from Google,
+ * and a name containing markup would otherwise be injected straight into the page.
+ */
+function buildCard(p: MapPoint): HTMLElement {
+  const root = document.createElement('div')
+  root.style.cssText = 'font: 13px/1.45 system-ui, sans-serif; max-width: 15rem; color: #1c1917'
+
+  const title = document.createElement('div')
+  title.textContent = p.name
+  title.style.cssText = 'font-weight: 600; margin-bottom: 2px'
+  root.append(title)
+
+  const context = [p.commune, CATEGORY_LABELS[p.category]].filter(Boolean).join(' · ')
+  if (context) {
+    const line = document.createElement('div')
+    line.textContent = context
+    line.style.cssText = 'color: #78716c; font-size: 12px'
+    root.append(line)
+  }
+
+  const risk = SPLIT_SHIFT_BADGES[p.splitShiftRisk]
+  const badge = document.createElement('div')
+  badge.textContent = risk.label
+  badge.style.cssText = 'margin: 6px 0 4px; display: inline-block; padding: 1px 6px; '
+    + 'border-radius: 4px; font-size: 12px; color: #fff; background: ' + risk.color
+  root.append(badge)
+
+  const why = document.createElement('div')
+  why.textContent = p.explanation
+  why.style.cssText = 'font-size: 12px'
+  root.append(why)
+
+  // The headcount is what turns opening hours into a verdict about the staff: showing it
+  // lets the reader judge the reasoning instead of taking the badge on faith.
+  const staff = document.createElement('div')
+  staff.textContent = 'Effectif : ' + (headcountLabel(p.headcountCode) ?? 'inconnu (estimé)')
+  staff.style.cssText = 'margin-top: 4px; color: #78716c; font-size: 12px'
+  root.append(staff)
+
+  const actions = document.createElement('div')
+  actions.style.cssText = 'margin-top: 8px; display: flex; gap: 10px; font-size: 12px'
+
+  if (p.phone) {
+    const tel = document.createElement('a')
+    tel.href = 'tel:' + p.phone.replace(/\s/g, '')
+    tel.textContent = p.phone
+    actions.append(tel)
+  }
+
+  const maps = googleMapsUrl(p.googlePlaceId)
+  if (maps) {
+    const link = document.createElement('a')
+    link.href = maps
+    link.target = '_blank'
+    // noopener: the page we open must not get a handle back on ours.
+    link.rel = 'noopener noreferrer'
+    link.textContent = 'Voir sur Google Maps ↗'
+    actions.append(link)
+  }
+
+  if (actions.childElementCount > 0) root.append(actions)
+  return root
 }
 
 /**
@@ -181,15 +270,35 @@ function MapFallback({ points, reason }: { points: MapPoint[]; reason: string })
   )
 }
 
+/**
+ * Two dimensions, so the legend has to explain both: colour carries the split-shift risk,
+ * shape carries the kind of place. Colour comes first — it is the criterion people came
+ * for; the shape is context.
+ */
 function Legend({ className = '' }: { className?: string }) {
   return (
-    <div className={`flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-stone-600 ${className}`}>
-      {LEGEND_ORDER.map((risk) => (
-        <span key={risk} className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-full" style={{ background: SPLIT_SHIFT_BADGES[risk].color }} />
-          {SPLIT_SHIFT_BADGES[risk].label}
-        </span>
-      ))}
+    <div className={`space-y-1 text-[11px] text-stone-600 ${className}`}>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {LEGEND_ORDER.map((risk) => (
+          <span key={risk} className="flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: SPLIT_SHIFT_BADGES[risk].color }}
+            />
+            {SPLIT_SHIFT_BADGES[risk].label}
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-stone-500">
+        {SHAPE_LEGEND.map((category) => (
+          <span key={category} className="flex items-center gap-1">
+            <svg viewBox="-10 -10 20 20" className="h-2.5 w-2.5" aria-hidden>
+              <path d={CATEGORY_SHAPES[category]} fill="currentColor" />
+            </svg>
+            {CATEGORY_LABELS[category]}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

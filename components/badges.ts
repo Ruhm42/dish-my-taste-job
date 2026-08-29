@@ -48,3 +48,39 @@ export const ZONES = COMMUNE_CODES.map((insee) => ({
   insee,
   label: COMMUNE_NAMES[insee] ?? insee,
 }))
+
+/**
+ * Marker shape per category, so the map carries two dimensions at once: colour says
+ * split-shift risk, shape says what kind of place it is.
+ *
+ * SVG paths centred on (0,0), sized for a ~16 px marker. Kept to simple geometry —
+ * anything more detailed turns to mush at that size.
+ */
+export const CATEGORY_SHAPES: Record<Category, string> = {
+  bistro: 'M 0,-8 A 8,8 0 1,1 0,8 A 8,8 0 1,1 0,-8 Z',        // cercle
+  brasserie: 'M -7,-7 H 7 V 7 H -7 Z',                         // carré
+  fine_dining: 'M 0,-9 L 9,0 L 0,9 L -9,0 Z',                  // losange
+  fast_food: 'M -8,-5 H 8 V 5 H -8 Z',                         // rectangle plat
+  canteen: 'M 0,-8 L 7,-4 V 4 L 0,8 L -7,4 V -4 Z',            // hexagone
+  bar: 'M 0,8 L 8,-6 L -8,-6 Z',                               // triangle pointe en bas
+  pizzeria: 'M 0,-8 L 8,6 L -8,6 Z',                           // triangle pointe en haut
+  other: 'M 0,-6 A 6,6 0 1,1 0,6 A 6,6 0 1,1 0,-6 Z',          // petit cercle
+}
+
+/** Shapes worth showing in the legend, in the order they read best. */
+export const SHAPE_LEGEND: Category[] = [
+  'bistro', 'brasserie', 'fine_dining', 'fast_food', 'canteen', 'bar', 'pizzeria', 'other',
+]
+
+/**
+ * Deep link to the establishment's own Google Maps page — the fastest way to check the
+ * hours we inferred against reviews and photos.
+ *
+ * The documented `place_id` form is exact. Falling back to a name search would land on a
+ * different establishment often enough to be worse than no link at all, so when there is
+ * no place id we return null and the UI simply omits the link.
+ */
+export function googleMapsUrl(placeId: string | null | undefined): string | null {
+  if (!placeId || placeId.startsWith('demo-')) return null
+  return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`
+}

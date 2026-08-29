@@ -37,7 +37,8 @@ export function teamSize(headcountCode: string | null | undefined): TeamSize {
   return TEAM_SIZE_BY_HEADCOUNT_CODE[headcountCode] ?? 'unknown'
 }
 
-function headcountLabel(code: string | null | undefined): string | null {
+/** French bracket label, e.g. "3 à 5 salariés". Null when SIRENE gave no bracket. */
+export function headcountLabel(code: string | null | undefined): string | null {
   return code ? (HEADCOUNT_LABELS[code] ?? null) : null
 }
 

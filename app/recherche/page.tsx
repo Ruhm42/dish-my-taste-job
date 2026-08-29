@@ -4,8 +4,9 @@ import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { cell, restaurant } from '@/lib/db/schema'
 import { buildConditions, countActive, parseFilters } from '@/lib/filters'
+import { headcountLabel } from '@/lib/hours'
 import type { ServiceWindow } from '@/lib/hours'
-import { CATEGORY_LABELS, CONFIDENCE_LABELS, SPLIT_SHIFT_BADGES } from '@/components/badges'
+import { CATEGORY_LABELS, CONFIDENCE_LABELS, SPLIT_SHIFT_BADGES, googleMapsUrl } from '@/components/badges'
 import { Account } from '@/components/account'
 import { FiltersPanel } from '@/components/filters'
 import { RestaurantMap } from '@/components/map'
@@ -35,6 +36,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
 
   const points = results.map((r) => ({
     id: r.id, name: r.name, lat: r.lat, lng: r.lng, splitShiftRisk: r.splitShiftRisk,
+    category: r.category, commune: r.commune, explanation: r.explanation,
+    headcountCode: r.headcountCode, phone: r.phone, googlePlaceId: r.googlePlaceId,
   }))
 
   return (
@@ -123,10 +126,25 @@ function ResultRow({ row }: { row: RestaurantRow }) {
           <p className="text-xs text-stone-500">
             Fiabilité : {CONFIDENCE_LABELS[row.confidence]}
             {' · '}{CATEGORY_LABELS[row.category]}
+            {/* The headcount is the hinge of the whole verdict: opening hours alone never
+                say whether a split shift lands on the staff. Showing it lets the reader
+                judge the reasoning rather than trust the badge. */}
+            {' · Effectif : '}
+            {headcountLabel(row.headcountCode) ?? 'inconnu (estimé)'}
             {row.phone && <> · <a className="underline" href={`tel:${row.phone.replace(/\s/g, '')}`}>{row.phone}</a></>}
           </p>
           <WeekGrid windows={(row.schedule ?? []) as ServiceWindow[]} />
           <p className="text-xs text-stone-400">{row.formattedAddress}</p>
+          {googleMapsUrl(row.googlePlaceId) && (
+            <a
+              href={googleMapsUrl(row.googlePlaceId)!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block text-xs text-stone-600 underline"
+            >
+              Vérifier sur Google Maps — horaires, avis, photos ↗
+            </a>
+          )}
         </div>
       </details>
     </li>
