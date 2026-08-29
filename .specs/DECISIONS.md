@@ -845,7 +845,7 @@ cinquante points.
 
 ---
 
-## D27 — Le plafond d'appels porte sur la période du quota, pas sur le balayage
+## D28 — Le plafond d'appels porte sur la période du quota, pas sur le balayage
 
 **Contexte.** Le plafond de 900 appels est compté **par balayage** : le compteur est repris
 depuis le total du run, et le refus se prononce sur ce cumul. Le run en cours affiche

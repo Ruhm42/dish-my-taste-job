@@ -31,7 +31,7 @@ au moins 1 200 à faire ; le quota gratuit est de 1 000 par mois.
 
 ## 1. Le balayage ne repartira pas tout seul — il est en interblocage
 
-> **Spécifié le 29 août** — voir D27 et
+> **Spécifié le 29 août** — voir D28 et
 > [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md), qui couvre
 > aussi les axes 2 et 3 ci-dessous. Reste à construire.
 
