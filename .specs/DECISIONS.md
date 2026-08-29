@@ -842,3 +842,61 @@ Enfin, « juger un quartier d'un regard » passe désormais par le filtre et non
 agrégée : on filtre, et la densité des points restants **est** la réponse. C'est plus honnête,
 et c'est ce que la carte exhaustive rend enfin possible — auparavant, filtrer ne changeait que
 cinquante points.
+
+---
+
+## D27 — Le plafond d'appels porte sur la période du quota, pas sur le balayage
+
+**Contexte.** Le plafond de 900 appels est compté **par balayage** : le compteur est repris
+depuis le total du run, et le refus se prononce sur ce cumul. Le run en cours affiche
+exactement 900 appels, statut `failed`, avec 601 cellules jamais interrogées.
+
+Au 1er septembre, le cycle mensuel détectera l'inachèvement, sautera la planification comme
+D22 le prévoit, relancera le balayage sur ce même run — et **le premier appel sera refusé**,
+puisque 900 + 0 atteint déjà le plafond. Le job échouera en ayant dépensé zéro. Le mois
+suivant fera de même, indéfiniment : le compteur ne peut plus baisser, et seul un appel
+dépensé le ferait monter.
+
+Les deux règles en cause sont chacune défendable. Le plafond par balayage empêche dix
+reprises de dépenser dix fois le plafond. D22 reprend au renouvellement du quota pour ne pas
+repayer les cellules déjà acquises. Elles sont mutuellement bloquantes parce que **le
+compteur ne connaît pas les mois, alors que le quota qu'il protège est mensuel**.
+
+**Options écartées**
+- *Un plafond par exécution* — c'est ce que le code écarte explicitement, et à raison : trois
+  relances manuelles dans la même journée dépasseraient le quota.
+- *Remettre le compteur du balayage à zéro à chaque mois* — plus simple, mais efface
+  l'historique de coût du run, qui est exactement ce qui a permis d'écrire D22.
+- *Relever le plafond à 1 500* — ferait tenir la convergence en une fois, à 500 appels
+  au-dessus du quota gratuit. Le garde-fou cesserait de garantir l'absence de facturation,
+  qui est sa seule raison d'être.
+- *Replanifier au lieu de reprendre* — déjà écarté en D22 : les cellules déjà payées seraient
+  rejouées et le balayage n'atteindrait jamais la fin.
+
+**Décision.** Le refus se prononce sur les appels dépensés dans **la période du quota** — le
+mois calendaire — et non sur ceux du balayage. Le total par balayage reste enregistré, pour le
+rapport et pour la comparaison d'un cycle à l'autre ; il ne pilote plus le refus.
+
+**Conséquences.** La reprise du 1er septembre dépense enfin. Et la garantie devient plus
+forte qu'avant, pas plus faible : elle porte désormais sur la période que Google facture
+réellement, au lieu d'un compteur dont l'horizon ne correspondait à rien.
+
+Le plafond **journalier** devient alors la contrainte dominante d'une exécution. D15 a posé
+`SearchNearbyRequest` à 800 par jour, soit **moins** que notre propre compteur : une exécution
+ne peut pas dépenser 900 appels, et atteindre le plafond mensuel demande deux exécutions sur
+deux jours UTC différents. Le premier balayage l'a masqué par accident — lancé à 23h55 UTC, il
+a réparti ses 900 appels en 248 le 28 août et 652 le 29, sans jamais approcher la limite
+journalière.
+
+> Corrige au passage une erreur de `CLAUDE.md` : « compteur du script (900) < plafond
+> journalier Google (1000) = quota mensuel gratuit » confond le plafond **journalier** (800)
+> et le quota **mensuel** (1 000). L'ordre des garde-fous annoncé était donc faux, et il était
+> inversé : notre compteur était au-dessus de la limite journalière, pas en dessous.
+
+Le détail de la reprise, de la fraîcheur des horaires et des critères d'acceptation vit dans
+[`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md).
+
+**Ce que cette décision ne résout pas.** Le balayage ne convergera toujours pas dans une seule
+période : il reste de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits par mois. La
+question du périmètre, du dépassement assumé et du sort des horaires périmés au-delà de 30
+jours reste entière — et c'est un seul arbitrage, pas trois. Il ouvrira sa propre entrée.

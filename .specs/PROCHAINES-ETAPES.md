@@ -31,6 +31,10 @@ au moins 1 200 à faire ; le quota gratuit est de 1 000 par mois.
 
 ## 1. Le balayage ne repartira pas tout seul — il est en interblocage
 
+> **Spécifié le 29 août** — voir D27 et
+> [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md), qui couvre
+> aussi les axes 2 et 3 ci-dessous. Reste à construire.
+
 **Constat.** Le plafond de 900 appels est compté **par balayage**, pas par mois :
 `previousCalls` est repris depuis `sweep_run.calls_made`, et le garde-fou compare le cumul
 du *run*. Le run en cours affiche `calls_made = 900`, statut `failed`.
