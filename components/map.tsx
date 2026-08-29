@@ -37,6 +37,10 @@ const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 /** Sentinel reasons, distinguished from an Error message by the fallback view. */
 const NO_API_KEY = 'no-api-key'
 const KEY_REFUSED = 'key-refused'
+const NEVER_PAINTED = 'never-painted'
+
+/** How long we let the map prove it can draw itself before falling back. */
+const FIRST_PAINT_TIMEOUT_MS = 8_000
 
 /**
  * A rejected key does not reject the script.
@@ -193,6 +197,24 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     })
   }, [ready])
 
+  /**
+   * The map has to prove it painted.
+   *
+   * `gm_authFailure` is the documented hook, and it is not reliable: Google refused this
+   * key on one load, logged `RefererNotAllowedMapError` to the console, and never called
+   * it. What was left on screen was a grey rectangle saying nothing — the silent failure
+   * this whole project is built against.
+   *
+   * So we stop trusting the announcement and watch the result: no first tile inside the
+   * timeout means the map did not draw, whatever the reason, and the preview takes over.
+   */
+  useEffect(() => {
+    if (!ready || !map.current) return
+    const timer = setTimeout(() => setError((current) => current ?? NEVER_PAINTED), FIRST_PAINT_TIMEOUT_MS)
+    const listener = google.maps.event.addListenerOnce(map.current, 'tilesloaded', () => clearTimeout(timer))
+    return () => { clearTimeout(timer); listener.remove() }
+  }, [ready])
+
   // Markers are reconciled, not rebuilt: changing one filter usually keeps most of the
   // points, and rebuilding four thousand Google objects to add ten is what makes a map
   // stutter.
@@ -222,8 +244,21 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     clusterer.current ??= new MarkerClusterer({
       map: map.current,
       renderer: clusterRenderer,
-      // maxZoom: past it, points stand alone — a street is read point by point, not in bulk.
-      algorithm: new SuperClusterAlgorithm({ radius: 70, maxZoom: 17 }),
+      algorithm: new SuperClusterAlgorithm({
+        radius: 70,
+        // Past this zoom, points stand alone — a street is read point by point, not in bulk.
+        maxZoom: 17,
+        /**
+         * Nothing groups below four.
+         *
+         * A cluster trades colour for a count, and colour is the split-shift verdict — the
+         * one thing people came to the map for. Collapsing a pair therefore hides two
+         * verdicts to save the width of one marker: the worst rate the map can offer, and
+         * it forced a zoom to undo. Small groups stay as real, coloured points; only a
+         * heap that would genuinely be unreadable becomes a number.
+         */
+        minPoints: 4,
+      }),
     })
     clusterer.current.clearMarkers(true)
     clusterer.current.addMarkers([...markers.current.values()])
@@ -328,7 +363,11 @@ function MapFallback({ points, reason }: { points: MapPoint[]; reason: string })
             ? 'Aperçu de la répartition — Google a refusé la clé pour cette adresse. '
               + 'La clé Maps est restreinte par référent : cette adresse (port compris) doit '
               + 'figurer dans la liste autorisée.'
-            : `Aperçu de la répartition — carte Google indisponible (${reason}).`}
+            : reason === NEVER_PAINTED
+              ? 'Aperçu de la répartition — la carte Google ne s’est pas affichée. La cause la '
+                + 'plus fréquente est une clé refusée pour cette adresse ; la console du '
+                + 'navigateur donne le motif exact.'
+              : `Aperçu de la répartition — carte Google indisponible (${reason}).`}
       </p>
       <svg viewBox="0 0 100 100" className="min-h-0 flex-1 rounded bg-stone-100">
         {points.map((p) => (

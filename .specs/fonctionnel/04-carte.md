@@ -54,6 +54,12 @@ filtre actif, c'est toute la base.
 montre un sous-ensemble sans le dire est pire qu'une carte vide : la seconde se voit, la
 première se croit.
 
+**Et si la carte ne s'affiche pas, elle le dit.** Une clé que Google refuse ne fait pas échouer
+le script : il se charge, et la carte reste un rectangle gris. On ne se fie donc pas à
+l'annonce de la panne mais au résultat — pas de première tuile dessinée dans le délai imparti,
+et l'aperçu de la répartition prend la main, en disant pourquoi. C'est la même règle qu'ailleurs :
+une carte muette est une carte qui ment par omission.
+
 ## Le regroupement des points
 
 Quatre mille points ne tiennent pas à l'écran de la ville. Quand ils se chevauchent, ils se
@@ -63,6 +69,12 @@ regroupent, et le regroupement **porte le nombre d'établissements qu'il contien
 couleur moyenne sur trente établissements mélangés serait une moyenne présentée comme un fait
 — exactement ce que le produit s'interdit partout ailleurs. Un regroupement est neutre et
 compte ; il ne juge pas.
+
+**On ne regroupe pas moins de quatre points.** Un regroupement échange une couleur contre un
+nombre ; réunir deux établissements revient donc à effacer deux verdicts de coupure pour
+gagner la largeur d'un marqueur — le pire taux de change que la carte puisse proposer, et il
+obligeait à zoomer pour défaire ce qu'on venait de cacher. Les petits groupes restent des
+points colorés ; seul un tas réellement illisible devient un chiffre.
 
 **Pour juger un quartier d'un regard, on filtre.** « Sans coupure », et la carte ne garde que
 ceux-là : la densité des points restants *est* la réponse. C'est plus honnête qu'une couleur
