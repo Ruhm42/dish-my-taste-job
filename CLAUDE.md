@@ -56,7 +56,7 @@ any overage bills a real card.
 
 See [`.specs/technique/02-budget-google-et-garde-fous.md`](.specs/technique/02-budget-google-et-garde-fous.md).
 
-**Never run `sweep` with `--go` without being asked to.** It spends real quota.
+**Never run `sweep:google` with `--go` without being asked to.** It spends real quota.
 
 ## Commands
 
@@ -76,7 +76,7 @@ Pipeline, in order. Only `sweep` costs money:
 npm run ingest:sirene    # SIRENE registry via remote Parquet (DuckDB)
 npm run ingest:geocode   # BAN batch geocoding
 npm run plan:cells       # dry-run by default; --write to persist the plan
-npm run sweep            # dry-run by default; --go to actually spend
+npm run sweep:google     # dry-run by default; --go to actually spend
 npm run match:sirene     # link Google places to SIRENE headcount
 npm run compute:profiles # recompute rhythm profiles offline, no network
 ```
