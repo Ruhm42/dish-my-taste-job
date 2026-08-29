@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:16-alpine
+    # Matches the production major version. pg_dump emits settings the previous major
+    # does not recognise, so a mismatch breaks `npm run db:pull`.
+    image: postgres:17-alpine
     container_name: dmtj-db
     environment:
       POSTGRES_USER: dmtj

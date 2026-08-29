@@ -658,3 +658,63 @@ confirme que seule la catégorisation a bougé.
 palier Pro, or `regularOpeningHours` place déjà l'appel en Enterprise et la facturation suit
 le champ le plus cher. Le prochain balayage aura donc la classification officielle de Google
 au lieu de la déduire de `types[0]`.
+
+---
+
+## D25 — Copie de la production vers le local en une commande
+
+**Décision** : `npm run db:pull` recopie la base de production dans la base locale. Le sens
+est unique et vérifié à l'exécution : le script **refuse de démarrer** si `DATABASE_URL` ne
+pointe pas sur une adresse de bouclage.
+
+**Pourquoi.** La base locale contenait 37 établissements fictifs et **zéro cellule** de
+balayage. Toute la logique qui compte — répartition des catégories, bandeau de progression,
+pagination sur 4 465 lignes, filtres de rythme — était donc intestable ailleurs qu'en
+production. Vérifier une modification directement en production est précisément ce qui a
+causé la panne actée en [D23](#d23).
+
+**Ce qui ne voyage pas.** Seul le schéma `public` est copié. Le schéma `auth` de Supabase —
+comptes réels et empreintes de mots de passe — n'est jamais lu. L'authentification locale
+continue de s'adresser au vrai projet Supabase, donc se connecter en local fonctionne sans
+qu'aucun secret ne soit dupliqué sur le poste.
+
+`application.user_id` est un `uuid` sans clé étrangère vers `auth.users` : ce découplage,
+choisi pour d'autres raisons, est ce qui rend cette séparation possible.
+
+**Trois détails qui font échouer une copie naïve.**
+
+- **Le port 6543 est le pooler transactionnel**, qui n'implémente pas assez du protocole
+  pour `pg_dump`. Le script bascule sur le port 5432, pooler en mode session, qui lui le
+  supporte.
+- **`pg_dump` refuse de dialoguer avec un serveur plus récent que lui.** Le poste avait un
+  client 15.8 face à une production en 17.6. Le script lit la version du serveur et lance un
+  conteneur `postgres:<majeure>-alpine` : rien à installer, et aucune étiquette figée qui
+  pourrira au prochain changement de version de Supabase.
+- **La version locale doit avoir la même majeure.** `docker-compose.yml` passe de
+  `postgres:16-alpine` à `17-alpine` : un dump produit par `pg_dump` 17 contient
+  `SET transaction_timeout`, que Postgres 16 rejette.
+
+**Le schéma local est reconstruit, pas rapiécé.** `DROP SCHEMA public CASCADE`, puis
+`db:push` depuis `lib/db/schema.ts`. C'est ce qui a révélé le problème : le schéma local
+avait dérivé — pas de colonne `cuisine`, énumération `category` encore pourvue de
+`brasserie`. Restaurer des données dans un schéma périmé aurait échoué à mi-parcours.
+
+> Cette suppression emporte l'extension `pg_trgm`, installée dans `public`, dont dépend
+> `match:sirene` pour `similarity()`. Le script la réinstalle. C'est une régression que la
+> copie elle-même introduisait.
+
+**Options écartées.**
+
+- *Copier aussi le schéma `auth`* — dupliquerait des empreintes de mots de passe réelles sur
+  un poste de développement, pour un gain nul : l'authentification locale vise déjà le vrai
+  projet.
+- *Lister les tables à copier à la main* — une table ajoutée plus tard serait omise en
+  silence. `--schema=public` exclut `auth` par construction **et** ne peut rien oublier.
+- *Copier aussi le schéma depuis la production* — entraînerait les politiques RLS et les
+  droits accordés aux rôles Supabase, inexistants en local. `lib/db/schema.ts` est la
+  référence du schéma ; la production ne l'est pas.
+- *Ne recopier que les données, sans toucher au schéma* — c'est ce qui a échoué en premier.
+
+**Vérification** : le script compare les comptes ligne à ligne entre les deux bases et
+échoue si l'un diffère. Un `COPY` incomplet est exactement le genre de panne qui ne se voit
+qu'au moment où une requête renvoie trop peu de résultats.
