@@ -15,6 +15,7 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 | Fichier | Contenu |
 |---|---|
 | [`DECISIONS.md`](DECISIONS.md) | Journal des décisions actées, avec les options écartées |
+| [`PROCHAINES-ETAPES.md`](PROCHAINES-ETAPES.md) | État mesuré et axes à arbitrer — brouillon, rien n'y est acté |
 | [`fonctionnel/`](fonctionnel/) | Ce que l'outil fait, du point de vue de celui qui s'en sert |
 | [`technique/`](technique/) | Comment il le fait |
 
@@ -34,7 +35,6 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 - [`06-pipeline-ingestion.md`](technique/06-pipeline-ingestion.md) — les scripts et leur ordre
 - [`07-stack-et-tests.md`](technique/07-stack-et-tests.md) — technos, vérification
 - [`08-infrastructure.md`](technique/08-infrastructure.md) — comptes, clés, **ce qu'il y a à faire à la main**
-- [`09-deploiement.md`](technique/09-deploiement.md) — topologie, **comment le balayage arrive en production**
 - [`09-deploiement.md`](technique/09-deploiement.md) — où tourne quoi, tâches planifiées, **ce qui s'éteint tout seul**
 
 ## Conventions d'écriture
