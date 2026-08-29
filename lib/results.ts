@@ -213,3 +213,57 @@ export async function fetchSweepProgress(): Promise<SweepProgress> {
 
   return row ?? { found: 0, queried: 0, pending: 0, truncated: 0, known: 0, sirene: 0 }
 }
+
+export interface HoursFreshness {
+  /** Records carrying opening hours at all — the denominator expiry is measured against. */
+  withHours: number
+  /** Records whose hours have passed the 30-day retention the terms of service impose. */
+  expired: number
+  /** When the oldest hours still on screen were collected. Null when nothing has expired. */
+  oldestFetchedAt: Date | null
+  /** When the next batch tips over, so the deadline is a date and not a surprise. */
+  nextExpiryAt: Date | null
+  /** Where the expiry sits: a sweep resumes district by district, so it rots that way too. */
+  byDistrict: { district: number | null; expired: number }[]
+}
+
+/**
+ * How stale the opening hours are.
+ *
+ * `hours_expires_at` has been written by every sweep since the first one and read by
+ * nothing at all — not the application, not the sweep, not the monthly cycle. D7 claims
+ * compliance is obtained by construction rather than by vigilance; that holds for a sweep
+ * that fits inside its month, and the first one did not (D22). Measuring it is what turns
+ * a silent drift into a stated fact.
+ *
+ * Counted against the database clock rather than the caller's: an expiry read on one clock
+ * and displayed against another would be off by whatever the two disagree on.
+ */
+export async function fetchHoursFreshness(): Promise<HoursFreshness> {
+  const [totals] = await db
+    .select({
+      withHours: sql<number>`count(*) FILTER (WHERE ${restaurant.hoursExpiresAt} IS NOT NULL)::int`,
+      expired: sql<number>`count(*) FILTER (WHERE ${restaurant.hoursExpiresAt} <= now())::int`,
+      oldestFetchedAt: sql<Date | null>`min(${restaurant.hoursFetchedAt}) FILTER (WHERE ${restaurant.hoursExpiresAt} <= now())`,
+      nextExpiryAt: sql<Date | null>`min(${restaurant.hoursExpiresAt}) FILTER (WHERE ${restaurant.hoursExpiresAt} > now())`,
+    })
+    .from(restaurant)
+
+  const byDistrict = await db
+    .select({
+      district: restaurant.district,
+      expired: sql<number>`count(*)::int`,
+    })
+    .from(restaurant)
+    .where(sql`${restaurant.hoursExpiresAt} <= now()`)
+    .groupBy(restaurant.district)
+    .orderBy(sql`count(*) DESC`)
+
+  return {
+    withHours: totals?.withHours ?? 0,
+    expired: totals?.expired ?? 0,
+    oldestFetchedAt: totals?.oldestFetchedAt ?? null,
+    nextExpiryAt: totals?.nextExpiryAt ?? null,
+    byDistrict,
+  }
+}

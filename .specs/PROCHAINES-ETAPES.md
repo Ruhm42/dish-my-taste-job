@@ -31,9 +31,19 @@ au moins 1 200 à faire ; le quota gratuit est de 1 000 par mois.
 
 ## 1. Le balayage ne repartira pas tout seul — il est en interblocage
 
-> **Spécifié le 29 août** — voir D28 et
-> [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md), qui couvre
-> aussi les axes 2 et 3 ci-dessous. Reste à construire.
+> **Corrigé le 29 août** — voir D28 et
+> [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md). Le plafond
+> compte désormais le **mois du quota**, et ce mois est celui du Pacifique, là où Cloud
+> Billing bascule son cycle : compté en UTC il remettrait notre compteur à zéro huit heures
+> avant celui de Google, et la tâche planifiée se déclenche dans cette fenêtre. Vérifié à
+> sec sur une copie de la production : une reprise simulée au 1er septembre part de zéro et
+> annonce 601 cellules à interroger, là où l'ancien compteur refusait le premier appel.
+>
+> Aucun plafond journalier local n'est posé : celui de Google vaut 1 000, pas 800, donc
+> notre compteur mensuel de 900 mord déjà en premier.
+>
+> **Ce qui reste** : l'axe 3 ci-dessous. Le balayage repart, mais ne converge toujours pas
+> dans une seule période.
 
 **Constat.** Le plafond de 900 appels est compté **par balayage**, pas par mois :
 `previousCalls` est repris depuis `sweep_run.calls_made`, et le garde-fou compare le cumul
@@ -65,12 +75,21 @@ centre-ville sous-compté (voir plus bas).
 **Ce que je ferais.** La première option. Le garde-fou doit être adossé à la période du quota
 qu'il protège ; aujourd'hui il protège un quota mensuel avec un compteur qui n'a pas de mois.
 
+*Retenu.* Le décompte se lit dans `cell.queried_at` — une cellule interrogée est un appel —
+plutôt que dans un registre à tenir à jour : la mesure ne peut pas diverger du réel, et elle
+retrouve exactement les 248 appels du 28 août et les 652 du 29.
+
 ## 2. Les horaires expirent le 27 septembre, et rien ne le verra
 
 > **Tranché le 29 août** — voir D30 et
 > [`technique/11-convergence-du-balayage.md`](technique/11-convergence-du-balayage.md). La
 > fraîcheur prime sur la complétude : le cycle mensuel rejoue d'abord ce qui expire. Ce qui a
 > dépassé 30 jours ne s'affiche plus. Reste à construire.
+>
+> **La mesure, elle, est en place.** La péremption est comptée, dite à l'écran à côté de
+> l'avancement du balayage, et rapportée par le cycle mensuel à chaque exécution — y compris
+> quand une étape échoue, ce qui sera le cas tant que le balayage n'aura pas convergé. C'est
+> le socle de la règle de D30, pas la règle : ce qui a expiré est encore affiché.
 
 **Constat.** Les horaires ont été récupérés les 28 et 29 août ; `hours_expires_at` est donc
 posé aux 27 et 28 septembre — les 30 jours de rétention imposés par les CGU (D7). Or
@@ -123,9 +142,17 @@ d'une sur quatre. Il reste donc de l'ordre de **1 200 appels pour converger**, s
 de quota, sans compter le re-balayage mensuel que D7 impose ensuite.
 
 Un chiffre le confirme au passage : `GOOGLE_TO_SIRENE_RATIO` vaut 1,16 dans la configuration,
-alors que le ratio observé est de **0,78** (4 465 pour 5 720). Le commentaire de `GRID.maxRadius`
-cite toujours le calibrage sur 8 cellules que D22 a invalidé. Une constante fausse ne fait pas
-de mal ici : elle fait juste mentir la prévision de coût du plan, qui est l'outil de décision.
+alors que le ratio mesuré est celui que D30 retient. Le commentaire de `GRID.maxRadius`
+cite toujours le calibrage sur 8 cellules que D22 a invalidé.
+
+**Attention en implémentant D30** : cette constante ne sert pas qu'à la prévision de coût.
+Elle pilote aussi le *second* signal de troncature du balayage — celui qui décide quand la
+distance du dernier résultat ne dit rien. La baisser vers la moyenne remonterait son seuil de
+18 à 26 établissements SIRENE par cellule et rendrait le détecteur **moins** sensible, dans
+la direction d'une base silencieusement incomplète. Sur les 900 cellules déjà interrogées,
+2 seulement ont atteint l'état où ce signal décide seul et aucune ne bascule ; mais **118 des
+601 cellules en attente** tombent dans la bande que ce changement ferait basculer, soit 20 %
+du plan restant. C'est une raison de plus de calibrer sur le décile, comme D30 le tranche.
 
 **Pourquoi ça compte.** Le « zéro euro » est posé comme contrainte ferme. Il ne tient plus
 arithmétiquement au périmètre actuel. Continuer sans le dire, c'est découvrir la facture.
@@ -263,8 +290,8 @@ toucher au quota.
 
 ## Ordre proposé
 
-1. **Axe 1** — sans lui rien n'avance, et l'échéance est le 1er septembre.
-2. **Axe 2** — l'échéance est le 27 septembre, et la mesure coûte presque rien.
+1. ~~**Axe 1**~~ — fait le 29 août. Le balayage repartira le 1er septembre.
+2. ~~**Axe 2**~~ — fait le 29 août. La péremption est mesurée, dite et rapportée.
 3. **Axe 4** — régression sur la promesse centrale, correction bornée.
 4. **Axe 3** — arbitrage périmètre/euros, à instruire avec le coût d'un plan convergé.
 5. **Axe 5** puis **6** — ce qui fait revenir l'utilisateur, et le terrain où il est.

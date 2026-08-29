@@ -99,6 +99,13 @@ export const MAX_NEARBY_RESULTS = 20
  * Shared between `plan:cells`, which PREDICTS truncation, and `sweep:google`, which
  * DETECTS it — two diverging values would forecast a cost the sweep never spends,
  * with nothing signalling the gap.
+ *
+ * D30 has since ruled that this ceiling calibrates on the NINTH DECILE of the measured
+ * ratio (1.57) rather than its mean (0.91) — a cell truncates by what it has of the
+ * extreme, never by its average — and caps a cell at 12 SIRENE establishments. Changing
+ * the value belongs to that implementation: lowering it toward the mean would raise the
+ * bar of the sweep's second truncation signal and make the detector LESS sensitive,
+ * which is the direction of a silently incomplete database.
  */
 export const GOOGLE_TO_SIRENE_RATIO = 1.16
 
@@ -107,16 +114,27 @@ export const GOOGLE_TO_SIRENE_RATIO = 1.16
  *
  * The order in which they trip matters as much as the values:
  *
- *   maxCalls (900)  <  Google daily quota (1,000)  =  FREE_MONTHLY_QUOTA
+ *   maxCallsPerPeriod (900)  <  Google daily cap on SearchNearbyRequest (1,000)
+ *                            =  FREE_MONTHLY_QUOTA (1,000)
  *
- * Our counter therefore stops BEFORE the Google ceiling, which yields an explicit
- * message instead of an opaque HTTP 429 in the middle of the sweep. And because 900
- * stays under the free monthly quota, **a single sweep can never on its own cause
- * any billing**, even if it spends its entire budget on subdivisions.
+ * Our counter therefore stops BEFORE the Google ceiling, which yields an explicit message
+ * instead of an opaque HTTP 429 in the middle of the sweep. And because 900 stays under the
+ * free monthly quota, **a period can never on its own cause any billing**, even if the
+ * whole budget goes on subdivisions.
+ *
+ * The daily cap is recorded at 1,000 in technique/02, *posés et vérifiés le 2026-08-28*.
+ * D15 says 800 — that value was superseded precisely because it sat BELOW this counter.
+ * A separate daily ceiling of our own would therefore protect nothing the month does not
+ * already protect, and any value under 900 would only cut what the monthly cycle can spend
+ * in one go.
+ *
+ * What the ceiling counts is the CALENDAR MONTH, never the sweep. Counting the sweep
+ * deadlocked the resume: a run's total can only rise, so once it reached the ceiling no
+ * further call could ever be spent, and only a spent call could have moved it (D28).
  */
 export const SWEEP = {
-  /** Hard ceiling on the script side. It trips before the Google quota, deliberately. */
-  maxCalls: 900,
+  /** Hard ceiling for one quota period — the month Google bills. See lib/quota.ts. */
+  maxCallsPerPeriod: 900,
   /** Subdivision depth beyond which a cell is declared irreducible. */
   maxDepth: 4,
   /**

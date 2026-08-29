@@ -51,10 +51,15 @@ any overage bills a real card.
   follows the most expensive field requested.
 - **Every script that spends quota is `--dry-run` by default** and needs an explicit flag
   to spend.
-- Guard ordering is deliberate: script counter (900) < Google daily cap (1000) = free
+- Guard ordering is deliberate: script counter (900) < Google daily cap (1 000) = free
   monthly quota. A single sweep can therefore never cause billing.
+- **The counter counts the calendar month, never the sweep.** Counting the sweep deadlocked
+  the resume: a run's total only ever rises, so a run that reached the ceiling could never
+  spend again — see D28 and `lib/quota.ts`. And the month is **Pacific**, the one Cloud
+  Billing rolls over: a UTC month would reset ours eight hours before Google's.
 
-See [`.specs/technique/02-budget-google-et-garde-fous.md`](.specs/technique/02-budget-google-et-garde-fous.md).
+See [`.specs/technique/02-budget-google-et-garde-fous.md`](.specs/technique/02-budget-google-et-garde-fous.md)
+and [`.specs/technique/10-reprise-du-balayage.md`](.specs/technique/10-reprise-du-balayage.md).
 
 **Never run `sweep:google` with `--go` without being asked to.** It spends real quota.
 

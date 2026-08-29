@@ -1,10 +1,13 @@
 /**
  * Google `Nearby Search` sweep — THE ONLY SCRIPT IN THE REPO THAT COSTS MONEY.
  *
- * A full sweep is worth ~692 calls out of the month's 1,000 free ones, and the account
- * has no safety credit: any overage goes on the credit card from the very first euro.
- * Hence `--dry-run` by default, the hard-stop counter, and the refusal to replay a recent
- * sweep.
+ * A full sweep was forecast at ~692 calls; the first real one spent 900 without converging
+ * (D22), and the account has no safety credit — any overage goes on the credit card from
+ * the very first euro. Hence `--dry-run` by default, the two hard-stop counters, and the
+ * refusal to replay a recent sweep.
+ *
+ * The counters are indexed on the QUOTA PERIOD, never on the sweep: a sweep that outlives
+ * the month paying for it must still be resumable (D28, spec technique/10).
  *
  * See .specs/technique/02-budget-google-et-garde-fous.md
  *  and .specs/technique/03-algorithme-de-balayage.md
@@ -13,14 +16,16 @@
  *   node --env-file=.env.local --import tsx scripts/sweep.ts            # dry run, 0 calls
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --go       # actually spends
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --go --force
+ *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-09-01T03:00:00Z
  */
-import { and, count, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm'
-import { db } from '../lib/db/client'
+import { and, count, desc, eq, gte, inArray, isNotNull, lt, sum } from 'drizzle-orm'
+import { db, sql as rawSql } from '../lib/db/client'
 import { cell, restaurant, sireneEstablishment, sweepRun } from '../lib/db/schema'
 import {
-  DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES,
+  DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES, FREE_MONTHLY_QUOTA,
   GOOGLE_TO_SIRENE_RATIO, MAX_NEARBY_RESULTS, HOURS_TTL_DAYS, GOOGLE_PLACE_TYPES,
 } from '../lib/config'
+import { callsLeft, monthKey, monthWindow, type Window } from '../lib/quota'
 import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
@@ -28,6 +33,8 @@ import { profileColumns } from '../lib/profile-columns'
 // The grid laid its circles down with THIS distance: cross-checking them with another
 // approximation would push points the plan had placed inside a circle out of it.
 import { distanceInMeters, METERS_PER_DEGREE_LAT } from '../lib/grid'
+// Shared with cron:refresh, which decides from it whether to resume or replan.
+import { buildCoverage } from '../lib/coverage'
 
 const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby'
 
@@ -35,6 +42,12 @@ const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby'
 const COMMUNE_ATTACHMENT_RADIUS = 300
 
 const RAD = Math.PI / 180
+
+/** Simulates a quota period so spec 10's acceptance criteria can be played, not argued. */
+const AS_OF = '--as-of='
+
+/** Arbitrary but fixed: an advisory lock key is only ever compared with itself. */
+const SWEEP_LOCK_KEY = 828_100_128
 
 const SWEEP_SUCCEEDED = 'succeeded'
 const SWEEP_FAILED = 'failed'
@@ -62,11 +75,15 @@ interface SirenePoint {
 interface State {
   calls: number
   /**
-   * Calls already billed by previous executions of THIS run. Without them, every resume
-   * would restart from zero and `SWEEP.maxCalls` would become a ceiling per execution
-   * rather than per sweep: ten resumes, ten times the ceiling.
+   * Calls billed inside the CURRENT quota period, all runs and all executions taken
+   * together — the sweep's own total is not what Google bills (D28).
+   *
+   * It carries the period it was measured for: an execution can outlive its month (the
+   * first sweep already outlived its day), and a counter that did not notice would refuse
+   * calls the new period allows.
    */
-  previousCalls: number
+  periodSpent: number
+  period: string
   cellsQueried: number
   seen: Set<string>
   withHours: Set<string>
@@ -138,8 +155,11 @@ async function queryGoogle(lat: number, lng: number, radius: number): Promise<Go
   // Here a 429 does not mean "slow down" but "quota exhausted": we do not retry.
   if (response.status === 429) {
     throw new Error(
-      'HTTP 429 — Google quota reached. DO NOT RERUN before the monthly renewal. ' +
-      `Response: ${(await response.text()).slice(0, 300)}`,
+      `HTTP 429 — Google refused on quota. Our ceiling of ${SWEEP.maxCallsPerPeriod} sits ` +
+      `under both the daily cap and the ${FREE_MONTHLY_QUOTA} free monthly calls, so ` +
+      'reaching this means the local count is short of what Google counted, or something ' +
+      'else is spending on the same project. DO NOT RERUN before reading the billing ' +
+      `console. Response: ${(await response.text()).slice(0, 300)}`,
     )
   }
   if (!response.ok) {
@@ -277,17 +297,39 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
 
 // --- Processing one cell --------------------------------------------------------------
 
-async function processCell(c: CellRow, state: State): Promise<void> {
-  // The cumulative count, not this execution's counter: a resume does not reopen the ceiling.
-  if (state.previousCalls + state.calls >= SWEEP.maxCalls) {
+/**
+ * Books one call against the quota period, and refuses when it is out. Called BEFORE the
+ * request: a call we cannot account for is a call we must not make.
+ *
+ * A sweep runs for hours and can outlive its own period, so the period is re-read on every
+ * cell rather than once at startup. Crossing into a new one resets the counter to zero:
+ * nothing carries over, in either direction (D28). No query needed for that, since nothing
+ * else can have queried a cell in a period we have only just entered.
+ */
+function spendOne(state: State, now: Date): void {
+  const period = monthKey(now)
+  if (period !== state.period) {
+    state.period = period
+    state.periodSpent = 0
+  }
+
+  if (callsLeft(state.periodSpent, SWEEP.maxCallsPerPeriod) <= 0) {
     throw new Error(
-      `local ceiling of ${SWEEP.maxCalls} calls reached (SWEEP.maxCalls) — ` +
-      `${state.previousCalls} already spent by previous executions of this run, ` +
-      `${state.calls} by this one. Stopping before any further spending.`,
+      `ceiling of ${SWEEP.maxCallsPerPeriod} calls reached for ${state.period} ` +
+      `(SWEEP.maxCallsPerPeriod, under the ${FREE_MONTHLY_QUOTA} free ones) — ` +
+      `${state.periodSpent} spent in that period, ${state.calls} of them by this ` +
+      'execution. Stopping before any further spending. Resume once the period rolls ' +
+      'over: the cells already queried are not replayed, and there is nothing to replan.',
     )
   }
 
+  state.periodSpent++
   state.calls++
+}
+
+async function processCell(c: CellRow, state: State): Promise<void> {
+  spendOne(state, new Date())
+
   let places: GooglePlace[]
   try {
     places = await queryGoogle(c.lat, c.lng, c.radius)
@@ -350,25 +392,35 @@ async function processCell(c: CellRow, state: State): Promise<void> {
   console.log(`  truncation (${reason}) -> 4 cells of ${Math.round(children[0].radius)} m`)
 }
 
-// --- Summary --------------------------------------------------------------------------
+// --- What the quota period has already paid for -----------------------------------------
 
-/** A truncated cell is covered only if ALL its children are, recursively. */
-function buildCoverage(cells: CellRow[]): (c: CellRow) => boolean {
-  const children = new Map<string, CellRow[]>()
-  for (const c of cells) {
-    if (!c.parentId) continue
-    const list = children.get(c.parentId) ?? []
-    list.push(c)
-    children.set(c.parentId, list)
-  }
-  const isCovered = (c: CellRow): boolean => {
-    if (c.status === 'done') return true
-    if (c.status !== 'truncated') return false
-    const kids = children.get(c.id) ?? []
-    return kids.length > 0 && kids.every(isCovered)
-  }
-  return isCovered
+/**
+ * Calls booked inside one window, all runs taken together.
+ *
+ * One queried cell is one call, and every call writes `queried_at` — the success branch
+ * through `measurement`, the error branch through the `failed` update — so the count needs
+ * no ledger kept in step with reality.
+ *
+ * It under-reports in four ways, all of them losing a call that WAS billed: a throw in
+ * `writePlaces`, in the measurement update or in the truncation transaction never reaches
+ * the write; a kill between Google's response and that write does the same; a cell
+ * requeried in a later execution overwrites its earlier `queried_at`; and deleting cell
+ * rows erases their calls outright.
+ *
+ * Hence the floor below. `sweep_run` survives a cleanup of the cell table, so the calls of
+ * runs opened inside the window cannot be erased by one. A floor only: a run opened in an
+ * earlier period keeps adding to `calls_made` inside this one, and that part is not
+ * attributable to the window from the logbook alone.
+ */
+async function spentIn(w: Window): Promise<number> {
+  const [cells] = await db.select({ n: count() }).from(cell)
+    .where(and(gte(cell.queriedAt, w.start), lt(cell.queriedAt, w.end)))
+  const [runs] = await db.select({ n: sum(sweepRun.callsMade) }).from(sweepRun)
+    .where(and(gte(sweepRun.startedAt, w.start), lt(sweepRun.startedAt, w.end)))
+  return Math.max(cells?.n ?? 0, Number(runs?.n ?? 0))
 }
+
+// --- Summary --------------------------------------------------------------------------
 
 function percent(part: number, total: number): string {
   return total === 0 ? '—' : `${Math.round((part / total) * 100)}%`
@@ -378,13 +430,40 @@ function percent(part: number, total: number): string {
 
 async function main() {
   const args = process.argv.slice(2)
-  const unknown = args.filter((a) => !['--go', '--dry-run', '--force'].includes(a))
+  const unknown = args.filter(
+    (a) => !['--go', '--dry-run', '--force'].includes(a) && !a.startsWith(AS_OF),
+  )
   if (unknown.length) {
-    console.error(`Unknown options: ${unknown.join(' ')}. Expected: --go, --dry-run, --force`)
+    console.error(
+      `Unknown options: ${unknown.join(' ')}. Expected: --go, --dry-run, --force, ${AS_OF}<ISO date>`,
+    )
     process.exit(1)
   }
   const go = args.includes('--go')
   const force = args.includes('--force')
+
+  // Reading what another period would allow is useful; letting a run that SPENDS pick its
+  // own clock would be a way to talk the ceiling out of its budget. Dry run only.
+  const asOfArgs = args.filter((a) => a.startsWith(AS_OF))
+  if (asOfArgs.length > 1) {
+    console.error(`${AS_OF}<ISO date> given ${asOfArgs.length} times: which period is meant?`)
+    process.exit(1)
+  }
+  if (asOfArgs.length === 1 && asOfArgs[0] === AS_OF) {
+    console.error(`${AS_OF} needs a date, e.g. ${AS_OF}2026-09-01T03:00:00Z`)
+    process.exit(1)
+  }
+  const asOf = asOfArgs[0]?.slice(AS_OF.length)
+  if (asOf && go) {
+    console.error('--as-of simulates a quota period and cannot be combined with --go.')
+    process.exit(1)
+  }
+  const now = asOf ? new Date(asOf) : new Date()
+  if (Number.isNaN(now.getTime())) {
+    console.error(`--as-of=${asOf} is not a date. Expected an ISO instant, e.g. 2026-09-01T03:00:00Z`)
+    process.exit(1)
+  }
+  if (asOf) console.log(`SIMULATED CLOCK — reading the plan as of ${now.toISOString()}\n`)
 
   // 1. The plan. A run with cells still to do, or with cells that failed.
   const pendingRuns = await db
@@ -408,7 +487,9 @@ async function main() {
   if (knownRuns.length === 0 && ids.length > 1) {
     console.error(
       `${ids.length} pending sweep plans, none of them has a row in sweep_run: ` +
-      'impossible to choose. Clean up the cell table before continuing.',
+      'impossible to choose. Attach the stray cells to a run, or delete ONLY the ones ' +
+      'whose queried_at is null — the queried ones are this period\'s spend ledger, and ' +
+      'deleting them re-opens a ceiling that has already been paid for.',
     )
     process.exit(1)
   }
@@ -428,26 +509,36 @@ async function main() {
     .limit(1)
 
   const daysSince = lastSucceeded?.finishedAt
-    ? (Date.now() - lastSucceeded.finishedAt.getTime()) / 86_400_000
+    ? (now.getTime() - lastSucceeded.finishedAt.getTime()) / 86_400_000
     : Infinity
   const tooRecent = daysSince < SWEEP.daysBetweenSweeps
 
-  // A resume has already spent: the announced cost is what REMAINS, and the ceiling is
-  // judged on the cumulative total. Announcing only the leftovers would suggest headroom.
-  const alreadySpent = knownRuns[0]?.callsMade ?? 0
+  // What the CURRENT QUOTA PERIOD still allows — not what this run has spent since it
+  // opened. Judging the refusal on the run total deadlocked the resume: the total only
+  // ever rises, so a run that reached the ceiling could never spend again (D28).
+  const period = monthKey(now)
+  const periodSpent = await spentIn(monthWindow(now))
+  const headroom = callsLeft(periodSpent, SWEEP.maxCallsPerPeriod)
+  // Still on screen because it is the logbook figure D22 was written from. It decides nothing.
+  const runTotalToDate = knownRuns[0]?.callsMade ?? 0
 
   console.log('--- Sweep plan ---')
   console.log(`run                     : ${runId}`)
   console.log(`cells in the plan       : ${planned}`)
   console.log(`cells to query          : ${toQuery}`)
-  console.log(`CALLS PLANNED           : ${toQuery}  (local ceiling ${SWEEP.maxCalls})`)
+  console.log(`CALLS PLANNED           : ${toQuery}`)
   console.log('  + 4 calls per truncated cell, until convergence')
-  if (alreadySpent > 0) {
-    console.log(`  resume: ${alreadySpent} call(s) already spent by this run, ` +
-      `cumulative plan ${alreadySpent + toQuery}`)
-  }
-  if (alreadySpent + toQuery > SWEEP.maxCalls) {
-    console.warn(`! the plan already exceeds the ceiling of ${SWEEP.maxCalls} calls: it will be cut short.`)
+  console.log(`spent this period       : ${periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${period})`)
+  console.log(`THIS RUN CAN SPEND      : ${headroom}  before the ceiling stops it`)
+  console.log(`run total to date       : ${runTotalToDate}  (logbook only, no longer the refusal)`)
+
+  if (headroom === 0) {
+    console.warn('! the ceiling for this period is already reached: nothing can be spent.')
+  } else if (toQuery > headroom) {
+    console.warn(
+      `! ${toQuery} cells to query for ${headroom} call(s) left: the run will be cut short ` +
+      'and will have to be resumed next period. Nothing to replan.',
+    )
   }
   if (tooRecent) {
     console.warn(
@@ -470,6 +561,44 @@ async function main() {
   }
   if (!process.env.GOOGLE_PLACES_API_KEY) {
     console.error('GOOGLE_PLACES_API_KEY is missing — see .specs/technique/08-infrastructure.md')
+    process.exit(1)
+  }
+  // Before the writes below, not after. Opening the run clears its recorded error and flips
+  // its failed cells back to pending; doing that only to refuse the first call would erase
+  // why the previous execution stopped.
+  if (headroom === 0) {
+    console.error(
+      `\nREFUSING TO START: ${periodSpent} of ${SWEEP.maxCallsPerPeriod} calls already spent ` +
+      `in ${period}. Nothing is left to spend before the period rolls over. The run is ` +
+      'untouched and resumes then, with nothing to replan.',
+    )
+    process.exit(1)
+  }
+
+  // The ceiling is read once and spent against for hours. Without a lock, a local --go
+  // overlapping the scheduled one reads the same figure twice and each spends the whole
+  // remainder. The workflow's concurrency group guards CI against CI, and nothing guards
+  // this. Session-level, so a killed process releases it with its connection.
+  const lock = await rawSql.reserve()
+  const [{ acquired }] = await lock`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`
+  if (!acquired) {
+    console.error(
+      '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
+      'reading the same remaining quota would each spend it in full.',
+    )
+    await lock.release()
+    process.exit(1)
+  }
+
+  // Re-read UNDER the lock. The figure printed above was read before it, and closing the
+  // read-then-spend race is the only reason the lock exists: a sweep that finished in that
+  // interval would otherwise have its calls counted twice over.
+  const lockedPeriodSpent = await spentIn(monthWindow(now))
+  if (callsLeft(lockedPeriodSpent, SWEEP.maxCallsPerPeriod) <= 0) {
+    console.error(
+      `\nREFUSING TO START: ${lockedPeriodSpent} of ${SWEEP.maxCallsPerPeriod} calls were ` +
+      `spent in ${period} while this execution was starting up. Nothing left to spend.`,
+    )
     process.exit(1)
   }
 
@@ -518,7 +647,8 @@ async function main() {
 
   const state: State = {
     calls: 0,
-    previousCalls,
+    periodSpent: lockedPeriodSpent,
+    period,
     cellsQueried: 0,
     seen: new Set(),
     withHours: new Set(),
@@ -578,6 +708,7 @@ async function main() {
   console.log(`cells planned            : ${planned}`)
   console.log(`cells queried            : ${state.cellsQueried}`)
   console.log(`CALLS SPENT              : ${state.calls}  (planned: ${toQuery})`)
+  console.log(`spent this period        : ${state.periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${state.period})`)
   if (resumed) {
     console.log(`  run total              : ${previousCalls + state.calls} calls, ` +
       `${previousCellsQueried + state.cellsQueried} cells queried`)

@@ -124,7 +124,7 @@ function printCost(cells: Cell[]) {
 
   console.log('\nSWEEP COST')
   row('Nearby Search calls', num(calls))
-  row('ceiling set on the script side', num(SWEEP.maxCalls))
+  row('ceiling per quota period', num(SWEEP.maxCallsPerPeriod))
   row('free monthly quota', num(FREE_MONTHLY_QUOTA))
   row(
     'headroom for subdivisions',
@@ -200,10 +200,10 @@ async function main() {
 
   const calls = printCost(cells)
 
-  if (calls > SWEEP.maxCalls) {
+  if (calls > SWEEP.maxCallsPerPeriod) {
     console.log(
-      `\n!!! WARNING — the plan asks for ${num(calls)} calls, beyond the ceiling of ` +
-        `${num(SWEEP.maxCalls)}.\n` +
+      `\n!!! WARNING — the plan asks for ${num(calls)} calls, beyond what one quota period ` +
+        `allows (${num(SWEEP.maxCallsPerPeriod)}).\n` +
         `    The free monthly quota is ${num(FREE_MONTHLY_QUOTA)} calls and truncated cells\n` +
         '    subdivide: the sweep will spend more than that figure.\n' +
         '    Rework GRID (target, maxRadius) or shrink the perimeter before sweeping.',

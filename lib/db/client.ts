@@ -43,3 +43,12 @@ if (process.env.NODE_ENV !== 'production') global_._sql = sql
 
 export const db = drizzle(sql, { schema })
 export { schema }
+
+/**
+ * The raw client, for the one thing Drizzle cannot express: a session-level advisory lock.
+ *
+ * Such a lock lives on the connection that took it, and the pool hands statements to
+ * whichever connection is free — so the sweep reserves one for its whole run rather than
+ * locking on a connection it may never see again. See `scripts/sweep.ts`.
+ */
+export { sql }
