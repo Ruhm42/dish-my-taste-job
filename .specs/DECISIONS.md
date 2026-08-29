@@ -900,3 +900,66 @@ Le détail de la reprise, de la fraîcheur des horaires et des critères d'accep
 période : il reste de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits par mois. La
 question du périmètre, du dépassement assumé et du sort des horaires périmés au-delà de 30
 jours reste entière — et c'est un seul arbitrage, pas trois. Il ouvrira sa propre entrée.
+
+---
+
+## D29 — Fermés jamais listés, horaires inconnus écartés par défaut
+
+**Contexte.** Deux constats mesurés en production, et le premier est un défaut de justesse.
+
+`computeProfile` déduisait les jours de fermeture des jours d'ouverture. C'est juste — sauf
+quand il n'y a **aucun** horaire : l'établissement ressortait alors fermé les sept jours,
+donc « week-end libre » **et** « 2 jours de repos d'affilée » tous deux vrais. Une absence
+de donnée répondait à une question sur le rythme.
+
+| Filtre | Annonçait | Fondé | Bruit |
+|---|---|---|---|
+| Samedi et dimanche libres | 1 480 | 481 | **67 %** |
+| 2 jours de repos d'affilée | 2 044 | 1 045 | **49 %** |
+
+Le second constat porte sur ce que « horaires inconnus » recouvre réellement. Sur 999
+fiches : **349 sont déclarées fermées par Google** (`CLOSED_TEMPORARILY`, et toutes sans
+horaires), 650 sont ouvertes sans horaires publiés. Ces 650 sont les fiches les plus maigres
+de la base — **8 % appariées à SIRENE contre 41 %** pour celles qui ont des horaires, **un
+téléphone sur cinq contre neuf sur dix**.
+
+**Options écartées**
+- *Ajouter la présence d'horaires aux conditions des filtres de rythme* — corrige le
+  symptôme et laisse les colonnes mentir. Le prochain filtre construit sur les jours de
+  fermeture retomberait dans le même piège, sans rien pour l'en avertir.
+- *Tout laisser visible, comme la spec le prévoyait* — la règle « on ne masque pas ce qu'on
+  ignore » est juste, mais elle a été écrite sans savoir qu'un tiers de ces fiches sont des
+  établissements que Google déclare fermés. Un restaurant fermé n'est pas une information
+  manquante, c'en est une.
+- *Supprimer ces établissements de la base* — la lecture seule l'interdit (D10), et une
+  fiche écartée aujourd'hui peut rouvrir au balayage suivant.
+- *Écarter les fermés sans le dire* — un compteur qui baisse sans explication est exactement
+  le sous-ensemble muet que le projet refuse partout ailleurs.
+- *Les reléguer en fin de liste au lieu de les écarter* — le tri est contraint par la
+  pagination par curseur, qui porte sur le nom ; un curseur composite serait un chantier
+  pour un bénéfice moindre.
+
+**Décision.** Trois règles.
+
+1. **Sans horaires, le profil n'affirme rien** sur les jours de fermeture : aucun jour fermé,
+   aucun jour de repos d'affilée. C'est la correction de fond, et elle se fait à la source
+   plutôt que dans les filtres.
+2. **Un établissement que Google ne donne pas pour `OPERATIONAL` n'est jamais listé**, et
+   l'écran dit combien ont été écartés.
+3. **Les établissements sans horaires publiés sont écartés par défaut** et reviennent en un
+   clic — depuis la ligne sous le compteur ou depuis le panneau de filtres. L'état vit dans
+   l'URL (`inconnus=1`), donc une recherche qui les inclut se met en favori et s'envoie comme
+   n'importe quelle autre.
+
+**Conséquences, mesurées.** La vue sans filtre passe de 4 465 à **3 466**. « Week-end libre »
+tombe de 1 480 à **481**, « 2 jours d'affilée » de 2 044 à **1 045**, et tout ce qui reste
+s'appuie sur des horaires réels. La recherche emblématique — sans coupure et week-end libre —
+reste à **329** : elle filtrait déjà sur le risque de coupure, qui excluait les inconnus.
+
+La règle de `fonctionnel/02` devient : **on n'affiche pas par défaut ce dont on ne peut rien
+dire, et on dit qu'on ne l'affiche pas.** Ce qui reste interdit, c'est de retirer quelque
+chose en silence.
+
+> Le correctif de profil se rejoue avec `compute:profiles` — hors ligne, sans un seul appel
+> Google. La production le demandera au prochain déploiement, sinon ses colonnes garderont
+> les jours de fermeture inventés.

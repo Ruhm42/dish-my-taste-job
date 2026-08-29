@@ -77,6 +77,25 @@ export function FiltersPanel({ activeCount }: { activeCount: number }) {
         </label>
       </Section>
 
+      {/* Right after the rhythm block, because it is what qualifies it: on a sheet with no
+          hours the tool cannot answer a single one of those three questions. */}
+      <Section title="Horaires inconnus">
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={valueOf('inconnus') === '1'}
+            onChange={(e) => set('inconnus', e.target.checked ? '1' : '')}
+          />
+          <span>
+            Afficher les établissements sans horaires publiés
+            <span className="block text-xs text-stone-500">
+              L’outil ne peut rien dire de leur rythme de travail.
+            </span>
+          </span>
+        </label>
+      </Section>
+
       <Section title="Zone">
         <div className="flex flex-wrap gap-1.5">
           {ZONES.map((z) => (

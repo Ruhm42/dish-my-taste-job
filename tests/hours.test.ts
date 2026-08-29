@@ -63,6 +63,20 @@ describe('ordinary cases', () => {
       expect(profile.confidence).toBe('unverified')
     }
   })
+
+  it('asserts NOTHING about the days off when there are no hours', () => {
+    // The regression this locks down: an absence of hours used to read as "closed all
+    // seven days", so a establishment nobody knows anything about satisfied both the
+    // weekend filter and the two-days-off one. See D29.
+    for (const empty of [null, {}, { periods: [] }] as (GoogleOpeningHours | null)[]) {
+      const profile = profileOf(empty)
+      expect(profile.closedDays).toEqual([])
+      expect(profile.closedSaturday).toBe(false)
+      expect(profile.closedSunday).toBe(false)
+      expect(profile.closedWeekend).toBe(false)
+      expect(profile.maxConsecutiveDaysOff).toBe(0)
+    }
+  })
 })
 
 // ─────────────────────────────────────────────────────────────

@@ -105,12 +105,23 @@ Il contient :
 
 ## Quand on ne sait pas
 
-Certains établissements n'ont pas d'horaires renseignés chez Google. Ils sont affichés
-quand même, marqués **« Horaires inconnus »**, avec le lien vers leur fiche Google.
+Trois silences, qui ne se traitent pas de la même façon.
 
-On ne les masque pas. Un établissement caché ne se voit pas ; un établissement marqué
-« à vérifier » se vérifie en un clic. Le filtre « sans coupure » les exclut, mais ils
-restent visibles quand on ne filtre pas sur le rythme.
+**Google déclare l'établissement fermé.** Ce n'est pas une information manquante, c'en est
+une : un restaurant fermé n'est pas un employeur. Il ne figure pas dans les résultats, et
+l'écran dit combien ont été écartés — un compteur qui baisse sans explication serait pire
+que le chiffre lui-même.
 
-Même principe pour les informations déduites : quand la taille de l'équipe est inconnue, le
-verdict est présenté comme moins sûr, jamais présenté comme certain.
+**Google ne publie pas ses horaires.** L'outil ne peut alors répondre à aucune des trois
+questions de rythme qui justifient son existence, et ces fiches sont les plus maigres de la
+base. Elles sont **écartées par défaut**, l'écran le dit, et un clic les ramène — une case
+dans le panneau, un lien sous le compteur. Rien n'est caché : c'est le défaut qui change,
+pas la disponibilité. Une recherche qui les inclut se met en favori comme une autre.
+
+**L'effectif est inconnu.** Là, on affiche et on nuance : le verdict est présenté comme
+moins sûr, jamais comme certain.
+
+La règle commune : **on n'affiche pas par défaut ce dont on ne peut rien dire, et on dit
+qu'on ne l'affiche pas.** Ce qui reste interdit, c'est de retirer quelque chose en silence.
+
+Voir D29.

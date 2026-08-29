@@ -1,7 +1,7 @@
 import { and, asc, count, eq, gt, or, sql } from 'drizzle-orm'
 import { db } from './db/client'
 import { cell, restaurant, sireneEstablishment } from './db/schema'
-import { buildConditions, type Filters } from './filters'
+import { buildConditions, buildUserConditions, type Filters } from './filters'
 
 import { PAGE_SIZE } from './config'
 export { PAGE_SIZE }
@@ -141,6 +141,34 @@ export async function fetchOne(id: string): Promise<ResultRow | null> {
 export async function countResults(filters: Filters): Promise<number> {
   const [row] = await db.select({ n: count() }).from(restaurant).where(buildConditions(filters))
   return row?.n ?? 0
+}
+
+export interface Excluded {
+  /** Establishments Google reports as no longer trading. */
+  closed: number
+  /** Establishments still trading, whose hours Google does not publish. */
+  unknownHours: number
+}
+
+/**
+ * What the current search left out, and why.
+ *
+ * Counted against the reader's OWN criteria, not against the whole table: "349 set aside"
+ * has to mean 349 out of what they asked for, or the number says nothing. This is what
+ * keeps the exclusions from being a silent drop — the count on screen falls, and the line
+ * underneath says by how much and for which reason.
+ */
+export async function countExcluded(filters: Filters): Promise<Excluded> {
+  const open = sql`(${restaurant.businessStatus} IS NULL OR ${restaurant.businessStatus} = 'OPERATIONAL')`
+  const [row] = await db
+    .select({
+      closed: sql<number>`count(*) FILTER (WHERE NOT ${open})::int`,
+      unknownHours: sql<number>`count(*) FILTER (WHERE ${open} AND NOT ${restaurant.hasHours})::int`,
+    })
+    .from(restaurant)
+    .where(buildUserConditions(filters))
+
+  return row ?? { closed: 0, unknownHours: 0 }
 }
 
 export interface SweepProgress {

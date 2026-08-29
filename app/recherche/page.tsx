@@ -3,7 +3,7 @@ import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
 import { countActive, parseFilters } from '@/lib/filters'
-import { countResults, fetchPage, fetchPoints, fetchSweepProgress } from '@/lib/results'
+import { countExcluded, countResults, fetchPage, fetchPoints, fetchSweepProgress } from '@/lib/results'
 import { Account } from '@/components/account'
 import { SearchScreen } from '@/components/search-screen'
 import { SweepBanner } from '@/components/sweep-banner'
@@ -30,6 +30,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   // The map gets the whole search, the list gets it in slices (D27). This is the one query
   // on the page that is not paginated, deliberately: a spread cannot be read from a sample.
   const points = await fetchPoints(filters)
+
+  // What this search left out. Counted against the reader's own criteria so the line under
+  // the total means something (D29).
+  const excluded = await countExcluded(filters)
 
   // Both banners are derived rather than hard-coded: a banner someone has to remember to
   // remove is a banner that eventually lies about what is on screen. Neither is filtered —
@@ -84,6 +88,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
         points={points}
         query={query}
         activeFilterCount={countActive(filters)}
+        excluded={excluded}
+        unknownHoursIncluded={filters.includeUnknownHours}
       />
     </div>
   )

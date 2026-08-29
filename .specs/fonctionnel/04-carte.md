@@ -45,8 +45,10 @@ filtre actif, c'est toute la base.
 - **La couleur dit le risque de coupure.** C'est le seul enrichissement visuel qui vaut son
   coût : le critère n°1 se lit sans cliquer.
 - **La forme dit la catégorie.** Information secondaire, lisible sans occuper la couleur.
-- **Les établissements sans horaires connus sont présents**, dans la teinte neutre réservée à
-  l'inconnu. On ne masque pas ce qu'on ignore : un établissement caché ne se vérifie pas.
+- **Les établissements sans horaires connus n'y sont pas par défaut**, comme dans la liste :
+  les deux surfaces rendent le même ensemble, et ce qui sort de l'une sort de l'autre. Le clic
+  qui les ramène les fait réapparaître ici aussi, dans la teinte neutre réservée à l'inconnu
+  (D29). Ceux que Google déclare fermés n'y reviennent jamais.
 - **La carte se recentre sur la zone filtrée.** Elle a désormais tous les points pour le faire
   juste ; avec un échantillon, le cadrage était faux lui aussi.
 
