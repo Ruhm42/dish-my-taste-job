@@ -1,12 +1,10 @@
 import { count, like } from 'drizzle-orm'
-import { Suspense } from 'react'
 import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
 import { countActive, parseFilters } from '@/lib/filters'
 import { countResults, fetchPage, fetchPoints, fetchSweepProgress } from '@/lib/results'
 import { Account } from '@/components/account'
-import { FiltersPanel } from '@/components/filters'
 import { SearchScreen } from '@/components/search-screen'
 import { SweepBanner } from '@/components/sweep-banner'
 
@@ -86,11 +84,6 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
         points={points}
         query={query}
         activeFilterCount={countActive(filters)}
-        filters={
-          <Suspense fallback={<div className="text-sm text-stone-400">Chargement des filtres…</div>}>
-            <FiltersPanel activeCount={countActive(filters)} />
-          </Suspense>
-        }
       />
     </div>
   )

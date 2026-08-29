@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import type { Cursor, PointRow, ResultRow } from '@/lib/results'
 import { DetailPanel } from './detail-panel'
+import { FiltersPanel } from './filters'
 import { RestaurantMap } from './map'
 import { ResultList } from './result-list'
 
@@ -15,8 +16,6 @@ interface Props {
   points: PointRow[]
   /** The active filters, verbatim, so the API sees exactly the same search. */
   query: string
-  /** The filter panel, rendered once and placed differently depending on the screen. */
-  filters: React.ReactNode
   activeFilterCount: number
 }
 
@@ -34,7 +33,7 @@ type MobileView = 'liste' | 'carte'
  * alternative views: 375 pixels are not enough for both to be legible.
  */
 export function SearchScreen({
-  initialRows, initialCursor, total, points, query, filters, activeFilterCount,
+  initialRows, initialCursor, total, points, query, activeFilterCount,
 }: Props) {
   const [rows, setRows] = useState<ResultRow[]>(initialRows)
   const [cursor, setCursor] = useState<Cursor | null>(initialCursor)
@@ -142,7 +141,17 @@ export function SearchScreen({
             Voir les {total} résultat{total > 1 ? 's' : ''}
           </button>
         )}
-        {filters}
+        {/*
+          Rendered here, not handed down from the page as a prop.
+          It used to cross the server/client boundary as an element, and an element that
+          travels through the RSC payload loses the mark React uses to tell a hand-written
+          child from one produced by a loop — so it landed in this children array and React
+          asked it for a key it could never have. Both are client components; there was
+          never a reason for the page to build this one.
+        */}
+        <Suspense fallback={<p className="text-sm text-stone-400">Chargement des filtres…</p>}>
+          <FiltersPanel activeCount={activeFilterCount} />
+        </Suspense>
       </aside>
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
