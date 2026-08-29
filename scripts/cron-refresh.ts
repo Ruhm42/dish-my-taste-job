@@ -23,8 +23,25 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { count, inArray } from 'drizzle-orm'
+import { db } from '../lib/db/client'
+import { cell } from '../lib/db/schema'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * Cells left to query, all runs taken together.
+ *
+ * `truncated` counts as unfinished just like `pending`: a truncated cell has been paid
+ * for, but the subdivisions that recover what it hid have not been queried yet.
+ */
+async function pendingCellCount(): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(cell)
+    .where(inArray(cell.status, ['pending', 'truncated']))
+  return row?.n ?? 0
+}
 
 interface Step {
   name: string
@@ -79,7 +96,7 @@ function run(step: Step, args: string[]): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const unknown = args.filter((a) => !['--go', '--dry-run'].includes(a))
   if (unknown.length > 0) {
@@ -105,7 +122,26 @@ function main(): void {
 
   const startedAt = Date.now()
 
+  // An unfinished sweep must be RESUMED, never replanned.
+  //
+  // `plan:cells --write` opens a brand-new run with its own cells. Doing that on top of an
+  // interrupted sweep would strand the pending subdivisions, re-query the cells already
+  // paid for, and spend a whole monthly quota without ever reaching the end — the base
+  // would stay incomplete while the bill says otherwise. Finish what was started first.
+  const unfinished = await pendingCellCount()
+  const skipPlanning = unfinished > 0
+
+  if (skipPlanning) {
+    console.log(
+      `\nUNFINISHED SWEEP DETECTED — ${unfinished} cell(s) still to query.\n` +
+      'Planning is skipped: this cycle resumes the run in progress. Cells already\n' +
+      'queried are not replayed, so only the remainder is paid for.',
+    )
+  }
+
   for (const step of STEPS) {
+    if (skipPlanning && step.name === 'plan:cells') continue
+
     const stepArgs = go ? step.args : step.dryRunArgs
     if (stepArgs === null) {
       console.log(`\n=== ${step.name} — not played in dry run ===`)
@@ -123,10 +159,9 @@ function main(): void {
       'The number of cells announced above is the number of calls --go would spend.')
 }
 
-try {
-  main()
-  process.exit(0)
-} catch (e) {
-  console.error(`\nMONTHLY CYCLE FAILED — ${e instanceof Error ? e.message : e}`)
-  process.exit(1)
-}
+main()
+  .then(() => process.exit(0))
+  .catch((e) => {
+    console.error(`\nMONTHLY CYCLE FAILED — ${e instanceof Error ? e.message : e}`)
+    process.exit(1)
+  })

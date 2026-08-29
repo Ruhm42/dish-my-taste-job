@@ -1,8 +1,8 @@
-import { asc, count } from 'drizzle-orm'
+import { asc, count, inArray, like } from 'drizzle-orm'
 import { Suspense } from 'react'
 import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
-import { restaurant } from '@/lib/db/schema'
+import { cell, restaurant } from '@/lib/db/schema'
 import { buildConditions, countActive, parseFilters } from '@/lib/filters'
 import type { ServiceWindow } from '@/lib/hours'
 import { CATEGORY_LABELS, CONFIDENCE_LABELS, SPLIT_SHIFT_BADGES } from '@/components/badges'
@@ -21,9 +21,16 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   const filters = parseFilters(await searchParams)
   const where = buildConditions(filters)
 
-  const [results, [{ total }]] = await Promise.all([
+  const [results, [{ total }], [{ demo }], [{ owed }]] = await Promise.all([
     db.select().from(restaurant).where(where).orderBy(asc(restaurant.name)).limit(200),
     db.select({ total: count() }).from(restaurant).where(where),
+    // Derived rather than hard-coded: a banner that has to be removed by hand is a banner
+    // that eventually lies about which data is on screen.
+    db.select({ demo: count() }).from(restaurant).where(like(restaurant.googlePlaceId, 'demo-%')),
+    // Cells still owed a query. While this is above zero the densest streets are
+    // under-counted, and saying so is the difference between an incomplete list and a
+    // misleading one.
+    db.select({ owed: count() }).from(cell).where(inArray(cell.status, ['pending', 'truncated'])),
   ])
 
   const points = results.map((r) => ({
@@ -42,9 +49,16 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
           </div>
           {user?.email && <Account email={user.email} />}
         </div>
-        <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-          Données de démonstration — établissements fictifs, en attendant le premier balayage.
-        </p>
+        {demo > 0 ? (
+          <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+            Données de démonstration — établissements fictifs, en attendant le premier balayage.
+          </p>
+        ) : owed > 0 ? (
+          <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+            Balayage en cours — les rues les plus denses sont encore sous-représentées.
+            Certains établissements manquent à l’appel.
+          </p>
+        ) : null}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[16rem_1fr]">

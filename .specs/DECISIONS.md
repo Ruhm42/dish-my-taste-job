@@ -516,3 +516,44 @@ correspond exactement à ce que D14 avait déjà acté.
 > allowlist — n'importe qui peut s'en créer un, puisque la clé publiable est publique par
 > conception. C'est un réglage à faire à la main, et c'est la seule chose qui tient
 > réellement la porte fermée.
+
+---
+
+## D22 — Le calibrage sur échantillon n'était pas représentatif
+
+**Contexte.** D17 fixait le maillage à partir d'un calibrage sur **8 cellules** : ratio
+Google/SIRENE de 1,16, troncature apparaissant vers 265 m de rayon, et une prédiction de
+**zéro cellule** atteignant les 20 résultats. Le premier balayage réel a mesuré tout autre
+chose.
+
+| | Prédit | Mesuré sur 653 cellules |
+|---|---|---|
+| Cellules tronquées | 0 | **166 (25 %)** |
+| Appels pour couvrir la zone | 653 | **> 1 700**, non terminé à 900 |
+| Rayon où la troncature apparaît | ~265 m | **dès 40 m** |
+
+Des cellules renvoient 20 résultats dans un rayon de **40 mètres** : il y a plus de vingt
+établissements Google dans quarante mètres, en Presqu'île. Un échantillon de huit cellules
+ne pouvait pas voir ça — il a mesuré la densité moyenne, alors que le coût est gouverné par
+la densité **extrême**.
+
+**Options écartées**
+- *Payer le dépassement* (~25 €) — rompt la contrainte zéro euro pour trois jours d'avance.
+- *S'en tenir à la couverture obtenue* — 4 465 établissements, tous quartiers représentés,
+  mais sous-comptés précisément là où l'on cherche du travail.
+- *Réduire encore le périmètre* — reviendrait à abandonner des arrondissements entiers pour
+  un problème qui se résout en attendant trois jours.
+
+**Décision.** Reprendre le balayage au renouvellement du quota mensuel. Les cellules déjà
+interrogées ne sont pas rejouées ; seul le reste est payé. `cron:refresh` détecte désormais
+un balayage inachevé et **saute la planification** au lieu d'en créer un nouveau.
+
+**Conséquences.** Le garde-fou a fait exactement son travail : arrêt net à 900 appels, sous
+le quota gratuit de 1 000, **aucune facturation**. Et le script a signalé l'échec plutôt que
+de prétendre avoir réussi — une base incomplète qui se dit complète aurait été le pire des
+résultats.
+
+**Leçon, et elle vaut au-delà de ce projet** : un calibrage doit échantillonner les
+**extrêmes** de la distribution, pas sa moyenne, quand c'est la queue qui gouverne le coût.
+Les 8 cellules avaient été choisies réparties du plus petit au plus grand rayon — ce qui
+échantillonnait la taille des cellules, pas la densité Google qu'elles contenaient.

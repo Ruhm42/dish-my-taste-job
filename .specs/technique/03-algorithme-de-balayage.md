@@ -49,6 +49,11 @@ hypothèses de cette spec :
 | 15 établissements par cellule est une marge de sécurité | **6 cellules sur 8 déjà tronquées** |
 | Le quadtree est un maillage acceptable | **1 316 cellules** pour un minimum de 564 |
 
+> ⚠️ **Ce calibrage s'est lui-même révélé faux** au premier balayage réel : 166 cellules
+> tronquées sur 653 là où il en prédisait zéro, et des troncatures dès 40 m de rayon. Huit
+> cellules échantillonnaient la densité moyenne ; c'est la densité extrême qui gouverne le
+> coût. Voir [`../DECISIONS.md`](../DECISIONS.md) — D22.
+
 La troncature apparaît à partir d'environ **265 m de rayon** ; à 168 m une cellule renvoie 18
 résultats, à 98 m elle en renvoie 17. D'où le plafond de rayon à 200 m, et le passage à un
 découpage le long d'une **courbe de Hilbert** (D17), qui donne 692 cellules là où le quadtree
