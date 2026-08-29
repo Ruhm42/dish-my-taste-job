@@ -104,3 +104,8 @@ Scripts need env vars, so they run through `node --env-file=.env.local --import 
   `load` event fires before the constructors exist.
 - **A map load is billed per `new google.maps.Map()`**, not per pan or zoom. Instantiate
   once per visit and only swap markers.
+- **Google referrer restrictions do not wildcard the port.** `http://localhost:*/*` looks
+  like it covers every dev port; it covers none. The wildcard applies to subdomains and to
+  the path, never to the port, so each port has to be listed on its own. And the failure is
+  quiet from our side: a refused key does not reject the script, it loads and then Google
+  paints its own panel over the map — only `gm_authFailure` surfaces it.

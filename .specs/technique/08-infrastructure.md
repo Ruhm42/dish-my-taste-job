@@ -197,6 +197,8 @@ Actions manuelles, à réaliser hors du dépôt. Le repère ⚠️ signale ce qu
 7. ✅ ⚠️ **Alerte budget à 1 €**, seuils 50 % et 100 %
 8. ✅ Clé **Places** (serveur), restreinte à *Places API (New)*
 9. ✅ Clé **Maps** (navigateur), restreinte à *Maps JavaScript API* + référents `localhost`
+   — **un port par ligne** : le joker ne porte pas sur le port, `http://localhost:*/*`
+   ne couvre pas `http://localhost:3001`. Chaque port de développement s'ajoute à la main.
 
 > **Ordre volontaire** : les clés en dernier. Tant qu'aucune clé n'existe, aucun appel
 > facturable n'est possible — la fenêtre entre l'activation des API et la pose des quotas est
