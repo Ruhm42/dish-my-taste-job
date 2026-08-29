@@ -144,7 +144,11 @@ la carte reçoit tout.
 est un travail géographique. C'est aussi une régression : la carte montrait davantage avant
 la pagination.
 
-**Ce que je ferais.** Une requête de points distincte de la liste — identifiant, position,
+**Tranché le 29 août — voir D27 et [`fonctionnel/04-carte.md`](fonctionnel/04-carte.md).** La
+carte porte tous les résultats filtrés ; c'est la pagination qui est découplée, pas le
+contenu. Reste à le construire.
+
+**Ce que ça demande.** Une requête de points distincte de la liste — identifiant, position,
 risque de coupure, rien d'autre. Trois colonnes sur 4 465 lignes, c'est quelques centaines de
 kilo-octets. Séquentielle, jamais en `Promise.all` (D23). Et le regroupement des points
 devient alors indispensable, pas décoratif.

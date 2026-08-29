@@ -785,3 +785,60 @@ proche pour être documenté.
 rapproche visuellement l'outil d'un agrégateur. La ligne rouge de `technique/09` reste
 pourtant à distance : l'accès demeure fermé derrière l'allowlist (D11), et ce sont des liens
 sortants vers des recherches, pas de la donnée tierce republiée.
+
+---
+
+## D27 — La carte porte toute la recherche, la liste la découpe
+
+**Contexte.** La pagination à 50 lignes avait été introduite pour remplacer un plafond
+silencieux de 200 résultats. Elle a produit un effet de bord que personne n'a vu : la carte
+recevait les lignes **chargées**, pas les lignes **trouvées**. Mesuré sur la recherche que la
+vision désigne comme l'essentiel — sans coupure et week-end libre, 329 établissements — la
+carte en affichait 50, pris par ordre alphabétique, donc répartis au hasard dans la ville.
+
+La promesse de la spec, « un quartier entier peut se juger en un regard », ne tenait plus, et
+rien ne le disait à l'écran. S'y ajoutait un défaut de disposition : la carte était placée
+au-dessus de la liste, donc descendre dans les résultats la faisait disparaître.
+
+**Options écartées**
+- *Afficher toute la base en permanence, les filtres ne pilotant que la liste* — la carte
+  deviendrait une surface d'exploration de la ville, mais filtrer « sans coupure » ne
+  changerait plus rien à ce qu'on y voit. Le critère n°1 sortirait de l'endroit où il se lit
+  le mieux.
+- *Afficher toute la base, résultats filtrés en évidence et le reste estompé* — lecture
+  littérale de la demande, mais 4 465 points pour 329 utiles, et des regroupements dont le
+  nombre mélangerait deux populations. Plus chargé, pour une information dont on ne fait rien.
+- *Rechercher à mesure qu'on déplace la carte* — le résultat dépendrait d'un cadrage qui ne se
+  met pas en favori et ne s'envoie à personne, alors que les filtres vivent dans l'adresse de
+  la page pour exactement l'inverse.
+- *Plafonner la carte à quelques centaines de points* — c'est le défaut qu'on corrige, pas une
+  option : un sous-ensemble muet.
+- *Garder la carte au-dessus de la liste en la rendant collante* — tient sur grand écran,
+  impose de traverser la carte à chaque recherche sur petit écran, là où la place manque le
+  plus.
+
+**Décision.** La carte affiche **tous** les établissements qui passent les filtres, sans
+plafond ni échantillon. La liste reste paginée. Ce qui est dissocié, c'est le **rythme de
+chargement**, jamais le contenu : les deux surfaces rendent le même ensemble.
+
+Sur grand écran, la liste défile et la carte reste en vue ; sur petit écran, ce sont deux vues
+alternatives. Le détail s'ouvre dans le panneau latéral — y compris depuis un point de la
+carte — et ne se déplie plus entre deux lignes de la liste. Les points se regroupent quand ils
+se chevauchent, et un regroupement porte **un nombre, jamais une couleur moyenne** : la
+couleur est un verdict sur la coupure, une moyenne de verdicts n'en est pas un.
+
+Cela ouvre une spec dédiée, [`fonctionnel/04-carte.md`](fonctionnel/04-carte.md).
+
+**Conséquences.** Le coût Google est inchangé : les marqueurs ne sont pas facturés, seule
+l'instanciation de la carte l'est, et elle reste unique par visite. Le surcoût est une lecture
+en base non paginée de trois informations par établissement — à surveiller si le périmètre
+s'étend, pas aux 4 465 actuels.
+
+Le clic sur un point ne peut plus exiger que la ligne correspondante soit chargée : il ouvre
+le détail directement, faute de quoi la plupart des points seraient inertes. C'est la
+contrepartie assumée de la dissociation.
+
+Enfin, « juger un quartier d'un regard » passe désormais par le filtre et non par une couleur
+agrégée : on filtre, et la densité des points restants **est** la réponse. C'est plus honnête,
+et c'est ce que la carte exhaustive rend enfin possible — auparavant, filtrer ne changeait que
+cinquante points.

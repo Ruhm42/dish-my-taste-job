@@ -1,6 +1,6 @@
 # Recherche — carte et liste
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
 
 C'est l'écran principal, et à peu près tout l'outil. Une seule page.
 
@@ -8,15 +8,18 @@ C'est l'écran principal, et à peu près tout l'outil. Une seule page.
 
 Trois zones : les **filtres**, la **liste** des résultats, la **carte**.
 
-Sur grand écran, les trois cohabitent : filtres à gauche, liste et carte côte à côte. Sur
-petit écran, la carte passe au-dessus de la liste et les filtres s'ouvrent dans un panneau.
+Sur grand écran, les trois cohabitent : filtres à gauche, liste et carte côte à côte — **la
+liste défile, la carte reste en vue**. Sur petit écran, liste et carte deviennent deux vues
+alternatives, et les filtres s'ouvrent dans un panneau.
 
 C'est une mise en page qui s'adapte, pas deux interfaces différentes à maintenir.
 
 **La liste et la carte se répondent.** Survoler une ligne met son point en avant sur la
-carte ; cliquer sur un point fait défiler la liste jusqu'à la ligne correspondante. Les deux
-montrent toujours exactement les mêmes établissements — ceux qui passent les filtres, jamais
-un sous-ensemble.
+carte ; cliquer sur un point ouvre le détail de l'établissement. Les deux montrent toujours
+exactement les mêmes établissements — ceux qui passent les filtres, jamais un sous-ensemble.
+Seul leur **rythme de chargement** diffère : la liste par tranches, parce qu'on ne lit pas
+quatre mille lignes ; la carte d'un bloc, parce qu'une répartition ne se juge pas sur un
+échantillon. Voir [`04-carte.md`](04-carte.md).
 
 ## Les filtres
 
@@ -71,16 +74,22 @@ Voir D26.
 
 ## La carte
 
+Elle a désormais sa propre spec : [`04-carte.md`](04-carte.md). L'essentiel :
+
 **Les points sont colorés selon le risque de coupure.** C'est le seul enrichissement visuel
 qui vaut son coût : le critère n°1 se lit d'un coup d'œil, sans cliquer sur quoi que ce soit.
-Un quartier entier peut se juger en un regard.
+Un quartier entier peut se juger en un regard — à condition que la carte les porte **tous**,
+et c'est ce qui l'engage.
 
-La carte se recentre sur la zone filtrée. Quand les points sont trop nombreux et trop
-serrés, ils se regroupent.
+La carte se recentre sur la zone filtrée. Quand les points se chevauchent, ils se regroupent,
+et le regroupement porte un nombre plutôt qu'une couleur moyenne.
 
 ## Le détail d'un établissement
 
 Un panneau qui s'ouvre sur le côté — pas une page séparée, pour ne pas perdre sa recherche.
+Il s'ouvre indifféremment depuis une ligne de la liste ou depuis un point de la carte, et
+jamais *dans* la liste : une fiche qui se déplie entre deux lignes déplace tout ce qui suit
+et fait perdre sa place.
 
 Il contient :
 
