@@ -1,6 +1,6 @@
 # Journal des décisions
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
 
 Format : *contexte → options écartées → décision → conséquences*. Une décision sans
 alternative écartée n'est pas une décision, c'est une note.
@@ -900,3 +900,274 @@ Le détail de la reprise, de la fraîcheur des horaires et des critères d'accep
 période : il reste de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits par mois. La
 question du périmètre, du dépassement assumé et du sort des horaires périmés au-delà de 30
 jours reste entière — et c'est un seul arbitrage, pas trois. Il ouvrira sa propre entrée.
+
+---
+
+## D29 — Fermés jamais listés, horaires inconnus écartés par défaut
+
+**Contexte.** Deux constats mesurés en production, et le premier est un défaut de justesse.
+
+`computeProfile` déduisait les jours de fermeture des jours d'ouverture. C'est juste — sauf
+quand il n'y a **aucun** horaire : l'établissement ressortait alors fermé les sept jours,
+donc « week-end libre » **et** « 2 jours de repos d'affilée » tous deux vrais. Une absence
+de donnée répondait à une question sur le rythme.
+
+| Filtre | Annonçait | Fondé | Bruit |
+|---|---|---|---|
+| Samedi et dimanche libres | 1 480 | 481 | **67 %** |
+| 2 jours de repos d'affilée | 2 044 | 1 045 | **49 %** |
+
+Le second constat porte sur ce que « horaires inconnus » recouvre réellement. Sur 999
+fiches : **349 sont déclarées fermées par Google** (`CLOSED_TEMPORARILY`, et toutes sans
+horaires), 650 sont ouvertes sans horaires publiés. Ces 650 sont les fiches les plus maigres
+de la base — **8 % appariées à SIRENE contre 41 %** pour celles qui ont des horaires, **un
+téléphone sur cinq contre neuf sur dix**.
+
+**Options écartées**
+- *Ajouter la présence d'horaires aux conditions des filtres de rythme* — corrige le
+  symptôme et laisse les colonnes mentir. Le prochain filtre construit sur les jours de
+  fermeture retomberait dans le même piège, sans rien pour l'en avertir.
+- *Tout laisser visible, comme la spec le prévoyait* — la règle « on ne masque pas ce qu'on
+  ignore » est juste, mais elle a été écrite sans savoir qu'un tiers de ces fiches sont des
+  établissements que Google déclare fermés. Un restaurant fermé n'est pas une information
+  manquante, c'en est une.
+- *Supprimer ces établissements de la base* — la lecture seule l'interdit (D10), et une
+  fiche écartée aujourd'hui peut rouvrir au balayage suivant.
+- *Écarter les fermés sans le dire* — un compteur qui baisse sans explication est exactement
+  le sous-ensemble muet que le projet refuse partout ailleurs.
+- *Les reléguer en fin de liste au lieu de les écarter* — le tri est contraint par la
+  pagination par curseur, qui porte sur le nom ; un curseur composite serait un chantier
+  pour un bénéfice moindre.
+
+**Décision.** Trois règles.
+
+1. **Sans horaires, le profil n'affirme rien** sur les jours de fermeture : aucun jour fermé,
+   aucun jour de repos d'affilée. C'est la correction de fond, et elle se fait à la source
+   plutôt que dans les filtres.
+2. **Un établissement que Google ne donne pas pour `OPERATIONAL` n'est jamais listé**, et
+   l'écran dit combien ont été écartés.
+3. **Les établissements sans horaires publiés sont écartés par défaut** et reviennent en un
+   clic — depuis la ligne sous le compteur ou depuis le panneau de filtres. L'état vit dans
+   l'URL (`inconnus=1`), donc une recherche qui les inclut se met en favori et s'envoie comme
+   n'importe quelle autre.
+
+**Conséquences, mesurées.** La vue sans filtre passe de 4 465 à **3 466**. « Week-end libre »
+tombe de 1 480 à **481**, « 2 jours d'affilée » de 2 044 à **1 045**, et tout ce qui reste
+s'appuie sur des horaires réels. La recherche emblématique — sans coupure et week-end libre —
+reste à **329** : elle filtrait déjà sur le risque de coupure, qui excluait les inconnus.
+
+La règle de `fonctionnel/02` devient : **on n'affiche pas par défaut ce dont on ne peut rien
+dire, et on dit qu'on ne l'affiche pas.** Ce qui reste interdit, c'est de retirer quelque
+chose en silence.
+
+> Le correctif de profil se rejoue avec `compute:profiles` — hors ligne, sans un seul appel
+> Google. La production le demandera au prochain déploiement, sinon ses colonnes garderont
+> les jours de fermeture inventés.
+
+---
+
+## D30 — Rafraîchir avant de découvrir, et replanifier au lieu de subdiviser
+
+**Contexte.** D28 a réparé le compteur d'appels ; il annonçait lui-même ce qu'il ne résolvait
+pas — il resterait de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits par mois, et les
+horaires du premier balayage périmeraient pendant qu'on paierait le second.
+
+La mesure a déplacé le problème. Sur les 212 cellules tronquées et leurs 848 filles : la
+subdivision en quatre pose des cercles de **0,72 fois** le rayon de leur mère, qui totalisent
+**4,18 fois** ses établissements SIRENE et en comptent **15,3 chacune contre 17,3 pour la
+mère**. **Quatre appels pour retirer 12 % de la densité** — et une fille à 15,3 retombe dans
+la tranche qui tronque à 55 %.
+
+La troncature, elle, est entièrement prévisible avant de dépenser : 1 % sous 5 SIRENE, 6 % de
+5 à 9, 16 % de 10 à 14, **55 % de 15 à 19**, 96 % au-delà de 30. Et 269 des 601 cellules en
+attente — 45 % — sont dans la zone haute.
+
+Enfin la constante qui dimensionne les cellules, `GOOGLE_TO_SIRENE_RATIO`, vaut 1,16 quand le
+ratio mesuré sur les cellules non tronquées est de 0,91 en moyenne, 0,86 en médiane, mais
+**1,57 au 9ᵉ décile**. Une cellule tronque par ce qu'elle a d'extrême, jamais par sa moyenne.
+
+**Options écartées**
+- *Continuer à subdiviser en quatre, en payant le coût.* Mesuré : quatre appels pour 12 % de
+  densité. Résorber une cellule mère à 30 SIRENE par cette voie demande quatre niveaux, soit
+  256 appels — un quart du quota mensuel pour une seule cellule.
+- *Réduire le périmètre d'abord.* Ce serait couper la ville pour financer un gaspillage connu.
+  L'ordre inverse ne coûte rien et peut rendre l'arbitrage sans objet.
+- *Agrandir les cellules pour ramasser plus par appel.* Réfuté par D22 : la troncature
+  apparaît vers 265 m, le rayon est plafonné à 200 m. C'est la densité Google qui borne.
+- *Purger les horaires au 28 septembre.* Strictement conforme, mais éteint 3 466 fiches d'un
+  coup. Le produit s'arrêterait au lieu de vieillir.
+- *Laisser vieillir au-delà de 30 jours en le sachant.* Sort des CGU, et fait exactement ce
+  que le projet nomme comme sa pire défaillance : une base qui se dit fraîche et ne l'est pas.
+- *Relever le plafond d'appels.* Le garde-fou n'a qu'une raison d'être, garantir l'absence de
+  facturation. Le relever, c'est le supprimer en le gardant.
+
+**Décision.** Quatre règles, qui tiennent ensemble.
+
+1. **La fraîcheur prime sur la complétude.** Chaque cycle mensuel sert d'abord les cellules
+   dont le contenu expire, de la plus ancienne à la plus récente ; le solde du quota va à la
+   découverte. Une cellule `done` dont le contenu a expiré redevient éligible — ce qui change
+   la règle de reprise, et c'est ce qui rend D7 vrai pour un balayage qui déborde.
+2. **Une troncature se résout par une replanification locale.** L'emprise de la cellule
+   tronquée est replanifiée depuis la densité SIRENE qu'elle contient. Une cellule de 30
+   SIRENE devient trois cellules de 10, jamais quatre cellules de 26.
+3. **Le plafond de densité se calibre sur le 9ᵉ décile du ratio, pas sur sa moyenne** : au
+   plus 12 établissements SIRENE par cellule.
+4. **Le coût de la convergence est le nombre de cellules du plan à sec, et il décide.** Sous
+   900 appels, il n'y a rien à arbitrer ; de 900 à 1 500, le périmètre se réduit au rendement
+   mesuré ; au-delà de 1 500, la contrainte « zéro euro » se rouvre explicitement, avec son
+   prix — 35 $ par tranche de 1 000 — et sa propre entrée.
+
+Ce qui a expiré ne s'affiche plus : la fiche reste, sans horaires, en *À vérifier*, et le
+nombre de fiches dans cet état est dit dans le bandeau.
+
+**Conséquences.** Il n'y a plus deux budgets — rafraîchir, découvrir — mais **un seul plan
+parcouru dans l'ordre d'expiration**. `done` signifie désormais « faite dans cette période » :
+la règle de D22, ne pas rejouer, reste vraie à l'intérieur d'une période et cesse de l'être
+d'une période à l'autre, puisque tout expire à 30 jours.
+
+Un chiffre confortable disparaît au passage : rafraîchir ne coûte pas 688 appels, le compte des
+cellules abouties. Les 212 cellules tronquées ont produit du contenu stocké elles aussi — 4 240
+lieux renvoyés contre 5 130 — et il expire aux mêmes dates. Le contenu en base vient des **900**
+cellules interrogées. Sous le plan actuel, le rafraîchir consomme donc tout le quota mensuel
+sans rien laisser à la découverte : c'est ce qui rend les règles 2 et 3 nécessaires plutôt
+qu'élégantes.
+
+En sens inverse, le plan actuel porte **8,8 SIRENE par cellule** au premier niveau contre un
+plafond de 12, et 230 de ses cellules ne ramènent que 2,3 lieux chacune. Un plan recalibré peut
+couvrir le même terrain en **moins** de cellules que les 900 déjà dépensées. C'est ce que la
+règle 4 fait mesurer avant d'ouvrir la question du périmètre.
+
+La réduction du périmètre, si elle devient nécessaire, se fera au **rendement mesuré** et non
+à la géographie : les 1er et 5e arrondissements pèsent 953 établissements SIRENE pour 20
+résultats « sans coupure et week-end libre », quand Villeurbanne en pèse 816 pour 40. Ça ne
+rend pas la coupe indolore — un arrondissement retiré est un arrondissement vide pour qui y
+habite, et la vision promet « la liste de son arrondissement ».
+
+Le détail vit dans [`technique/11-convergence-du-balayage.md`](technique/11-convergence-du-balayage.md).
+
+---
+
+## D31 — L'appariement se fonde sur l'adresse, et le repli cesse d'inventer un discriminant
+
+**Contexte.** 843 verdicts sur 4 465 reposent sur la règle de repli, faute d'effectif. On a
+cherché à l'enrichir avec ce qui est déjà en base et gratuit — durée de la coupure, nombre de
+jours concernés, catégorie, amplitude hebdomadaire. La question se teste : il existe **387
+établissements dont les horaires portent une coupure et dont l'effectif est connu**.
+
+Aucun de ces signaux ne s'écarte du taux de base de 61 % de petites équipes. L'amplitude, seul
+discriminant que le repli contient aujourd'hui, donne **39 % de brigades doubles sous 70 h et
+38 % au-dessus** : le seuil en vigueur ne sépare rien, et il adoucit 45 verdicts sans
+fondement. La durée de coupure s'inverse au dernier palier ; la catégorie tient dans dix
+points d'écart ; le nombre de jours ne ressort qu'à sept sur sept, sur 34 établissements.
+
+En revanche, **1 506 tranches d'effectif dorment dans notre propre base**. L'appariement exige
+une similarité de nom ≥ 0,45 comme critère éliminatoire, or **717 de ces enregistrements n'ont
+aucun nom** — ils sont exclus par construction, à n'importe quel seuil — et les autres portent
+la raison sociale, pas l'enseigne. Le discriminant que SIRENE fournit vraiment est l'adresse :
+validé contre les 1 585 appariements existants, « un seul candidat au même numéro de rue »
+désigne le bon **713 fois sur 735, soit 97 %**.
+
+**Options écartées**
+- *Enrichir le repli avec la durée, les jours et la catégorie.* C'était la piste recommandée ;
+  le jeu de validation la réfute. Une règle plus fine qui ne prédit pas mieux n'est pas une
+  amélioration, c'est une complication qu'on ne saura plus retirer.
+- *Abaisser le seuil de similarité de nom.* Ne touche pas les 717 enregistrements sans nom et
+  dégrade la précision là où le nom existe. Le seuil n'est pas le problème, le caractère
+  éliminatoire du critère l'est.
+- *Redéfinir « coupure peu probable » pour englober les équipes moyennes.* Peuplerait l'option
+  — 2 388 fiches — en appelant « peu probable » ce que la règle appelle « possible ».
+- *Assumer le plafond d'effectifs et le dire, sans rien changer.* Reposait sur un chiffre faux :
+  le plafond n'est pas 41 % mais **56 %** — 2 480 tranches exploitables pour 4 465
+  établissements — et on est à 22 %.
+- *Chercher l'effectif ailleurs qu'à SIRENE.* Aucune source gratuite et exhaustive (D4).
+
+**Décision.** Trois règles.
+
+1. **L'appariement se fonde sur l'adresse ; le nom départage et n'exclut jamais.** Même numéro
+   de rue et proximité comme critère principal, similarité de nom pour classer plusieurs
+   candidats au même numéro. Plusieurs candidats indiscernables, c'est un établissement laissé
+   sans effectif : mieux vaut une information manquante qu'une information fausse. La précision
+   se mesure sur les appariements existants **avant** d'appliquer, et ne descend pas sous 95 %.
+2. **La règle de repli par amplitude est supprimée.** Effectif inconnu et coupure aux horaires
+   donnent *Coupure probable*, fiabilité *probable*. Sans seuil et sans mention d'amplitude.
+3. **Le filtre de coupure devient binaire** — *Sans coupure* ou *Peu importe*. L'option « Oui
+   ou probablement » ajoutait huit lignes à « Oui » : trois choix pour deux résultats.
+
+**Conséquences.** Environ **305 verdicts de repli** gagnent un effectif et passent en
+*confirmé*, avec la tranche nommée dans l'explication. Les 45 fiches adoucies par l'amplitude
+repassent en *Coupure probable* : **le produit devient moins rassurant sur 45 fiches, et plus
+juste sur les 45.** C'est le bon sens de l'erreur — un verdict faussement rassurant coûte une
+demi-journée à quelqu'un qui se déplace.
+
+Un appariement à 97 % est acceptable **parce que le verdict affiche son raisonnement**,
+effectif compris. Un professionnel du secteur voit immédiatement qu'un bouchon de quinze
+couverts n'a pas vingt salariés. L'explicabilité n'est pas un confort de présentation : c'est
+ce qui rend une règle à 97 % tenable là où un verdict nu ne le serait pas.
+
+Le détail vit dans [`technique/12-justesse-du-verdict.md`](technique/12-justesse-du-verdict.md).
+
+---
+
+## D32 — Le déploiement passe par GitHub Actions, et les tests le conditionnent
+
+**Contexte.** Rien ne vérifiait le code automatiquement : `.github/workflows/` ne contenait que
+le balayage mensuel et le maintien en vie, et aucun des deux ne lançait `npm test`,
+`npx tsc --noEmit` ni `npm run build`. Chaque mise en production était une trentaine de
+commandes jouées à la main depuis le poste, décrites par la skill `deploy` — préflight, scan de
+secrets, poussée, `vercel deploy --prod`, contrôle de l'alias, sondes HTTP.
+
+Deux défauts, et le second est le plus grave. Le geste est coûteux, donc espacé, donc chaque
+livraison porte plus de changements que la précédente. Et surtout : **`vercel deploy` téléverse
+l'arbre de travail, pas une référence git.** Un fichier non suivi que `.gitignore` ne couvrait
+pas partait en production ; un arbre en retard sur `origin/main` annulait silencieusement les
+commits des autres. La skill s'en défendait par deux contrôles humains — `git status --porcelain`
+doit être vide, `behind` doit valoir 0 — c'est-à-dire par de la discipline.
+
+**Options écartées**
+- *L'App GitHub Vercel* — c'est l'état que [`08-infrastructure.md`](technique/08-infrastructure.md)
+  décrivait déjà, et c'est zéro secret et zéro maintenance. Mais Vercel déploie sur webhook,
+  hors de portée d'Actions : un commit dont les tests échouent part quand même en production, à
+  moins d'ajouter une protection de branche et donc un flux de PR obligatoire sur un projet
+  solo. Et le commit hebdomadaire de maintien en vie déclencherait un redéploiement — celui-là
+  même que [`09-deploiement.md`](technique/09-deploiement.md) refuse.
+- *Un artefact pré-bâti (`vercel build` puis `deploy --prebuilt`)* — bâtirait sur le Node du
+  runner, qui n'est pas nécessairement celui du projet chez Vercel. On expédierait un artefact
+  bâti ailleurs que là où il s'exécute pour économiser une minute de build distant.
+- *Le retour arrière automatique quand une sonde échoue* — `vercel rollback` a deux façons de se
+  retourner contre soi : passer l'alias fait revenir au déploiement cassé lui-même, et la forme
+  nue devient `rollback status` et ne revient sur rien. Le déclencher sur un `curl` capricieux
+  serait pire que la panne à laquelle il répond.
+- *N'ajouter que les tests et garder le déploiement manuel* — traite la moitié du problème et
+  laisse l'autre entière. C'est le déploiement, pas la vérification, qui coûtait.
+
+**Décision.** Un fichier, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), trois jobs.
+`check` — scan de secrets, `tsc`, tests, build — sur chaque poussée de chaque branche. `preview`
+pour les branches. `production` pour `main`, qui déclare **`needs: check`** et déploie par le CLI
+Vercel avec un `VERCEL_TOKEN` en secret de dépôt, puis vérifie : le projet lié, l'état du
+déploiement, le déplacement de l'alias, et les quatre sondes non authentifiées.
+
+**Conséquences.**
+
+Déployer un arbre rouge devient **structurellement impossible**, sans dépendre d'une protection
+de branche ni d'un flux de PR. Et la production est désormais **le commit poussé** : toute la
+classe de pannes « l'arbre de travail n'est pas ce qui est commité » disparaît, avec les deux
+contrôles humains qui la tenaient en respect.
+
+Le garde-fou sur `lib/db/schema.ts` est **remplacé, pas supprimé.** La skill imposait un arrêt
+humain — la colonne doit exister en production avant que le code qui la lit ne parte. Retirer
+l'humain sans rien mettre à la place aurait été une régression, donc le job refuse une poussée
+dont le diff touche ce fichier. Un `workflow_dispatch` le contourne : déclencher à la main
+devient l'énoncé délibéré que la colonne existe déjà.
+
+La skill `deploy` cesse de décrire un déploiement. Elle décrit ce que la chaîne **ne peut pas**
+vérifier — tout ce qui est derrière le login, et la panne intermittente de [D23](#d23--jamais-de-requêtes-concurrentes-sur-une-connexion-poolée)
+qu'aucun `curl` non authentifié n'atteindra jamais — et le retour arrière.
+
+La garantie « le maintien en vie ne redéploie rien » ne repose plus sur un comportement
+implicite de `GITHUB_TOKEN` mais sur un `paths-ignore` qui se relit.
+
+**Ce que cette décision coûte.** Un secret de plus à faire vivre, `VERCEL_TOKEN`, dont
+l'expiration se manifestera par un déploiement rouge et non par une panne. Et les previews
+pointent sur la base de **production**, faute d'une seconde base : les données d'établissement
+sont en lecture seule et les previews sont derrière le SSO Vercel, mais c'est à savoir avant
+d'y tester une écriture.

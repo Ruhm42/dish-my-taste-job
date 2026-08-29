@@ -122,9 +122,19 @@ export interface ProfileInput {
 export function computeProfile({ windows: raw, headcountCode, category }: ProfileInput): RhythmProfile {
   const windows = sortWindows(raw)
   const openDays = ALL_DAYS.filter((d) => windowsForDay(windows, d).length > 0)
-  const closedDays = ALL_DAYS.filter((d) => !openDays.includes(d))
-
   const hasHours = windows.length > 0
+
+  /**
+   * No hours means NO closed day — not seven of them.
+   *
+   * Deriving the closed days from the open ones reads as harmless until the establishment
+   * has no hours at all: it then comes out closed every day of the week, and therefore
+   * "week-end libre" and "2 jours de repos d'affilée" both come out true. Measured on the
+   * real database, that made 999 establishments we know nothing about satisfy the weekend
+   * filter — 67% of everything it returned. An absence of data was answering a question
+   * about rhythm. See D29.
+   */
+  const closedDays = hasHours ? ALL_DAYS.filter((d) => !openDays.includes(d)) : []
   const splitDaysCount = openDays.filter((d) => dayHasSplitShift(windowsForDay(windows, d))).length
   const weeklyOpenMinutes = windows.reduce((total, w) => total + (w.closesAt - w.opensAt), 0)
   const size = teamSize(headcountCode)

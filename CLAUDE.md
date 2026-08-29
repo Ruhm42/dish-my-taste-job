@@ -90,6 +90,20 @@ npm run compute:profiles # recompute rhythm profiles offline, no network
 
 Scripts need env vars, so they run through `node --env-file=.env.local --import tsx`.
 
+## CI and deploying
+
+`.github/workflows/ci.yml` runs the secret scan, `tsc`, the tests and the build on **every push
+to every branch**. Running them locally first is a faster loop, not a gate.
+
+**Pushing to `main` deploys.** The production job declares `needs: check`, so a red tree cannot
+reach production; other branches get a Vercel preview URL instead. Never deploy by hand with
+`vercel deploy --prod` — it uploads the working tree rather than a commit. Use the `deploy`
+skill for what CI cannot check (everything behind the login) and for rolling back.
+
+**A change to `lib/db/schema.ts` fails the deploy on purpose.** The column has to exist in
+production before the code reading it ships. Apply it by hand, then re-run the workflow from the
+Actions tab — `workflow_dispatch` skips the guard. Never point `db:push` at production.
+
 ## Conventions
 
 - **Node 24** (pinned in `.nvmrc` and `engines`). Node 18 is end-of-life.

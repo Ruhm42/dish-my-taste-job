@@ -1,6 +1,6 @@
 # Infrastructure
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
 
 Quatre comptes, deux clés API, six variables d'environnement. Tout tient dans les offres
 gratuites — cette spec explique où, et ce qui pourrait faire basculer en payant.
@@ -84,8 +84,14 @@ de la base, pas seulement de l'application.
 
 ## Vercel
 
-Offre Hobby, connectée au dépôt GitHub. Déploiement à chaque poussée sur la branche
-principale.
+Offre Hobby. **Déploiement à chaque poussée sur la branche principale** — mais par GitHub
+Actions appelant le CLI Vercel, et non par l'App GitHub de Vercel, qui n'est pas installée sur
+le dépôt. La distinction n'est pas cosmétique : elle est ce qui permet de conditionner le
+déploiement à la réussite des tests, et de ne pas redéployer sur le commit hebdomadaire de
+maintien en vie. Voir D32 et [`09-deploiement.md`](09-deploiement.md).
+
+Les branches autres que `main` reçoivent une URL de prévisualisation. Elle est derrière la
+protection de déploiement Vercel : il faut être connecté à Vercel pour l'ouvrir.
 
 **Usage strictement non commercial** — ce qui est le cas ici, et le restera tant que l'accès
 demeure sur liste fermée (D11).
@@ -124,6 +130,11 @@ dépôt** pour ne pas affecter les autres projets.
 **Tâche planifiée mensuelle** — déclenche le balayage le 1er de chaque mois. Voir
 [`06-pipeline-ingestion.md`](06-pipeline-ingestion.md).
 
+**Intégration continue** — tests, typage et build sur chaque poussée de chaque branche, puis
+déploiement de `main`. Le scan de secrets de GitHub protège du commit d'une clé *reconnue* ; le
+job `check` en ajoute un second, sur les *formes* de justificatifs, qui couvre l'URL de
+connexion Postgres que le premier ne connaît pas.
+
 > Une tâche planifiée GitHub peut être désactivée automatiquement après une longue période
 > d'inactivité du dépôt. Sur un projet à un commit par trimestre, c'est un piège réel : il
 > faut vérifier qu'elle tourne toujours, ou la déclencher manuellement au besoin.
@@ -142,6 +153,7 @@ Les identifiants nécessaires à la tâche sont stockés en secrets du dépôt, 
 | `NEXT_PUBLIC_SUPABASE_URL` | Projet Supabase | ✅ | ✅ | — |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Clé publique Supabase | ✅ | ✅ | — |
 | `SUPABASE_SERVICE_ROLE_KEY` | Clé d'administration, **serveur** | ✅ | ✅ | — |
+| `VERCEL_TOKEN` | Jeton de déploiement Vercel | — | — | ✅ |
 
 **Règle absolue** : le préfixe `NEXT_PUBLIC_` publie la valeur dans le code envoyé au
 navigateur. Il ne doit **jamais** être apposé à `GOOGLE_PLACES_API_KEY` ni à

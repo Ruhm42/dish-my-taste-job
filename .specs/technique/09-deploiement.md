@@ -1,6 +1,6 @@
 # Déploiement
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
 
 L'outil doit tourner **sur le web, gratuitement, pour deux ou trois personnes**. Cette spec
 dit où tourne quoi, comment le résultat du balayage atteint la production, et surtout ce qui
@@ -16,6 +16,7 @@ décrit ce qui s'exécute, où, et quand.
 ```mermaid
 flowchart LR
     subgraph GHA["GitHub Actions"]
+        CI[CI puis déploiement]
         SWEEP[Balayage mensuel]
         KEEP[Maintien en vie hebdomadaire]
     end
@@ -26,7 +27,8 @@ flowchart LR
     SWEEP -->|écriture directe| DB[(Base Supabase)]
     KEEP -.->|requête légère| DB
     KEEP -.->|commit| REPO[(Dépôt GitHub)]
-    REPO -->|déploiement| APP
+    REPO -->|poussée sur main| CI
+    CI -->|vercel deploy --prod| APP
     DB --> APP
     APP --> USER([Utilisateurs sur allowlist])
 ```
@@ -34,6 +36,7 @@ flowchart LR
 | Quoi | Où | Quand | Déclencheur |
 |---|---|---|---|
 | Application web | Vercel Hobby | À chaque visite | Requête d'un utilisateur |
+| CI puis déploiement | GitHub Actions | À chaque poussée | Poussée + manuel |
 | Base + authentification | Supabase, région Europe | En continu | — |
 | Balayage mensuel | GitHub Actions | 1er du mois, 03:00 UTC | Planification + manuel |
 | Maintien en vie | GitHub Actions | Chaque lundi | Planification + manuel |
@@ -62,6 +65,39 @@ succès est gratuit.
 Et comme le seul poste coûteux s'exécute à un seul endroit, sur une planification unique et
 sous un plafond de quota posé chez Google, le montant à dépenser est **connu avant d'être
 engagé** : 692 appels, une fois par mois, sur 1 000 gratuits.
+
+---
+
+## Comment le code arrive en production
+
+**Pousser sur `main`, c'est déployer.** La poussée déclenche
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) : un job `check` — scan de secrets,
+`tsc`, tests, build — puis, s'il passe, un job `production` qui appelle le CLI Vercel. Les
+autres branches obtiennent une URL de prévisualisation au lieu d'un déploiement.
+
+Ce qui porte cette organisation tient en une ligne du fichier : le job de production déclare
+`needs: check`. **Déployer un arbre rouge n'est donc pas interdit, il est impossible** — il n'y
+a pas d'ordre d'opérations qui y mène, et cela ne dépend ni d'une protection de branche ni de la
+discipline de qui pousse.
+
+Deux propriétés en découlent, et la seconde répare un défaut réel de la période manuelle :
+
+- **La production est le commit poussé.** Le workflow extrait ce SHA et le téléverse. Un
+  `vercel deploy` lancé depuis un poste téléversait l'**arbre de travail** : un fichier non
+  suivi que `.gitignore` ne couvrait pas devenait la production, et un arbre en retard sur
+  `origin/main` annulait silencieusement les commits d'un autre. Ces deux pannes n'ont plus de
+  chemin pour se produire.
+- **Ce qui reste à faire à la main est ce qu'une machine ne peut pas faire.** Toutes les pages
+  sont derrière le login et l'inscription est fermée (D14) : les quatre sondes automatiques
+  s'arrêtent au middleware. La panne de D23 était intermittente et ne se voyait qu'en session.
+  La skill `deploy` ne décrit plus une mise en production, elle décrit cette part-là et le
+  retour arrière.
+
+Une exception est inscrite dans le workflow : **un changement de `lib/db/schema.ts` fait
+échouer le déploiement.** La colonne ou l'enum doit exister en production *avant* que le code
+qui la lit ne parte, et `drizzle/` n'est pas un état de la production. Un déclenchement manuel
+(`workflow_dispatch`) contourne ce garde-fou, et c'est précisément ce qui en fait une décision :
+on ne le contourne pas par inadvertance. Voir D32.
 
 ---
 
@@ -165,8 +201,14 @@ en-tête explique les deux compteurs en toutes lettres, et le fichier d'horodata
 produit renvoie lui-même à cet en-tête.
 
 Le commit est poussé sous l'identité du robot GitHub. Un push authentifié de cette manière ne
-redéclenche aucun workflow : pas de boucle, et pas de redéploiement Vercel hebdomadaire
-inutile.
+redéclenche aucun workflow : pas de boucle possible.
+
+**Ce n'est plus ce qui empêche le redéploiement hebdomadaire, et c'est délibéré.** L'argument
+reste vrai, mais il est implicite, et il ne protégerait plus rien le jour où le déploiement
+passerait par un consommateur de webhook — l'App GitHub Vercel, par exemple, à qui GitHub
+transmet l'événement quelle que soit l'identité qui pousse. Le workflow de déploiement inscrit
+donc `.github/last-activity.txt` dans son `paths-ignore` : la garantie est écrite, et elle se
+relit à l'endroit où elle s'applique.
 
 ---
 
@@ -253,15 +295,24 @@ de données.
    après, l'adresse est publique et définitive
 6. ⚠️ Activer la **protection au push** — sur un dépôt public, un secret commité par erreur
    est moissonné en quelques minutes
-7. Créer les deux secrets de dépôt : clé Places et URL de la base **de production**
+7. Créer les secrets de dépôt : clé Places, URL de la base **de production**, et
+   `VERCEL_TOKEN` — un jeton créé côté Vercel, sur l'équipe qui porte le projet. C'est lui qui
+   autorise le déploiement depuis Actions ; son expiration se manifestera par un déploiement
+   rouge, pas par une panne
 8. Vérifier que les workflows sont autorisés à écrire dans le dépôt — sans quoi le commit
    hebdomadaire de maintien en vie échouera
 
 ### Vercel
-9. Importer le dépôt, renseigner les variables d'environnement de production
+9. Importer le dépôt, renseigner les variables d'environnement de production — et les cocher
+   aussi pour **Preview**, sans quoi les prévisualisations de branche échouent au build
 10. Une fois le domaine attribué : compléter la **restriction par référent** de la clé Maps
     et les URL de redirection Supabase. ⚠️ Tant que ce n'est pas fait, la clé Maps est
-    utilisable par n'importe qui
+    utilisable par n'importe qui. Y ajouter le motif des URL de prévisualisation, sinon la
+    carte ne se charge pas sur les branches — et la panne est muette de notre côté, seul
+    `gm_authFailure` la signale. ⚠️ **Vercel tronque le nom du projet** dans les noms d'hôte
+    qu'il engendre : c'est `dish-my-taste-<hash>-hipopo-2684.vercel.app`, pas
+    `dish-my-taste-job-…`. Un motif bâti sur le nom complet du projet ne correspond à rien,
+    et il échoue exactement comme le `localhost:*` qui ne couvre aucun port
 
 ### Mise en service
 11. Déclencher **manuellement le maintien en vie** — il vérifie d'un coup le secret de base,

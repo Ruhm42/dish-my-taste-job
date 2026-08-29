@@ -77,10 +77,15 @@ retrouve exactement les 248 appels du 28 août et les 652 du 29.
 
 ## 2. Les horaires expirent le 27 septembre, et rien ne le verra
 
-> **Corrigé le 29 août.** La péremption est comptée, affichée dans un bandeau à côté de
+> **Tranché le 29 août** — voir D30 et
+> [`technique/11-convergence-du-balayage.md`](technique/11-convergence-du-balayage.md). La
+> fraîcheur prime sur la complétude : le cycle mensuel rejoue d'abord ce qui expire. Ce qui a
+> dépassé 30 jours ne s'affiche plus. Reste à construire.
+>
+> **La mesure, elle, est en place.** La péremption est comptée, dite à l'écran à côté de
 > l'avancement du balayage, et rapportée par le cycle mensuel à chaque exécution — y compris
-> quand une étape échoue, ce qui sera le cas tant que le balayage n'aura pas convergé. Le
-> cycle échoue si un balayage **convergé** laisse une seule fiche périmée.
+> quand une étape échoue, ce qui sera le cas tant que le balayage n'aura pas convergé. C'est
+> le socle de la règle de D30, pas la règle : ce qui a expiré est encore affiché.
 
 **Constat.** Les horaires ont été récupérés les 28 et 29 août ; `hours_expires_at` est donc
 posé aux 27 et 28 septembre — les 30 jours de rétention imposés par les CGU (D7). Or
@@ -115,6 +120,16 @@ qu'ici rien ne le signale — pas même une ligne de journal.
 faire d'une donnée périmée avant de savoir combien il y en a et depuis quand.
 
 ## 3. Le coût du balayage complet dépasse le gratuit, et il faut le trancher
+
+> **Tranché le 29 août** — voir D30. Et tranché autrement que ce qui suit : la mesure a montré
+> que le coût n'est pas d'abord un problème de périmètre mais de **résolution des
+> troncatures**, qui dépense quatre appels pour retirer 12 % de la densité. L'arbitrage
+> périmètre/euros est reporté derrière un chiffre à produire à sec, avec sa règle de décision
+> écrite d'avance.
+>
+> Le ratio cité ci-dessous est corrigé au passage : ni 1,16 (configuration) ni 0,78 (récolte
+> incomplète divisée par une population complète), mais **0,91 en moyenne et 1,57 au 9ᵉ
+> décile**, mesurés sur les cellules qui n'ont pas tronqué. C'est le décile qui dimensionne.
 
 **Constat.** D16 promettait 692 cellules pour 1 000 appels gratuits. Le réel : 653 cellules
 mères, 212 tronquées, 664 filles créées au premier niveau, 184 au second. 900 appels dépensés,
@@ -207,6 +222,19 @@ sur un trottoir, ou pas du tout.
 
 ## 7. L'effectif manque là où il décide, et c'est structurel
 
+> **Tranché le 29 août** — voir D31 et
+> [`technique/12-justesse-du-verdict.md`](technique/12-justesse-du-verdict.md). **Et la mesure
+> a réfuté l'option recommandée plus bas.** Testés sur les 387 établissements dont la coupure
+> et l'effectif sont connus, la durée de la coupure, le nombre de jours, la catégorie et
+> l'amplitude ne s'écartent pas du taux de base. Ce qui manque n'est pas une règle plus fine :
+> ce sont **1 506 tranches d'effectif déjà en base** que l'appariement n'atteint pas, parce
+> qu'il exige un nom que 717 enregistrements SIRENE n'ont pas.
+>
+> Deux chiffres de la section ci-dessous sont faux et conservés tels quels : le plafond d'un
+> appariement parfait n'est pas 41 % mais **56 %** (2 480 tranches exploitables pour 4 465
+> établissements) ; et la règle de repli n'est pas « binaire à 70 heures » en pratique, elle
+> ne déplace que **45 fiches sur 843**.
+
 **Constat.** 1 585 établissements sont appariés à SIRENE (35 %), mais seuls 974 en retirent un
 effectif (22 %) : SIRENE lui-même ne connaît la tranche que pour 2 485 de ses 6 010
 enregistrements. **Même un appariement parfait plafonnerait autour de 41 %.** Améliorer
@@ -262,6 +290,11 @@ toucher au quota.
 5. **Axe 5** puis **6** — ce qui fait revenir l'utilisateur, et le terrain où il est.
 6. **Axe 7** — le plus profond, le moins urgent : il améliore une base qui tourne déjà.
 7. **Axe 8** — au fil de l'eau, en accompagnement des précédents.
+
+> **Révisé le 29 août.** Les axes 1, 2, 3, 4 et 7 sont tranchés — D27, D28, D30 et D31 — et
+> attendent d'être construits. L'axe 8 a par ailleurs commencé : D29 a tranché le sort des
+> horaires inconnus. Restent à instruire, dans cet ordre : **axe 5** (suivi des candidatures),
+> puis **axe 6** (mise en page mobile).
 
 ## Ce que je n'ai pas retenu, et pourquoi
 

@@ -1,4 +1,4 @@
-import { and, eq, gte, ilike, inArray, or, type SQL } from 'drizzle-orm'
+import { and, eq, gte, ilike, inArray, isNull, or, type SQL } from 'drizzle-orm'
 import { restaurant } from './db/schema'
 
 /**
@@ -21,7 +21,12 @@ export interface Filters {
   categories: string[]
   teamSize: 'petit' | 'moyen' | 'grand' | ''
   q: string
+  /** Bring back the establishments whose hours Google does not publish. Off by default. */
+  includeUnknownHours: boolean
 }
+
+/** The only Google business status the directory lists. See D29. */
+const OPERATIONAL = 'OPERATIONAL'
 
 /** Inverse of the headcount table in lib/hours: keep the brackets in sync with it. */
 const HEADCOUNT_CODES_BY_SIZE: Record<string, string[]> = {
@@ -43,11 +48,15 @@ export function parseFilters(params: Record<string, string | string[] | undefine
     categories: toList(params.categorie),
     teamSize: one('taille') as Filters['teamSize'],
     q: one('q').trim(),
+    includeUnknownHours: one('inconnus') === '1',
   }
 }
 
-/** Filtering rests entirely on the denormalized columns: no inference here. */
-export function buildConditions(f: Filters): SQL | undefined {
+/**
+ * What the reader asked for. Filtering rests entirely on the denormalized columns: no
+ * inference here.
+ */
+function userConditions(f: Filters): SQL[] {
   const c: (SQL | undefined)[] = []
 
   if (f.zones.length) c.push(inArray(restaurant.inseeCode, f.zones))
@@ -70,13 +79,53 @@ export function buildConditions(f: Filters): SQL | undefined {
     c.push(or(ilike(restaurant.name, `%${f.q}%`), ilike(restaurant.commune, `%${f.q}%`)))
   }
 
-  const active = c.filter(Boolean) as SQL[]
-  return active.length ? and(...active) : undefined
+  return c.filter(Boolean) as SQL[]
+}
+
+/**
+ * What the directory leaves out, whatever the search.
+ *
+ * Two very different silences, and only one of them is the reader's to lift:
+ *
+ *  - **Google says the place is shut.** That is not missing information, it is information:
+ *    a closed restaurant is not an employer. It never appears, and the screen says how many
+ *    were set aside rather than letting the count drop without a word.
+ *  - **Google publishes no hours.** Measured: those establishments match SIRENE 8% of the
+ *    time against 41% for the rest, and carry a phone number once in five against nine in
+ *    ten. Thin sheets, and the tool can say nothing about the one thing it exists to say.
+ *    They are set aside BY DEFAULT and come back in one click — the spec forbids hiding
+ *    what we do not know, not leaving it out of the default answer.
+ */
+function exclusions(f: Filters): SQL[] {
+  const out: SQL[] = []
+
+  const stillTrading = or(isNull(restaurant.businessStatus), eq(restaurant.businessStatus, OPERATIONAL))
+  if (stillTrading) out.push(stillTrading)
+
+  if (!f.includeUnknownHours) out.push(eq(restaurant.hasHours, true))
+
+  return out
+}
+
+export function buildConditions(f: Filters): SQL | undefined {
+  const all = [...userConditions(f), ...exclusions(f)]
+  return all.length ? and(...all) : undefined
+}
+
+/**
+ * The same search WITHOUT the exclusions.
+ *
+ * This is what the count line reports on: "349 set aside" only means something measured
+ * against the reader's own criteria, not against the whole table.
+ */
+export function buildUserConditions(f: Filters): SQL | undefined {
+  const c = userConditions(f)
+  return c.length ? and(...c) : undefined
 }
 
 export function countActive(f: Filters): number {
   return [
     f.zones.length > 0, !!f.splitShift, !!f.weekend, f.twoDaysOff,
-    f.categories.length > 0, !!f.teamSize, !!f.q,
+    f.categories.length > 0, !!f.teamSize, !!f.q, f.includeUnknownHours,
   ].filter(Boolean).length
 }
