@@ -1,6 +1,6 @@
-import { and, asc, count, eq, gt, or } from 'drizzle-orm'
+import { and, asc, count, eq, gt, or, sql } from 'drizzle-orm'
 import { db } from './db/client'
-import { restaurant } from './db/schema'
+import { cell, restaurant, sireneEstablishment } from './db/schema'
 import { buildConditions, type Filters } from './filters'
 
 import { PAGE_SIZE } from './config'
@@ -92,4 +92,47 @@ export async function fetchPage(filters: Filters, cursor: Cursor | null): Promis
 export async function countResults(filters: Filters): Promise<number> {
   const [row] = await db.select({ n: count() }).from(restaurant).where(buildConditions(filters))
   return row?.n ?? 0
+}
+
+export interface SweepProgress {
+  /** Establishments the sweep has actually brought back. */
+  found: number
+  /** Cells queried at least once. */
+  queried: number
+  /** Cells never queried yet. */
+  pending: number
+  /** Cells that returned the 20-result cap and still owe their subdivisions. */
+  truncated: number
+  /** Cells created so far. It GROWS as truncations are discovered. */
+  known: number
+  /** SIRENE establishments in the perimeter — an exhaustive reference for scale. */
+  sirene: number
+}
+
+/**
+ * How far the sweep has got, in measured quantities only.
+ *
+ * There is deliberately no "estimated total" here. A truncated cell returned exactly 20
+ * results and hid an unknown number beyond that: the data is censored, so any total would
+ * be a guess dressed as a measurement. Worse, extrapolating from the measured
+ * Google/SIRENE ratio understates it precisely where it matters — a cell truncates
+ * *because* its density exceeds that ratio.
+ *
+ * `known` is not a finish line either: resolving a truncation creates four new cells, so
+ * the denominator rises as the sweep advances. Saying "900 of 1,501" would promise a
+ * fixed target that does not exist.
+ */
+export async function fetchSweepProgress(): Promise<SweepProgress> {
+  const [row] = await db
+    .select({
+      found: sql<number>`(SELECT count(*) FROM ${restaurant})::int`,
+      queried: sql<number>`count(*) FILTER (WHERE ${cell.status} <> 'pending')::int`,
+      pending: sql<number>`count(*) FILTER (WHERE ${cell.status} = 'pending')::int`,
+      truncated: sql<number>`count(*) FILTER (WHERE ${cell.status} = 'truncated')::int`,
+      known: sql<number>`count(*)::int`,
+      sirene: sql<number>`(SELECT count(*) FROM ${sireneEstablishment})::int`,
+    })
+    .from(cell)
+
+  return row ?? { found: 0, queried: 0, pending: 0, truncated: 0, known: 0, sirene: 0 }
 }

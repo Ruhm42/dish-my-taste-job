@@ -1,13 +1,14 @@
-import { count, inArray, like } from 'drizzle-orm'
+import { count, like } from 'drizzle-orm'
 import { Suspense } from 'react'
 import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
-import { cell, restaurant } from '@/lib/db/schema'
+import { restaurant } from '@/lib/db/schema'
 import { countActive, parseFilters } from '@/lib/filters'
-import { countResults, fetchPage } from '@/lib/results'
+import { countResults, fetchPage, fetchSweepProgress } from '@/lib/results'
 import { Account } from '@/components/account'
 import { FiltersPanel } from '@/components/filters'
 import { Results } from '@/components/results'
+import { SweepBanner } from '@/components/sweep-banner'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,11 +36,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
     .select({ demo: count() })
     .from(restaurant).where(like(restaurant.googlePlaceId, 'demo-%'))
 
-  // Cells still owed a query: while this is above zero, the densest streets are
+  // How far the sweep has got. While anything is still owed, the densest streets are
   // under-counted, and saying so is what separates an incomplete list from a misleading one.
-  const [{ owed }] = await db
-    .select({ owed: count() })
-    .from(cell).where(inArray(cell.status, ['pending', 'truncated']))
+  const progress = await fetchSweepProgress()
+  const sweepUnfinished = progress.pending + progress.truncated > 0
 
   // The search as the user expressed it, handed to the API verbatim so the next pages come
   // from exactly the same query. Rebuilding it from the parsed filters would risk drifting.
@@ -66,11 +66,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
           <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
             Données de démonstration — établissements fictifs, en attendant le premier balayage.
           </p>
-        ) : owed > 0 ? (
-          <p className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-            Balayage en cours — les rues les plus denses sont encore sous-représentées.
-            Certains établissements manquent à l’appel.
-          </p>
+        ) : sweepUnfinished ? (
+          <SweepBanner progress={progress} />
         ) : null}
       </header>
 
