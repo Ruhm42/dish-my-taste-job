@@ -128,3 +128,12 @@ export const SWEEP = {
 
 /** Places content retention period imposed by the Google terms of service (D7). */
 export const HOURS_TTL_DAYS = 30
+
+/**
+ * Rows per page in the results list.
+ *
+ * Lives here rather than in lib/results.ts because the client list needs the value:
+ * importing it from the query module would drag the Postgres client into the browser
+ * bundle, which is exactly what broke the build once.
+ */
+export const PAGE_SIZE = 50

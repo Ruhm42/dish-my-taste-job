@@ -39,6 +39,13 @@ export async function middleware(request: NextRequest) {
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 
   if (!user && !isPublic) {
+    // An API caller cannot follow a redirect to a login page: fetch() would happily
+    // receive the HTML and the infinite scroll would append nothing, silently. A 401 is
+    // something the client can actually react to.
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'non autorisé' }, { status: 401 })
+    }
+
     const to = request.nextUrl.clone()
     to.pathname = '/login'
     // Come back where the user was headed once they are in.
