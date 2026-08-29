@@ -24,9 +24,17 @@ if (!url) throw new Error('DATABASE_URL is missing — copy .env.example to .env
  */
 const isTransactionPooler = url.includes(':6543')
 
+/**
+ * Timeouts are not optional on serverless.
+ *
+ * Without `connect_timeout`, postgres.js waits indefinitely for a connection that may
+ * never come — a failure then shows up as a 300-second function timeout instead of an
+ * error, which is far harder to diagnose. `idle_timeout` releases a connection the
+ * pooler would otherwise keep parked.
+ */
 const options: Parameters<typeof postgres>[1] = isTransactionPooler
-  ? { max: 1, prepare: false }
-  : { max: 5 }
+  ? { max: 1, prepare: false, connect_timeout: 15, idle_timeout: 20 }
+  : { max: 5, connect_timeout: 15 }
 
 // A single connection reused in dev, so it survives Next's hot reload.
 const global_ = globalThis as unknown as { _sql?: ReturnType<typeof postgres> }

@@ -557,3 +557,49 @@ résultats.
 **extrêmes** de la distribution, pas sa moyenne, quand c'est la queue qui gouverne le coût.
 Les 8 cellules avaient été choisies réparties du plus petit au plus grand rayon — ce qui
 échantillonnait la taille des cellules, pas la densité Google qu'elles contenaient.
+
+---
+
+## D23 — Jamais de requêtes concurrentes sur une connexion poolée
+
+**Contexte.** La production est tombée : `GET /recherche` échouait après **300 secondes**,
+alors que la requête en cause s'exécute en **5,35 ms** (`EXPLAIN ANALYZE`, plan optimal, base
+à 9 connexions sur 60). Le message réel, trouvé dans les journaux de l'hébergeur, était
+`57014 canceling statement due to statement timeout` : Postgres tuait une requête qui
+**attendait**, pas une requête lente.
+
+La page était passée de 2 à 4 requêtes en `Promise.all`, en deux ajouts successifs — un
+compteur de données de démonstration, puis un compteur de couverture du balayage. Aucun
+n'était coûteux. **C'est leur concurrence qui l'était.**
+
+Le pooling en mode transaction attribue un backend **par transaction**, et le client
+serverless ne tient qu'une seule connexion. Des requêtes pipelinées sur cette connexion
+peuvent attendre un backend qui n'arrive jamais, jusqu'à expiration.
+
+**Options écartées**
+- *Augmenter le nombre de connexions du client* — annule la raison d'être du pooling
+  transactionnel en serverless : une instance par requête, chacune avec son pool.
+- *Passer au pooling en mode session* — supporte le pipelining, mais garde les connexions
+  ouvertes ; l'offre gratuite en compte 60, quelques dizaines d'instances suffiraient à les
+  épuiser.
+- *Allonger le `statement_timeout`* — traiterait le symptôme et transformerait une page en
+  erreur en une page qui met deux minutes.
+
+**Décision.** Les requêtes de la page s'exécutent **séquentiellement**, jamais en
+`Promise.all`. Et `connect_timeout` / `idle_timeout` sont posés sur le client : sans eux, une
+connexion qui n'aboutit pas attend indéfiniment, ce qui transforme une erreur immédiate en
+blocage de 300 secondes.
+
+**Conséquences.** Trois allers-retours au lieu de quatre requêtes concurrentes, pour un coût
+négligeable : chacune tient en quelques millisecondes. Vérifié en production sous la
+condition qui déclenchait la panne — 15 chargements successifs puis 12 requêtes simultanées,
+**tous en HTTP 200**.
+
+**Leçon de méthode.** J'avais validé le déploiement précédent sur **un seul** chargement
+réussi. Sur un défaut intermittent, un essai ne prouve rien : c'est la répétition sous
+charge qui vérifie, pas la première réponse encourageante.
+
+> Corollaire adopté au passage : la page ne fait plus `SELECT *`. Elle ne lisait jamais
+> `raw_opening_hours`, la colonne la plus volumineuse de la table. Le type de ligne est
+> restreint aux colonnes réellement affichées, de sorte qu'ajouter un champ au rendu sans
+> l'ajouter à la requête **ne compile pas**.

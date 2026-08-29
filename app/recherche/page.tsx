@@ -15,24 +15,60 @@ import { WeekGrid } from '@/components/week-grid'
 export const dynamic = 'force-dynamic'
 
 type Params = Promise<Record<string, string | string[] | undefined>>
-type RestaurantRow = typeof restaurant.$inferSelect
+/**
+ * Exactly the columns the list renders — `raw_opening_hours` is the largest column in the
+ * table and nothing here reads it. Narrowing the type rather than using $inferSelect means
+ * adding a field to the JSX without adding it to the query fails to compile, instead of
+ * silently reading undefined.
+ */
+type RestaurantRow = Pick<typeof restaurant.$inferSelect,
+  | 'id' | 'name' | 'commune' | 'lat' | 'lng' | 'phone' | 'formattedAddress'
+  | 'googlePlaceId' | 'category' | 'headcountCode' | 'splitShiftRisk' | 'confidence'
+  | 'closedWeekend' | 'maxConsecutiveDaysOff' | 'explanation' | 'schedule'>
 
 export default async function SearchPage({ searchParams }: { searchParams: Params }) {
   const user = await getUser()
   const filters = parseFilters(await searchParams)
   const where = buildConditions(filters)
 
-  const [results, [{ total }], [{ demo }], [{ owed }]] = await Promise.all([
-    db.select().from(restaurant).where(where).orderBy(asc(restaurant.name)).limit(200),
-    db.select({ total: count() }).from(restaurant).where(where),
-    // Derived rather than hard-coded: a banner that has to be removed by hand is a banner
-    // that eventually lies about which data is on screen.
-    db.select({ demo: count() }).from(restaurant).where(like(restaurant.googlePlaceId, 'demo-%')),
-    // Cells still owed a query. While this is above zero the densest streets are
-    // under-counted, and saying so is the difference between an incomplete list and a
-    // misleading one.
-    db.select({ owed: count() }).from(cell).where(inArray(cell.status, ['pending', 'truncated'])),
-  ])
+  // Sequential, never Promise.all.
+  //
+  // Supabase's transaction pooler hands out a backend PER TRANSACTION, and the serverless
+  // client holds a single connection. Queries pipelined on that one connection can sit
+  // waiting for a backend that never arrives, until Postgres kills them with
+  // `57014 canceling statement due to statement timeout` — a five-millisecond query
+  // failing after two minutes of waiting. That is what took production down; the queries
+  // were never slow, they were concurrent.
+  //
+  // Only the columns the page actually renders: `raw_opening_hours` is the largest column
+  // in the table and nothing here reads it.
+  const results = await db
+    .select({
+      id: restaurant.id, name: restaurant.name, commune: restaurant.commune,
+      lat: restaurant.lat, lng: restaurant.lng, phone: restaurant.phone,
+      formattedAddress: restaurant.formattedAddress, googlePlaceId: restaurant.googlePlaceId,
+      category: restaurant.category, headcountCode: restaurant.headcountCode,
+      splitShiftRisk: restaurant.splitShiftRisk, confidence: restaurant.confidence,
+      closedWeekend: restaurant.closedWeekend,
+      maxConsecutiveDaysOff: restaurant.maxConsecutiveDaysOff,
+      explanation: restaurant.explanation, schedule: restaurant.schedule,
+    })
+    .from(restaurant).where(where).orderBy(asc(restaurant.name)).limit(200)
+
+  const [{ total }] = await db.select({ total: count() }).from(restaurant).where(where)
+
+  // Both banners are derived rather than hard-coded: a banner someone has to remember to
+  // remove is a banner that eventually lies about what is on screen. Neither is filtered —
+  // they describe the database, not the current search.
+  const [{ demo }] = await db
+    .select({ demo: count() })
+    .from(restaurant).where(like(restaurant.googlePlaceId, 'demo-%'))
+
+  // Cells still owed a query: while this is above zero, the densest streets are
+  // under-counted, and saying so is what separates an incomplete list from a misleading one.
+  const [{ owed }] = await db
+    .select({ owed: count() })
+    .from(cell).where(inArray(cell.status, ['pending', 'truncated']))
 
   const points = results.map((r) => ({
     id: r.id, name: r.name, lat: r.lat, lng: r.lng, splitShiftRisk: r.splitShiftRisk,
