@@ -124,7 +124,7 @@ export function ResultList({
               onClick={onLoadMore}
               className="rounded border border-stone-300 px-3 py-1.5 text-stone-600 hover:bg-stone-100"
             >
-              Voir les {Math.min(PAGE_SIZE, total - rows.length)} suivants
+              Voir les {Math.max(0, Math.min(PAGE_SIZE, total - rows.length))} suivants
             </button>
           ) : (
             `Fin de la liste — ${rows.length} établissement${rows.length > 1 ? 's' : ''}`

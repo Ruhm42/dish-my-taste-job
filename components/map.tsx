@@ -1,7 +1,7 @@
 'use client'
 
 import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CATEGORY_LABELS, CATEGORY_SHAPES, SHAPE_LEGEND, SPLIT_SHIFT_BADGES } from './badges'
 import type { Category, SplitShiftRisk } from '@/lib/hours'
 
@@ -160,6 +160,10 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
   const emphasised = useRef<Set<string>>(new Set())
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Whether the map's own box is on screen. On a phone the map lives in a tab that starts
+  // closed, and a `display:none` container has no tile to load, no size to fit to, and
+  // nothing worth paying a map load for.
+  const [visible, setVisible] = useState(false)
 
   // Through refs: a marker listener is registered once, but the parent hands down a new
   // function on every render. Without this, every render would rebuild every marker.
@@ -181,6 +185,43 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
   useEffect(() => onKeyRefused(() => setError(KEY_REFUSED)), [])
 
   /**
+   * Nothing happens until the map has a box on screen.
+   *
+   * Below `lg` the map sits in a tab that starts closed, so on first paint its container is
+   * `display:none`. A Map created there never loads a tile, which made the watchdog below
+   * fire against a map that was merely hidden and pin the "Google did not paint" preview on
+   * for the rest of the visit — a false diagnosis sending the reader after the API key.
+   *
+   * Measuring the box rather than reading a `mobileView` prop keeps this true whatever the
+   * reason the container is hidden, and keeps the map ignorant of the layout around it.
+   *
+   * `getClientRects()` is empty exactly when the element generates no box, which is what
+   * `display:none` means. A size test looks equivalent and is not: measured in a browser,
+   * a displayed container still reported `offsetWidth` 0 while its height was already 300,
+   * so `offsetWidth > 0` would have held the map shut for good — a worse failure than the
+   * one being fixed.
+   */
+  const measure = useCallback(() => {
+    const el = container.current
+    setVisible(!!el && el.getClientRects().length > 0)
+  }, [])
+
+  // After every render, because switching to the map tab re-renders this component and that
+  // is the case the guard exists for. Not left to the observer alone: its callbacks are not
+  // delivered while the page is not being rendered, which is measurable in a hidden tab.
+  useEffect(measure)
+
+  // And for the changes that re-render nothing: crossing the `lg` breakpoint reveals the map
+  // through a media query, with React none the wiser.
+  useEffect(() => {
+    const el = container.current
+    if (!el) return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [measure])
+
+  /**
    * Single instantiation.
    *
    * A map load is billed per `new google.maps.Map()`, never per pan or zoom. The map is
@@ -188,14 +229,14 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
    * billable load. See .specs/technique/02-budget-google-et-garde-fous.md
    */
   useEffect(() => {
-    if (!ready || !container.current || map.current) return
+    if (!ready || !visible || !container.current || map.current) return
     map.current = new google.maps.Map(container.current, {
       center: { lat: 45.757, lng: 4.832 },
       zoom: 12,
       mapTypeControl: false,
       streetViewControl: false,
     })
-  }, [ready])
+  }, [ready, visible])
 
   /**
    * The map has to prove it painted.
@@ -209,11 +250,16 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
    * timeout means the map did not draw, whatever the reason, and the preview takes over.
    */
   useEffect(() => {
-    if (!ready || !map.current) return
+    if (!ready || !visible || !map.current) return
     const timer = setTimeout(() => setError((current) => current ?? NEVER_PAINTED), FIRST_PAINT_TIMEOUT_MS)
-    const listener = google.maps.event.addListenerOnce(map.current, 'tilesloaded', () => clearTimeout(timer))
+    const listener = google.maps.event.addListenerOnce(map.current, 'tilesloaded', () => {
+      clearTimeout(timer)
+      // A tile arriving after the deadline must be able to undo the verdict. A refused key
+      // must not: that one is a real failure and stays.
+      setError((current) => (current === NEVER_PAINTED ? null : current))
+    })
     return () => { clearTimeout(timer); listener.remove() }
-  }, [ready])
+  }, [ready, visible])
 
   // Markers are reconciled, not rebuilt: changing one filter usually keeps most of the
   // points, and rebuilding four thousand Google objects to add ten is what makes a map
@@ -309,7 +355,7 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
   // reader is browsing. It now has every result from the start, so the frame it computes is
   // the true extent of the search rather than that of the first fifty names.
   useEffect(() => {
-    if (!ready || !map.current || points.length === 0) return
+    if (!ready || !visible || !map.current || points.length === 0) return
     const bounds = new google.maps.LatLngBounds()
     points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }))
     map.current.fitBounds(bounds, 48)
@@ -321,7 +367,7 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
       if ((m.getZoom() ?? 0) > 15) m.setZoom(15)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately not `points`
-  }, [ready, fitKey])
+  }, [ready, visible, fitKey])
 
   // A map that fails to load must not leave an empty frame: fall back to the preview,
   // which stays usable.

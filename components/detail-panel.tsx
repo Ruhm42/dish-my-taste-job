@@ -49,9 +49,17 @@ export function DetailPanel({ id, initial, onClose }: Props) {
     setRow(null)
 
     fetch(`/api/etablissements/${id}`)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error())))
+      .then((response) => {
+        if (response.ok) return response.json()
+        // The status is the message. A 401 is an expired session and a 404 an establishment
+        // that is no longer listed; collapsing both into "could not be loaded" sends the
+        // reader hunting for a fault that is not there.
+        if (response.status === 401) throw new Error('Ta session a expiré — reconnecte-toi.')
+        if (response.status === 404) throw new Error('Cet établissement n’est plus listé.')
+        throw new Error('La fiche n’a pas pu être chargée.')
+      })
       .then((fetched: ResultRow) => { if (!cancelled) setRow(fetched) })
-      .catch(() => { if (!cancelled) setError('La fiche n’a pas pu être chargée.') })
+      .catch((e: Error) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
@@ -63,9 +71,21 @@ export function DetailPanel({ id, initial, onClose }: Props) {
     if (!id) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
-    closeButton.current?.focus()
     return () => window.removeEventListener('keydown', onKey)
   }, [id, onClose])
+
+  /**
+   * Focus moves when the panel OPENS, and only then.
+   *
+   * Sharing the effect above meant depending on `onClose`, which the parent rebuilt on every
+   * render — including on every marker hover. With a card open, typing in the search field
+   * pulled the caret back to ✕ after the first letter, and the next space bar closed the
+   * panel. Keyed on the id alone, it fires once per establishment.
+   */
+  useEffect(() => {
+    if (!id) return
+    closeButton.current?.focus()
+  }, [id])
 
   if (!id) return null
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Cursor, Excluded, PointRow, ResultRow } from '@/lib/results'
 import { DetailPanel } from './detail-panel'
 import { FiltersPanel } from './filters'
@@ -80,17 +80,32 @@ export function SearchScreen({
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [revealJobBoards, setRevealJobBoards] = useState(false)
 
-  // A new search replaces the rows: without this, changing a filter would append the new
-  // results underneath the old ones. The view and the selection survive on purpose — a
+  /**
+   * Which search the rows on screen belong to.
+   *
+   * Replacing the rows is not enough on its own: a `loadMore` fired just before a filter
+   * changed answers afterwards, and appended the previous search's page onto the new list.
+   * Those establishments match no active filter and carry no marker on the map, and the
+   * cursor then walks the wrong ordering, so every further page is wrong too. Silently wrong
+   * data is this project's stated worst failure mode, so the answer is stamped and checked.
+   */
+  const generation = useRef(query)
+
+  // A new search replaces the rows. The view and the selection survive on purpose — a
   // reader who is looking at the map should not be sent back to the list by a filter.
   useEffect(() => {
+    generation.current = query
     setRows(initialRows)
     setCursor(initialCursor)
     setError(null)
-  }, [initialRows, initialCursor])
+    // Without this a fetch in flight leaves `loading` stuck true, and the guard in
+    // `loadMore` then refuses to load the new search's second page at all.
+    setLoading(false)
+  }, [query, initialRows, initialCursor])
 
   const loadMore = useCallback(async () => {
     if (!cursor || loading) return
+    const mine = query
     setLoading(true)
     setError(null)
     try {
@@ -102,6 +117,10 @@ export function SearchScreen({
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
       const page = (await response.json()) as { rows: ResultRow[]; nextCursor: Cursor | null }
+      // The search moved on while this was in flight: this page belongs to a list that is no
+      // longer on screen. Dropping it is the whole point of the stamp above.
+      if (generation.current !== mine) return
+
       // Guard against a double fire: the observer can trigger twice before state settles,
       // and appending the same page twice would duplicate keys.
       setRows((current) => {
@@ -111,10 +130,11 @@ export function SearchScreen({
       setCursor(page.nextCursor)
     } catch {
       // Said out loud, with a way to retry. A scroll that quietly stops reads exactly like
-      // "there is nothing more", which would be a lie.
-      setError('Le chargement de la suite a échoué.')
+      // "there is nothing more", which would be a lie. Not for a search nobody is reading
+      // any more, though — that would pin a stale failure onto a list that is fine.
+      if (generation.current === mine) setError('Le chargement de la suite a échoué.')
     } finally {
-      setLoading(false)
+      if (generation.current === mine) setLoading(false)
     }
   }, [cursor, loading, query])
 
@@ -128,6 +148,9 @@ export function SearchScreen({
   // Picking a marker on the small-screen map opens the panel over it; picking a row and
   // landing on the list is the same gesture. Nothing else changes view on its own.
   const select = useCallback((id: string) => setSelectedId(id), [])
+  // Memoised like `select`, and for the same reason: an inline arrow here is a new identity
+  // on every render, and the panel keys its focus effect on it.
+  const closePanel = useCallback(() => setSelectedId(null), [])
 
   // Through the URL like every other filter, so a search that includes them can be
   // bookmarked and sent on like any other.
@@ -312,7 +335,7 @@ export function SearchScreen({
           <DetailPanel
             id={selectedId}
             initial={preloaded}
-            onClose={() => setSelectedId(null)}
+            onClose={closePanel}
           />
         </div>
       </main>
