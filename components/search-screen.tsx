@@ -22,6 +22,33 @@ interface Props {
 type MobileView = 'liste' | 'carte'
 
 /**
+ * Bring an element into view, scrolling its container by hand.
+ *
+ * `scrollIntoView` looks like the obvious call and does nothing here: it walks up to the
+ * document's scrolling element, which cannot move on a screen-height layout, and never
+ * touches a `position: fixed` ancestor — which is exactly what the filter drawer is on a
+ * phone. Measured: the drawer opened, the block stayed 794px down a 760px window, and its
+ * scrollTop never left zero.
+ */
+function revealElement(id: string): void {
+  const element = document.getElementById(id)
+  if (!element) return
+
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node)
+    const scrollable = (overflowY === 'auto' || overflowY === 'scroll')
+      && node.scrollHeight > node.clientHeight
+    if (!scrollable) continue
+    const delta = element.getBoundingClientRect().top - node.getBoundingClientRect().top
+    node.scrollTo({ top: node.scrollTop + delta, behavior: 'smooth' })
+    return
+  }
+
+  // No scrollable ancestor: the page itself is what moves.
+  element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+/**
  * The search screen: filters, list and map, driven by one selection.
  *
  * The two surfaces render the same set — the one that passes the filters — but not at the
@@ -109,7 +136,7 @@ export function SearchScreen({
 
   useEffect(() => {
     if (!revealJobBoards) return
-    document.getElementById('offres')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    revealElement('offres')
     setRevealJobBoards(false)
   }, [revealJobBoards])
 
