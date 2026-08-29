@@ -16,10 +16,12 @@ Two consequences worth holding on to:
 - **`vercel deploy` uploads the working tree and builds remotely.** It does not build from a
   git ref, and it does not ship your local build. So the tree — including untracked files
   `.gitignore` does not cover — is what becomes production.
-- **The deployed commit cannot be read back from Vercel.** `vercel inspect --json` carries no
-  git fields at all (`id, name, url, target, readyState, createdAt, aliases, builds,
-  contextName`). Stamp it yourself at deploy time, or you will never be able to say what is
-  running.
+- **The deployed commit is recoverable, but not from `vercel inspect`.** That command's
+  `--json` carries no git fields at all (`id, name, url, target, readyState, createdAt,
+  aliases, builds, contextName`). `vercel ls --prod --json` does: every deployment carries a
+  `meta` object holding `githubCommitSha`, which Vercel derives from the local git repo even
+  on a CLI deploy. That SHA describes **HEAD, not the tree** — a dirty tree reports a commit
+  it did not ship, which is one more reason section 1 demands a clean one.
 
 ---
 
@@ -199,8 +201,9 @@ npx vercel deploy --prod --yes --logs -m commit=$(git rev-parse HEAD)
 as section 1. This is the only output that says whether the artifact about to serve
 production actually compiled.
 
-`-m commit=…` stamps the deployed SHA into deployment metadata — the only way to answer
-"what is running?" later.
+`-m commit=…` writes the SHA into `meta.commit`. Vercel records `meta.githubCommitSha` on
+its own too, so this is belt and braces — but it is explicit, and it survives if the
+automatic field ever stops being populated.
 
 Keep the deployment hostname it prints, then assert the state machine-readably:
 
@@ -303,14 +306,26 @@ change the port in the value deployed on Vercel. `SELECT` only.
 ### What changed since the last deploy
 
 ```bash
+PREV=$(npx vercel ls --prod --json 2>/dev/null | python3 -c "
+import json,sys
+d = json.load(sys.stdin)['deployments']
+print(next((x['meta'].get('githubCommitSha') or x['meta'].get('commit','') for x in d[1:] if x['state']=='READY'), ''))")
+echo "previous production commit: ${PREV:-unknown}"
+```
+
+```bash
 files=$(git diff --name-only "$PREV"..HEAD) || echo "BAD REF — cannot say what changed"
 printf '%s\n' "$files" | grep -E '^(app|components|lib|middleware|next\.config|package(-lock)?\.json|drizzle)' || echo "no runtime code changed"
 ```
 
-`$PREV` is the SHA stamped by `-m commit=` on the previous deploy. **If no earlier deploy was
-stamped, the previously deployed commit is unknown — say so and skip this.** Never guess a
-ref: keep the two commands split, because `|| echo` on a single pipeline swallows git's
-"unknown revision" and prints the reassuring message instead.
+`d[1:]` skips the deployment you just published; the first `READY` entry after it is the one
+that was live before. Filtering on `READY` matters — `vercel ls --prod` lists `● Error` rows
+too, and those never served anything.
+
+If `PREV` comes back empty, say the previously deployed commit is unknown and skip the diff
+rather than guessing a ref. Keep the last two commands split: `|| echo` on a single pipeline
+swallows git's "unknown revision" and prints the reassuring "no runtime code changed"
+instead.
 
 ## 6. If it went wrong
 
