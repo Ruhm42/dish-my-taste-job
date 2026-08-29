@@ -60,7 +60,23 @@ Trois invariants, qui tiennent ensemble :
 Ce qui ne change pas : le total dépensé par un balayage reste enregistré et lisible. C'est
 lui qui a permis d'écrire D22. Il cesse simplement de piloter le refus.
 
-### Le plafond journalier est une contrainte distincte, et il est plus bas
+### ~~Le plafond journalier est une contrainte distincte, et il est plus bas~~
+
+> **Faux, mesuré le 29 août.** Le plafond journalier posé sur `SearchNearbyRequest` vaut
+> **1 000**, pas 800 : c'est ce que tabule [`02-budget-google-et-garde-fous.md`](02-budget-google-et-garde-fous.md)
+> depuis le 28 août, et ce que renvoie la lecture directe du quota. La section ci-dessous
+> lit le 800 de D15, qui avait déjà été relevé — précisément parce qu'il passait sous notre
+> compteur de 900. L'ordre `900 < 1 000` tient, une exécution peut donc dépenser le mois
+> entier d'un seul tenant, et **aucun plafond journalier local n'est posé**.
+>
+> Ce qui reste vrai de la section : la reprise doit pouvoir être rejouée dans le mois sans
+> rien replanifier. Elle le permet.
+>
+> S'ajoute une contrainte que cette spec n'avait pas vue : la période du quota se compte en
+> **heure du Pacifique**, celle où Cloud Billing bascule son cycle. Comptée en UTC, elle
+> remettrait notre compteur à zéro huit heures avant celui de Google — et la tâche planifiée
+> se déclenche dans cette fenêtre.
+
 
 [D15](../DECISIONS.md) a posé `SearchNearbyRequest` à **800 par jour**. Le plafond du script
 est à 900. L'ordre annoncé dans `CLAUDE.md` — « compteur du script (900) < plafond journalier

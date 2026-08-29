@@ -27,26 +27,31 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { count, inArray } from 'drizzle-orm'
 import { db } from '../lib/db/client'
 import { cell } from '../lib/db/schema'
+import { countUnfinished } from '../lib/coverage'
 import { COMMUNE_NAMES, DISTRICT_BY_COMMUNE, HOURS_TTL_DAYS } from '../lib/config'
 import { fetchHoursFreshness, type HoursFreshness } from '../lib/results'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 
 /**
- * Cells left to query, all runs taken together.
+ * Cells that still owe a Google call, all runs taken together.
  *
- * `truncated` counts as unfinished just like `pending`: a truncated cell has been paid
- * for, but the subdivisions that recover what it hid have not been queried yet.
+ * A truncated cell has been paid for, but the subdivisions that recover what it hid may
+ * not have been — so it counts as unfinished until they ARE, and not for ever. Counting
+ * every truncated cell as unfinished, which is what this did, could never reach zero:
+ * nothing moves a cell out of `truncated`. Planning would then be skipped for ever, and
+ * every cycle would fail the moment the last pending cell was queried.
+ *
+ * Read whole rather than counted in SQL: coverage is recursive, it is the same rule the
+ * sweep reports its own truncations with, and the table is a few thousand rows.
  */
-async function pendingCellCount(): Promise<number> {
-  const [row] = await db
-    .select({ n: count() })
+async function unfinishedCellCount(): Promise<number> {
+  const cells = await db
+    .select({ id: cell.id, parentId: cell.parentId, status: cell.status })
     .from(cell)
-    .where(inArray(cell.status, ['pending', 'truncated']))
-  return row?.n ?? 0
+  return countUnfinished(cells)
 }
 
 const DISTRICT_LABEL = new Map(
@@ -167,7 +172,7 @@ async function main(): Promise<void> {
   // interrupted sweep would strand the pending subdivisions, re-query the cells already
   // paid for, and spend a whole monthly quota without ever reaching the end — the base
   // would stay incomplete while the bill says otherwise. Finish what was started first.
-  const unfinished = await pendingCellCount()
+  const unfinished = await unfinishedCellCount()
   const skipPlanning = unfinished > 0
 
   if (skipPlanning) {
@@ -203,7 +208,7 @@ async function main(): Promise<void> {
   // base would be claiming a freshness it does not have.
   const freshness = await fetchHoursFreshness()
   reportFreshness(freshness)
-  const converged = (await pendingCellCount()) === 0
+  const converged = (await unfinishedCellCount()) === 0
 
   if (failure) throw failure
 

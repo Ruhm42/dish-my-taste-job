@@ -345,6 +345,12 @@ l'erreur pointe elle-même vers sa cause.
 > Corrige au passage une erreur de `technique/02` qui annonçait un plafond de ~100/jour :
 > un balayage complet aurait échoué.
 
+> **Le 800/jour posé ici a été relevé à 1 000 le 28 août**, et c'est cette valeur qui est
+> tabulée et vérifiée dans [`technique/02`](technique/02-budget-google-et-garde-fous.md).
+> Motif : le compteur local du script est à 900, donc **au-dessus** de 800 — c'était le
+> `HTTP 429` opaque de Google qui se serait déclenché en premier, jamais notre message.
+> Le chiffre de cette entrée est conservé tel quel : il dit ce qui a été posé ce jour-là.
+
 ---
 
 ## D16 — Réduire le périmètre au cœur dense
@@ -888,10 +894,22 @@ deux jours UTC différents. Le premier balayage l'a masqué par accident — lan
 a réparti ses 900 appels en 248 le 28 août et 652 le 29, sans jamais approcher la limite
 journalière.
 
-> Corrige au passage une erreur de `CLAUDE.md` : « compteur du script (900) < plafond
+> ~~Corrige au passage une erreur de `CLAUDE.md` : « compteur du script (900) < plafond
 > journalier Google (1000) = quota mensuel gratuit » confond le plafond **journalier** (800)
 > et le quota **mensuel** (1 000). L'ordre des garde-fous annoncé était donc faux, et il était
-> inversé : notre compteur était au-dessus de la limite journalière, pas en dessous.
+> inversé : notre compteur était au-dessus de la limite journalière, pas en dessous.~~
+>
+> **Ce paragraphe est faux, et c'est la ligne de `CLAUDE.md` qui avait raison.** Il lit le
+> 800/jour de D15, valeur relevée à **1 000** le 28 août et tabulée comme telle dans
+> [`technique/02`](technique/02-budget-google-et-garde-fous.md) — *« posés et vérifiés »* —,
+> puis confirmée en lecture directe du quota le 29 août. L'ordre `900 < 1 000` tient donc,
+> notre compteur parle bien avant celui de Google, et il n'y avait pas de `HTTP 429`
+> imminent. Le reste de la décision — indexer le refus sur la période du quota — n'en
+> dépend pas : il tient sur le mois, pas sur la journée.
+>
+> Corollaire : **aucun plafond journalier local n'est ajouté.** Sous 900 il n'ajouterait
+> aucune garantie que le mois ne donne déjà, et il amputerait ce qu'un cycle mensuel peut
+> dépenser d'un coup.
 
 Le détail de la reprise, de la fraîcheur des horaires et des critères d'acceptation vit dans
 [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md).

@@ -51,12 +51,9 @@ export const GRID = {
   /** SIRENE establishments targeted per cell. */
   target: 15,
   /**
-   * Maximum radius in meters. It is a COST ceiling, not a truncation threshold.
-   *
-   * The 8-cell calibration this figure came from put truncation at ~265 m; the first real
-   * sweep measured it from 40 m — there are more than twenty Google places inside forty
-   * metres in Presqu'île (D22). No radius avoids truncation in the dense core, so what
-   * this constant buys is a bounded number of cells, and the subdivision does the rest.
+   * Maximum radius in meters. This is the DOMINANT constraint, and it is measured:
+   * beyond ~265 m Google truncates to 20 results, and at 168 m it already returns 18.
+   * 200 m keeps a margin without multiplying the number of cells.
    */
   maxRadius: 200,
   /** A zero radius searches nothing. */
@@ -92,59 +89,52 @@ export const GOOGLE_PLACE_TYPES = ['restaurant', 'cafe', 'bar', 'meal_takeaway']
 export const FREE_MONTHLY_QUOTA = 1000
 
 /**
- * Daily cap we set on `SearchNearbyRequest` in the Google console (D15). It is LOWER than
- * the monthly quota, so it — not the month — is what a single execution runs into first.
- */
-export const GOOGLE_DAILY_NEARBY_CAP = 800
-
-/**
  * Hard ceiling of `Nearby Search`: 20 places per call, the rest is lost with
  * nothing signalling it. That is the very definition of truncation.
  */
 export const MAX_NEARBY_RESULTS = 20
 
 /**
- * Google returns 0.78 establishments where SIRENE counts 1 — 4,465 for 5,720 in perimeter.
- *
- * The 1.16 this replaces came from the 8-cell sample D22 invalidated, and it made the
- * plan's cost forecast lie, which is the one number the perimeter arbitration rests on.
- *
+ * Measured (D16): Google returns 1.16 establishments where SIRENE counts 1.
  * Shared between `plan:cells`, which PREDICTS truncation, and `sweep:google`, which
- * DETECTS it — two diverging values would forecast a cost the sweep never spends, with
- * nothing signalling the gap. Lowering it does raise the bar of the sweep's SECOND
- * truncation signal, from 18 SIRENE points per cell to 26; measured on the 900 cells
- * queried so far, that changes no verdict at all, because only 2 of them ever reached the
- * state where that signal decides alone. The distance of the last result does the work.
+ * DETECTS it — two diverging values would forecast a cost the sweep never spends,
+ * with nothing signalling the gap.
  *
- * Itself a floor, not a ceiling: 601 cells have never been queried, so the true ratio can
- * only be higher than what is measured here.
+ * D30 has since ruled that this ceiling calibrates on the NINTH DECILE of the measured
+ * ratio (1.57) rather than its mean (0.91) — a cell truncates by what it has of the
+ * extreme, never by its average — and caps a cell at 12 SIRENE establishments. Changing
+ * the value belongs to that implementation: lowering it toward the mean would raise the
+ * bar of the sweep's second truncation signal and make the detector LESS sensitive,
+ * which is the direction of a silently incomplete database.
  */
-export const GOOGLE_TO_SIRENE_RATIO = 0.78
+export const GOOGLE_TO_SIRENE_RATIO = 1.16
 
 /**
  * Sweep guard rails.
  *
- * There are two ceilings, not one, and each has to sit under the Google limit it shadows —
- * the point being an explicit message instead of an opaque HTTP 429 mid-sweep:
+ * The order in which they trip matters as much as the values:
  *
- *   maxCallsPerDay (750)     <  Google daily cap for SearchNearbyRequest (800, D15)
- *   maxCallsPerPeriod (900)  <  FREE_MONTHLY_QUOTA (1,000)
+ *   maxCallsPerPeriod (900)  <  Google daily cap on SearchNearbyRequest (1,000)
+ *                            =  FREE_MONTHLY_QUOTA (1,000)
  *
- * The earlier version of this comment collapsed the two into one line and got the order
- * backwards: it read the daily cap as 1,000 and left our counter ABOVE it (D28).
+ * Our counter therefore stops BEFORE the Google ceiling, which yields an explicit message
+ * instead of an opaque HTTP 429 in the middle of the sweep. And because 900 stays under the
+ * free monthly quota, **a period can never on its own cause any billing**, even if the
+ * whole budget goes on subdivisions.
  *
- * The monthly ceiling counts the CALENDAR MONTH, never the sweep. Counting the sweep
+ * The daily cap is recorded at 1,000 in technique/02, *posés et vérifiés le 2026-08-28*.
+ * D15 says 800 — that value was superseded precisely because it sat BELOW this counter.
+ * A separate daily ceiling of our own would therefore protect nothing the month does not
+ * already protect, and any value under 900 would only cut what the monthly cycle can spend
+ * in one go.
+ *
+ * What the ceiling counts is the CALENDAR MONTH, never the sweep. Counting the sweep
  * deadlocked the resume: a run's total can only rise, so once it reached the ceiling no
- * further call could ever be spent, and only a spent call could have moved it.
- *
- * Because the daily ceiling is the lower of the two, one execution can never spend the
- * monthly budget: reaching 900 takes at least two executions on two different UTC days.
+ * further call could ever be spent, and only a spent call could have moved it (D28).
  */
 export const SWEEP = {
   /** Hard ceiling for one quota period — the month Google bills. See lib/quota.ts. */
   maxCallsPerPeriod: 900,
-  /** Hard ceiling for one UTC day. Sits under D15's 800, which is lower than the month. */
-  maxCallsPerDay: 750,
   /** Subdivision depth beyond which a cell is declared irreducible. */
   maxDepth: 4,
   /**

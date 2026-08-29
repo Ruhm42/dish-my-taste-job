@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { SWEEP } from '@/lib/config'
-import { callsLeft, dayKey, dayWindow, monthKey, monthWindow } from '@/lib/quota'
+import { FREE_MONTHLY_QUOTA, SWEEP } from '@/lib/config'
+import { callsLeft, monthKey, monthWindow } from '@/lib/quota'
 
-const LIMITS = { perMonth: 900, perDay: 750 }
+const CEILING = SWEEP.maxCallsPerPeriod
 
 describe('the quota period', () => {
   // ─────────────────────────────────────────────────────────────
@@ -11,79 +11,65 @@ describe('the quota period', () => {
   // These are the three invariants of spec 10 §1.
   // ─────────────────────────────────────────────────────────────
   it('starts a new period from zero, whatever the previous one cost', () => {
-    const august = new Date('2026-08-31T23:59:59Z')
-    const september = new Date('2026-09-01T00:00:00Z')
-
-    expect(monthKey(august)).not.toBe(monthKey(september))
-    // 900 spent in August leaves September untouched: the count is scoped by the boundary.
-    expect(callsLeft({ month: 0, day: 0 }, LIMITS).left).toBe(750)
+    // 07:00Z is Pacific midnight in summer: the last instant of August, then the first of September.
+    expect(monthKey(new Date('2026-09-01T06:59:59Z'))).toBe('2026-08')
+    expect(monthKey(new Date('2026-09-01T07:00:00Z'))).toBe('2026-09')
+    expect(callsLeft(0, CEILING)).toBe(CEILING)
   })
 
   it('shares one ceiling between several executions of the same period', () => {
-    const after400 = callsLeft({ month: 400, day: 0 }, LIMITS)
-    const after900 = callsLeft({ month: 900, day: 0 }, LIMITS)
-
-    expect(after400.left).toBe(500)
-    expect(after900.left).toBe(0)
+    expect(callsLeft(400, CEILING)).toBe(CEILING - 400)
+    expect(callsLeft(CEILING, CEILING)).toBe(0)
   })
 
   it('carries nothing over, neither what was spent nor what was not', () => {
-    // An overspent window reads 0, never a negative credit for the next one.
-    expect(callsLeft({ month: 1200, day: 0 }, LIMITS).left).toBe(0)
+    // An overspent period reads 0, never a negative credit charged to the next one.
+    expect(callsLeft(CEILING + 300, CEILING)).toBe(0)
     // And an unspent one grants no more than its own ceiling.
-    expect(callsLeft({ month: 0, day: 0 }, LIMITS).left).toBe(750)
+    expect(callsLeft(0, CEILING)).toBe(CEILING)
   })
 })
 
-describe('the two ceilings', () => {
-  it('returns the smaller headroom and names which one binds', () => {
-    // 652 spent, both windows: the month still allows 248, the day only 98.
-    expect(callsLeft({ month: 652, day: 652 }, LIMITS)).toEqual({ left: 98, binding: 'day' })
-  })
-
-  it('binds on the month once the day has been reset by a rollover', () => {
-    expect(callsLeft({ month: 880, day: 0 }, LIMITS)).toEqual({ left: 20, binding: 'month' })
-  })
-
-  it('names the month on a tie — rerunning tomorrow does not refill a spent month', () => {
-    expect(callsLeft({ month: 750, day: 600 }, LIMITS).binding).toBe('month')
-  })
-
+describe('the ceiling', () => {
   // ─────────────────────────────────────────────────────────────
-  // D15 caps SearchNearbyRequest at 800/day on the Google side, BELOW our
-  // own monthly 900. A local daily ceiling above it would hand back the
-  // opaque HTTP 429 the local counter exists to prevent.
+  // The whole guarantee: a period can never on its own cause billing.
+  // `.specs/technique/02-budget-google-et-garde-fous.md` records the
+  // Google-side daily cap at 1,000 — equal to the free monthly quota —
+  // so this single ordering is what the promise rests on.
   // ─────────────────────────────────────────────────────────────
-  it('keeps the configured daily ceiling under the Google one', () => {
-    expect(SWEEP.maxCallsPerDay).toBeLessThan(800)
-    expect(SWEEP.maxCallsPerPeriod).toBeGreaterThan(SWEEP.maxCallsPerDay)
+  it('stays under the free monthly quota', () => {
+    expect(CEILING).toBeLessThan(FREE_MONTHLY_QUOTA)
   })
 })
 
-describe('the window boundaries', () => {
-  it('cuts the month and the day in UTC, closed at both ends', () => {
-    const now = new Date('2026-08-29T23:55:00Z')
+describe('the period boundary', () => {
+  // ─────────────────────────────────────────────────────────────
+  // Pacific, not UTC: Cloud Billing rolls its cycle over at midnight
+  // Pacific. Counting UTC months would leave an eight-hour window each
+  // month in which our counter has reset and Google's has not — and the
+  // monthly cycle fires inside it.
+  // ─────────────────────────────────────────────────────────────
+  it('cuts the month at Pacific midnight, closed at both ends', () => {
+    const w = monthWindow(new Date('2026-08-29T11:00:00Z'))
 
-    expect(monthWindow(now).start.toISOString()).toBe('2026-08-01T00:00:00.000Z')
-    expect(monthWindow(now).end.toISOString()).toBe('2026-09-01T00:00:00.000Z')
-    expect(dayWindow(now).start.toISOString()).toBe('2026-08-29T00:00:00.000Z')
-    expect(dayWindow(now).end.toISOString()).toBe('2026-08-30T00:00:00.000Z')
+    expect(w.start.toISOString()).toBe('2026-08-01T07:00:00.000Z')
+    expect(w.end.toISOString()).toBe('2026-09-01T07:00:00.000Z')
   })
 
-  // Both ends roll the year and the month over rather than producing a 13th month.
-  it('closes December on the following January', () => {
-    const w = monthWindow(new Date('2026-12-15T12:00:00Z'))
-    expect(w.end.toISOString()).toBe('2027-01-01T00:00:00.000Z')
-    expect(dayWindow(new Date('2026-12-31T23:00:00Z')).end.toISOString())
-      .toBe('2027-01-01T00:00:00.000Z')
+  it('follows daylight saving rather than a fixed offset', () => {
+    // Summer is UTC-7, winter UTC-8. A constant offset would be wrong half the year.
+    expect(monthWindow(new Date('2026-12-15T12:00:00Z')).start.toISOString())
+      .toBe('2026-12-01T08:00:00.000Z')
   })
 
-  // The first real sweep started at 23:55 UTC and spent 248 calls before midnight, 652
-  // after: an execution outlives its day, so the rollover has to be seen mid-run.
-  it('changes day five minutes later, and month two days after that', () => {
-    expect(dayKey(new Date('2026-08-29T23:55:00Z'))).toBe('2026-08-29')
-    expect(dayKey(new Date('2026-08-30T00:00:00Z'))).toBe('2026-08-30')
-    expect(monthKey(new Date('2026-08-31T23:59:59Z'))).toBe('2026-08')
-    expect(monthKey(new Date('2026-09-01T00:00:00Z'))).toBe('2026-09')
+  it('rolls December into the following January', () => {
+    expect(monthWindow(new Date('2026-12-15T12:00:00Z')).end.toISOString())
+      .toBe('2027-01-01T08:00:00.000Z')
+  })
+
+  it('still counts the previous period at the hour the monthly cycle fires', () => {
+    // 03:00 UTC on the 1st is 20:00 the day before, Pacific. This is the case that makes
+    // the timezone load-bearing rather than pedantic.
+    expect(monthKey(new Date('2026-09-01T03:00:00Z'))).toBe('2026-08')
   })
 })

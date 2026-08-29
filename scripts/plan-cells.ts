@@ -125,7 +125,6 @@ function printCost(cells: Cell[]) {
   console.log('\nSWEEP COST')
   row('Nearby Search calls', num(calls))
   row('ceiling per quota period', num(SWEEP.maxCallsPerPeriod))
-  row('ceiling per UTC day', num(SWEEP.maxCallsPerDay), 'so a plan this size takes several days')
   row('free monthly quota', num(FREE_MONTHLY_QUOTA))
   row(
     'headroom for subdivisions',

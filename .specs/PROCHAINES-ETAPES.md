@@ -32,11 +32,15 @@ au moins 1 200 à faire ; le quota gratuit est de 1 000 par mois.
 ## 1. Le balayage ne repartira pas tout seul — il est en interblocage
 
 > **Corrigé le 29 août** — voir D28 et
-> [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md), qui couvre
-> aussi les axes 2 et 3 ci-dessous. Le plafond compte désormais le mois calendaire, et un
-> second plafond journalier passe sous les 800/jour de D15. Vérifié à sec sur une copie de
-> la production : une reprise simulée au 1er septembre part de zéro et annonce 601 cellules
-> et 750 appels disponibles, là où l'ancien compteur refusait le premier appel.
+> [`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md). Le plafond
+> compte désormais le **mois du quota**, et ce mois est celui du Pacifique, là où Cloud
+> Billing bascule son cycle : compté en UTC il remettrait notre compteur à zéro huit heures
+> avant celui de Google, et la tâche planifiée se déclenche dans cette fenêtre. Vérifié à
+> sec sur une copie de la production : une reprise simulée au 1er septembre part de zéro et
+> annonce 601 cellules à interroger, là où l'ancien compteur refusait le premier appel.
+>
+> Aucun plafond journalier local n'est posé : celui de Google vaut 1 000, pas 800, donc
+> notre compteur mensuel de 900 mord déjà en premier.
 >
 > **Ce qui reste** : l'axe 3 ci-dessous. Le balayage repart, mais ne converge toujours pas
 > dans une seule période.
@@ -137,15 +141,18 @@ mères, 212 tronquées, 664 filles créées au premier niveau, 184 au second. 90
 d'une sur quatre. Il reste donc de l'ordre de **1 200 appels pour converger**, soit deux mois
 de quota, sans compter le re-balayage mensuel que D7 impose ensuite.
 
-Un chiffre le confirme au passage : `GOOGLE_TO_SIRENE_RATIO` valait 1,16 dans la configuration,
-alors que le ratio observé est de **0,78** (4 465 pour 5 720). Le commentaire de `GRID.maxRadius`
-citait toujours le calibrage sur 8 cellules que D22 a invalidé. **Les deux sont corrigés.**
+Un chiffre le confirme au passage : `GOOGLE_TO_SIRENE_RATIO` vaut 1,16 dans la configuration,
+alors que le ratio mesuré est celui que D30 retient. Le commentaire de `GRID.maxRadius`
+cite toujours le calibrage sur 8 cellules que D22 a invalidé.
 
-La constante ne servait pas qu'à la prévision, contrairement à ce qui était écrit ici : elle
-pilote aussi le *second* signal de troncature du balayage, dont elle relève le seuil de 18 à
-26 établissements SIRENE par cellule. Mesuré avant de la changer : sur les 900 cellules déjà
-interrogées, **2 seulement** ont atteint l'état où ce signal décide seul, et aucune ne bascule
-à l'un ou l'autre ratio. La distance du dernier résultat fait tout le travail.
+**Attention en implémentant D30** : cette constante ne sert pas qu'à la prévision de coût.
+Elle pilote aussi le *second* signal de troncature du balayage — celui qui décide quand la
+distance du dernier résultat ne dit rien. La baisser vers la moyenne remonterait son seuil de
+18 à 26 établissements SIRENE par cellule et rendrait le détecteur **moins** sensible, dans
+la direction d'une base silencieusement incomplète. Sur les 900 cellules déjà interrogées,
+2 seulement ont atteint l'état où ce signal décide seul et aucune ne bascule ; mais **118 des
+601 cellules en attente** tombent dans la bande que ce changement ferait basculer, soit 20 %
+du plan restant. C'est une raison de plus de calibrer sur le décile, comme D30 le tranche.
 
 **Pourquoi ça compte.** Le « zéro euro » est posé comme contrainte ferme. Il ne tient plus
 arithmétiquement au périmètre actuel. Continuer sans le dire, c'est découvrir la facture.

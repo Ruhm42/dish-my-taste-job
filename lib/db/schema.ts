@@ -151,9 +151,6 @@ export const cell = pgTable('cell', {
   queriedAt: timestamp('queried_at', { withTimezone: true }),
 }, (t) => ({
   byRun: index('cell_run').on(t.sweepRunId, t.status),
-  // One queried cell is one Google call, so this column IS the spend ledger: the sweep
-  // counts it by calendar month to decide whether it may still spend (D28).
-  byQueriedAt: index('cell_queried_at').on(t.queriedAt),
 }))
 
 /** Logbook of the project's only costly operation. */

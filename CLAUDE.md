@@ -51,14 +51,12 @@ any overage bills a real card.
   follows the most expensive field requested.
 - **Every script that spends quota is `--dry-run` by default** and needs an explicit flag
   to spend.
-- **Two local counters, each under the Google limit it shadows**, so a stop is an explicit
-  message and never an opaque `HTTP 429`:
-  `maxCallsPerDay` (750) < Google daily cap for `SearchNearbyRequest` (800);
-  `maxCallsPerPeriod` (900) < free monthly quota (1 000).
-  The daily one is the lower, so reaching 900 takes two executions on two UTC days.
-- **The ceiling counts the calendar month, never the sweep.** Counting the sweep deadlocked
+- Guard ordering is deliberate: script counter (900) < Google daily cap (1 000) = free
+  monthly quota. A single sweep can therefore never cause billing.
+- **The counter counts the calendar month, never the sweep.** Counting the sweep deadlocked
   the resume: a run's total only ever rises, so a run that reached the ceiling could never
-  spend again — see D28 and `lib/quota.ts`.
+  spend again — see D28 and `lib/quota.ts`. And the month is **Pacific**, the one Cloud
+  Billing rolls over: a UTC month would reset ours eight hours before Google's.
 
 See [`.specs/technique/02-budget-google-et-garde-fous.md`](.specs/technique/02-budget-google-et-garde-fous.md)
 and [`.specs/technique/10-reprise-du-balayage.md`](.specs/technique/10-reprise-du-balayage.md).

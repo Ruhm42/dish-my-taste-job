@@ -9,9 +9,15 @@ name: Monthly sweep
 
 on:
   schedule:
-    # The 1st of the month, 03:00 UTC. Anchoring on the 1st guarantees that hours are
+    # The 1st of the month, 09:00 UTC. Anchoring on the 1st guarantees that hours are
     # replaced before the 30-day expiry the Google terms of service impose (D7).
-    - cron: '0 3 1 * *'
+    #
+    # 09:00 and not 03:00: the quota period is the Pacific month, the one Cloud Billing
+    # rolls over. At 03:00 UTC on the 1st it is still 20:00 on the LAST day of the previous
+    # month in California — the run would be charged to a period whose ceiling it has
+    # already spent. Pacific midnight is 08:00 UTC in winter and 07:00 in summer; 09:00
+    # clears both without leaving the 1st.
+    - cron: '0 9 1 * *'
   workflow_dispatch:
 
 # Two simultaneous sweeps would burn the month's quota in one go.
