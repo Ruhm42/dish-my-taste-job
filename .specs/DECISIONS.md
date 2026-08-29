@@ -1,6 +1,6 @@
 # Journal des décisions
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
 
 Format : *contexte → options écartées → décision → conséquences*. Une décision sans
 alternative écartée n'est pas une décision, c'est une note.
@@ -963,3 +963,145 @@ chose en silence.
 > Le correctif de profil se rejoue avec `compute:profiles` — hors ligne, sans un seul appel
 > Google. La production le demandera au prochain déploiement, sinon ses colonnes garderont
 > les jours de fermeture inventés.
+
+---
+
+## D30 — Rafraîchir avant de découvrir, et replanifier au lieu de subdiviser
+
+**Contexte.** D28 a réparé le compteur d'appels ; il annonçait lui-même ce qu'il ne résolvait
+pas — il resterait de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits par mois, et les
+horaires du premier balayage périmeraient pendant qu'on paierait le second.
+
+La mesure a déplacé le problème. Sur les 212 cellules tronquées et leurs 848 filles : la
+subdivision en quatre pose des cercles de **0,72 fois** le rayon de leur mère, qui totalisent
+**4,18 fois** ses établissements SIRENE et en comptent **15,3 chacune contre 17,3 pour la
+mère**. **Quatre appels pour retirer 12 % de la densité** — et une fille à 15,3 retombe dans
+la tranche qui tronque à 55 %.
+
+La troncature, elle, est entièrement prévisible avant de dépenser : 1 % sous 5 SIRENE, 6 % de
+5 à 9, 16 % de 10 à 14, **55 % de 15 à 19**, 96 % au-delà de 30. Et 269 des 601 cellules en
+attente — 45 % — sont dans la zone haute.
+
+Enfin la constante qui dimensionne les cellules, `GOOGLE_TO_SIRENE_RATIO`, vaut 1,16 quand le
+ratio mesuré sur les cellules non tronquées est de 0,91 en moyenne, 0,86 en médiane, mais
+**1,57 au 9ᵉ décile**. Une cellule tronque par ce qu'elle a d'extrême, jamais par sa moyenne.
+
+**Options écartées**
+- *Continuer à subdiviser en quatre, en payant le coût.* Mesuré : quatre appels pour 12 % de
+  densité. Résorber une cellule mère à 30 SIRENE par cette voie demande quatre niveaux, soit
+  256 appels — un quart du quota mensuel pour une seule cellule.
+- *Réduire le périmètre d'abord.* Ce serait couper la ville pour financer un gaspillage connu.
+  L'ordre inverse ne coûte rien et peut rendre l'arbitrage sans objet.
+- *Agrandir les cellules pour ramasser plus par appel.* Réfuté par D22 : la troncature
+  apparaît vers 265 m, le rayon est plafonné à 200 m. C'est la densité Google qui borne.
+- *Purger les horaires au 28 septembre.* Strictement conforme, mais éteint 3 466 fiches d'un
+  coup. Le produit s'arrêterait au lieu de vieillir.
+- *Laisser vieillir au-delà de 30 jours en le sachant.* Sort des CGU, et fait exactement ce
+  que le projet nomme comme sa pire défaillance : une base qui se dit fraîche et ne l'est pas.
+- *Relever le plafond d'appels.* Le garde-fou n'a qu'une raison d'être, garantir l'absence de
+  facturation. Le relever, c'est le supprimer en le gardant.
+
+**Décision.** Quatre règles, qui tiennent ensemble.
+
+1. **La fraîcheur prime sur la complétude.** Chaque cycle mensuel sert d'abord les cellules
+   dont le contenu expire, de la plus ancienne à la plus récente ; le solde du quota va à la
+   découverte. Une cellule `done` dont le contenu a expiré redevient éligible — ce qui change
+   la règle de reprise, et c'est ce qui rend D7 vrai pour un balayage qui déborde.
+2. **Une troncature se résout par une replanification locale.** L'emprise de la cellule
+   tronquée est replanifiée depuis la densité SIRENE qu'elle contient. Une cellule de 30
+   SIRENE devient trois cellules de 10, jamais quatre cellules de 26.
+3. **Le plafond de densité se calibre sur le 9ᵉ décile du ratio, pas sur sa moyenne** : au
+   plus 12 établissements SIRENE par cellule.
+4. **Le coût de la convergence est le nombre de cellules du plan à sec, et il décide.** Sous
+   900 appels, il n'y a rien à arbitrer ; de 900 à 1 500, le périmètre se réduit au rendement
+   mesuré ; au-delà de 1 500, la contrainte « zéro euro » se rouvre explicitement, avec son
+   prix — 35 $ par tranche de 1 000 — et sa propre entrée.
+
+Ce qui a expiré ne s'affiche plus : la fiche reste, sans horaires, en *À vérifier*, et le
+nombre de fiches dans cet état est dit dans le bandeau.
+
+**Conséquences.** Il n'y a plus deux budgets — rafraîchir, découvrir — mais **un seul plan
+parcouru dans l'ordre d'expiration**. `done` signifie désormais « faite dans cette période » :
+la règle de D22, ne pas rejouer, reste vraie à l'intérieur d'une période et cesse de l'être
+d'une période à l'autre, puisque tout expire à 30 jours.
+
+Un chiffre confortable disparaît au passage : rafraîchir ne coûte pas 688 appels, le compte des
+cellules abouties. Les 212 cellules tronquées ont produit du contenu stocké elles aussi — 4 240
+lieux renvoyés contre 5 130 — et il expire aux mêmes dates. Le contenu en base vient des **900**
+cellules interrogées. Sous le plan actuel, le rafraîchir consomme donc tout le quota mensuel
+sans rien laisser à la découverte : c'est ce qui rend les règles 2 et 3 nécessaires plutôt
+qu'élégantes.
+
+En sens inverse, le plan actuel porte **8,8 SIRENE par cellule** au premier niveau contre un
+plafond de 12, et 230 de ses cellules ne ramènent que 2,3 lieux chacune. Un plan recalibré peut
+couvrir le même terrain en **moins** de cellules que les 900 déjà dépensées. C'est ce que la
+règle 4 fait mesurer avant d'ouvrir la question du périmètre.
+
+La réduction du périmètre, si elle devient nécessaire, se fera au **rendement mesuré** et non
+à la géographie : les 1er et 5e arrondissements pèsent 953 établissements SIRENE pour 20
+résultats « sans coupure et week-end libre », quand Villeurbanne en pèse 816 pour 40. Ça ne
+rend pas la coupe indolore — un arrondissement retiré est un arrondissement vide pour qui y
+habite, et la vision promet « la liste de son arrondissement ».
+
+Le détail vit dans [`technique/11-convergence-du-balayage.md`](technique/11-convergence-du-balayage.md).
+
+---
+
+## D31 — L'appariement se fonde sur l'adresse, et le repli cesse d'inventer un discriminant
+
+**Contexte.** 843 verdicts sur 4 465 reposent sur la règle de repli, faute d'effectif. On a
+cherché à l'enrichir avec ce qui est déjà en base et gratuit — durée de la coupure, nombre de
+jours concernés, catégorie, amplitude hebdomadaire. La question se teste : il existe **387
+établissements dont les horaires portent une coupure et dont l'effectif est connu**.
+
+Aucun de ces signaux ne s'écarte du taux de base de 61 % de petites équipes. L'amplitude, seul
+discriminant que le repli contient aujourd'hui, donne **39 % de brigades doubles sous 70 h et
+38 % au-dessus** : le seuil en vigueur ne sépare rien, et il adoucit 45 verdicts sans
+fondement. La durée de coupure s'inverse au dernier palier ; la catégorie tient dans dix
+points d'écart ; le nombre de jours ne ressort qu'à sept sur sept, sur 34 établissements.
+
+En revanche, **1 506 tranches d'effectif dorment dans notre propre base**. L'appariement exige
+une similarité de nom ≥ 0,45 comme critère éliminatoire, or **717 de ces enregistrements n'ont
+aucun nom** — ils sont exclus par construction, à n'importe quel seuil — et les autres portent
+la raison sociale, pas l'enseigne. Le discriminant que SIRENE fournit vraiment est l'adresse :
+validé contre les 1 585 appariements existants, « un seul candidat au même numéro de rue »
+désigne le bon **713 fois sur 735, soit 97 %**.
+
+**Options écartées**
+- *Enrichir le repli avec la durée, les jours et la catégorie.* C'était la piste recommandée ;
+  le jeu de validation la réfute. Une règle plus fine qui ne prédit pas mieux n'est pas une
+  amélioration, c'est une complication qu'on ne saura plus retirer.
+- *Abaisser le seuil de similarité de nom.* Ne touche pas les 717 enregistrements sans nom et
+  dégrade la précision là où le nom existe. Le seuil n'est pas le problème, le caractère
+  éliminatoire du critère l'est.
+- *Redéfinir « coupure peu probable » pour englober les équipes moyennes.* Peuplerait l'option
+  — 2 388 fiches — en appelant « peu probable » ce que la règle appelle « possible ».
+- *Assumer le plafond d'effectifs et le dire, sans rien changer.* Reposait sur un chiffre faux :
+  le plafond n'est pas 41 % mais **56 %** — 2 480 tranches exploitables pour 4 465
+  établissements — et on est à 22 %.
+- *Chercher l'effectif ailleurs qu'à SIRENE.* Aucune source gratuite et exhaustive (D4).
+
+**Décision.** Trois règles.
+
+1. **L'appariement se fonde sur l'adresse ; le nom départage et n'exclut jamais.** Même numéro
+   de rue et proximité comme critère principal, similarité de nom pour classer plusieurs
+   candidats au même numéro. Plusieurs candidats indiscernables, c'est un établissement laissé
+   sans effectif : mieux vaut une information manquante qu'une information fausse. La précision
+   se mesure sur les appariements existants **avant** d'appliquer, et ne descend pas sous 95 %.
+2. **La règle de repli par amplitude est supprimée.** Effectif inconnu et coupure aux horaires
+   donnent *Coupure probable*, fiabilité *probable*. Sans seuil et sans mention d'amplitude.
+3. **Le filtre de coupure devient binaire** — *Sans coupure* ou *Peu importe*. L'option « Oui
+   ou probablement » ajoutait huit lignes à « Oui » : trois choix pour deux résultats.
+
+**Conséquences.** Environ **305 verdicts de repli** gagnent un effectif et passent en
+*confirmé*, avec la tranche nommée dans l'explication. Les 45 fiches adoucies par l'amplitude
+repassent en *Coupure probable* : **le produit devient moins rassurant sur 45 fiches, et plus
+juste sur les 45.** C'est le bon sens de l'erreur — un verdict faussement rassurant coûte une
+demi-journée à quelqu'un qui se déplace.
+
+Un appariement à 97 % est acceptable **parce que le verdict affiche son raisonnement**,
+effectif compris. Un professionnel du secteur voit immédiatement qu'un bouchon de quinze
+couverts n'a pas vingt salariés. L'explicabilité n'est pas un confort de présentation : c'est
+ce qui rend une règle à 97 % tenable là où un verdict nu ne le serait pas.
+
+Le détail vit dans [`technique/12-justesse-du-verdict.md`](technique/12-justesse-du-verdict.md).
