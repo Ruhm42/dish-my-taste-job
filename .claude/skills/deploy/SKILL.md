@@ -55,6 +55,41 @@ git status --porcelain
 Must print nothing — untracked (`??`) entries count, because there is no `.vercelignore` and
 they will be uploaded. Do not commit files just to clear this gate: report them and ask.
 
+### Stop the dev server first — this one bites often
+
+`next dev` and `next build` write to the **same `.next` directory**. Building while the dev
+server runs overwrites the client manifest underneath it, and the dev server starts throwing
+500s that have nothing to do with your code:
+
+```
+Could not find the module ".../segment-explorer-node.js#SegmentViewNode"
+  in the React Client Manifest
+TypeError: __webpack_modules__[moduleId] is not a function
+GET /login 500
+```
+
+Nothing is broken in the source — `npx tsc --noEmit` stays green throughout, which is what
+makes this so confusing. Only `.next` is corrupt.
+
+```bash
+for pid in $(pgrep -f 'next dev' 2>/dev/null); do
+  cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  [ "$cwd" = "$PWD" ] && echo "dev server for THIS repo: pid $pid"
+done
+```
+
+**Compare the working directory, do not just match `next dev`.** This project is often open
+in several Claude Code worktrees at once, each with its own `.next`; those are harmless and
+stopping them is pure collateral damage. Only a dev server whose cwd is *this* checkout
+shares the directory being written.
+
+If one is found, stop it before building — `preview_stop` when it was started through the
+browser pane, otherwise `kill <pid>`. Then build.
+
+**Restart it afterwards, and expect to.** Once `npm run build` has run, `.next` holds a
+production build; the dev server has to regenerate it. If the dev server was left running
+through a build, restarting is also the fix — `rm -rf .next` first if the 500s persist.
+
 ### Does it build?
 
 ```bash
