@@ -1,0 +1,405 @@
+# CI, previews and production deploys.
+#
+# This file holds ONE property worth stating plainly: production cannot be reached
+# without passing `check`. The deploy job declares `needs: check`, so a failing test,
+# a type error or a broken build stops the release structurally — not by convention,
+# and not by a branch protection rule someone can switch off.
+#
+# Before this workflow existed, every deploy was hand-run from a laptop through the
+# `deploy` skill: preflight, secret scan, push, `vercel deploy --prod`, alias check,
+# HTTP probes. Roughly thirty commands replayed each time. Everything mechanical in
+# that list now lives here. What is left in the skill is what a machine cannot do:
+# the pages behind the login, and the rollback.
+# See .specs/DECISIONS.md D29 and .specs/technique/09-deploiement.md.
+
+name: CI
+
+on:
+  push:
+    # The weekly keepalive commits a timestamp and nothing else. Redeploying on it
+    # would be pure waste, and 09-deploiement.md rules it out in so many words.
+    #
+    # That spec argues the keepalive is harmless because a push authenticated by
+    # GITHUB_TOKEN retriggers no workflow. That remains true — but it is an implicit
+    # behaviour, and it protects nothing if the deploy ever moves to a webhook
+    # consumer such as the Vercel GitHub App. `paths-ignore` states the guarantee
+    # instead of inheriting it.
+    #
+    # For a commit that should not build for any other reason, `[skip ci]` in the
+    # message is honoured natively.
+    paths-ignore:
+      - '.github/last-activity.txt'
+  # Redeploy the current tree without a commit — and the only way past the schema
+  # guard below, once the column has been applied to production by hand.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Everything that needs no credentials. Runs on every branch, forks included.
+  # ───────────────────────────────────────────────────────────────────────────
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Superseding a push cancels the run it superseded: the deploy that matters is
+    # the one for the newest commit.
+    concurrency:
+      group: check-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # This repository is public: a committed key is harvested within minutes.
+      # This scan used to be section 2 of the deploy skill, run by hand; it lives here
+      # now, and nowhere else.
+      #
+      # Scan the TREE, not the diff. A diff against a stale ref can narrow to nothing
+      # and report a pass while reading zero bytes. `-co --exclude-standard` covers
+      # untracked files too.
+      #
+      # The patterns match credential SHAPES, never variable names — matching
+      # `service_role` or `PGPASSWORD=` as text would flag .specs/ prose on every run,
+      # and a check that always cries wolf is a check nobody reads. `postgres(ql)?://`
+      # matters: this project's connection string uses the `postgresql://` scheme, and
+      # a bare `postgres://` pattern would let the most damaging leak pass in silence.
+      #
+      # `grep` exits non-zero when it finds nothing, which is the PASS here — hence
+      # the inverted `if` rather than a plain pipeline, which `bash -e` would read
+      # backwards and fail on every clean tree.
+      #
+      # ONE exclusion: `.env.example` holds placeholder credentials by design. Notably
+      # not this file — the patterns do not match themselves (each is followed by `[`
+      # or `(`, outside its own character class), so excluding it would only blind the
+      # scan to a key pasted into a workflow. Measured, not assumed. If you widen the
+      # scan, re-measure: the dummy DATABASE_URL below had to lose its password to keep
+      # this step honest.
+      - name: Scan the tree for committed credentials
+        run: |
+          if git ls-files -co --exclude-standard \
+             | grep -vE '^\.env\.example$' \
+             | xargs grep -inE "postgres(ql)?://[^\"']*:[^\"'@[:space:]]+@|AIza[0-9A-Za-z_-]{30,}|eyJ[A-Za-z0-9_-]{30,}\.[A-Za-z0-9_-]{10,}|sb_secret_[A-Za-z0-9_-]{20,}"
+          then
+            echo "::error::a credential-shaped string is committed — see the lines above"
+            exit 1
+          fi
+          echo "no credential-shaped string in the tree"
+
+      # `next build` typechecks the app, but not scripts/ or tests/. This does.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      # The values only need to EXIST, not to be reachable. lib/db/client.ts and
+      # lib/supabase/server.ts throw at module scope when their variable is missing,
+      # and Next imports route handlers while collecting page data — so a missing
+      # variable fails the build. Nothing connects: the postgres() pool is lazy and
+      # app/recherche/page.tsx is force-dynamic.
+      #
+      # DATABASE_URL deliberately carries NO password, and that is not cosmetic: a
+      # connection string with one is credential-SHAPED, so the scan above would flag
+      # this very file on every run — and a check that always cries wolf is a check
+      # nobody reads. postgres.js parses a password-less URL fine, and lib/db/client.ts
+      # only requires the variable to exist. (This comment avoids spelling the shape out
+      # for the same reason.)
+      #
+      # No assertion on the printed route table. The deploy skill carried one and it
+      # drifted in silence — it still claimed five routes after /api/etablissements/[id]
+      # shipped. A build that breaks fails this step, which is the whole of what the
+      # table was there to catch.
+      - name: Build
+        env:
+          DATABASE_URL: postgresql://ci@localhost:5432/ci
+          NEXT_PUBLIC_SUPABASE_URL: https://ci.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ''
+        run: npm run build
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # One preview URL per branch.
+  # ───────────────────────────────────────────────────────────────────────────
+  preview:
+    needs: check
+    # A fork has no business deploying into this Vercel project.
+    if: github.ref != 'refs/heads/main' && github.repository == 'Ruhm42/dish-my-taste-job'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    concurrency:
+      group: preview-${{ github.ref }}
+      cancel-in-progress: true
+
+    env:
+      # Read from the environment on purpose: `--token=…` would put the credential in
+      # the process arguments, where anything reading /proc can see it for as long as
+      # the command runs. The Vercel CLI picks VERCEL_TOKEN up on its own.
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      # Identifiers, not credentials — they grant nothing without the token above, and
+      # writing them here makes the file say out loud WHICH project it deploys to.
+      #
+      # They are also load-bearing: `.vercel/` is gitignored, so a CI checkout has no
+      # project link. Without these two, `vercel deploy --yes` would cheerfully create
+      # a NEW project and deploy into it while every check kept passing against the
+      # old, untouched production.
+      VERCEL_ORG_ID: team_Am15oMncbW8gBNO5c5oXjw9z
+      VERCEL_PROJECT_ID: prj_SBZAtNJ8fC1wdxN6mVOXQP0Y8qDk
+      # Pinned to a major: a silent CLI upgrade must not change what ships.
+      VERCEL_CLI: vercel@59
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Link the project, and prove it is the right one
+        run: |
+          npx --yes "$VERCEL_CLI" pull --yes --environment=preview
+          node -e 'const p = require("./.vercel/project.json");
+            if (p.projectName !== "dish-my-taste-job") {
+              console.error("::error::linked to " + p.projectName + ", not dish-my-taste-job");
+              process.exit(1);
+            }
+            console.log("linked to " + p.projectName);'
+          # Pulled for the assertion above, not to build with: the deploy uploads the
+          # tree and builds remotely with Vercel's own environment. The glob rather than
+          # one filename so a rename in the CLI cannot leave real secrets on disk.
+          rm -f .vercel/.env.*.local
+
+      - name: Deploy a preview
+        shell: bash
+        run: |
+          url=$(npx --yes "$VERCEL_CLI" deploy --yes --logs -m commit="$GITHUB_SHA" | tail -1)
+          case "$url" in
+            https://*.vercel.app) ;;
+            *) echo "::error::unexpected deploy output: $url"; exit 1 ;;
+          esac
+          # No HTTP probes here. Preview hostnames sit behind Vercel's Deployment
+          # Protection and answer 302 → vercel.com/sso-api on EVERY path, so curl
+          # cannot tell a working preview from a broken one.
+          {
+            echo "### Preview"
+            echo ""
+            echo "$url"
+            echo ""
+            echo "Behind Vercel SSO — open it while signed in to Vercel."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Production.
+  # ───────────────────────────────────────────────────────────────────────────
+  production:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.repository == 'Ruhm42/dish-my-taste-job'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # Deliberately NOT cancel-in-progress. Cancelling a deploy in flight is worse than
+    # queueing behind it — same reasoning as the monthly sweep.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: team_Am15oMncbW8gBNO5c5oXjw9z
+      VERCEL_PROJECT_ID: prj_SBZAtNJ8fC1wdxN6mVOXQP0Y8qDk
+      VERCEL_CLI: vercel@59
+      ALIAS: dish-my-taste-job.vercel.app
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          # The schema guard diffs against the previous tip of the branch.
+          fetch-depth: 0
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      # The deploy skill made this a human stop, and automating the deploy without
+      # replacing it would be a real regression:
+      #
+      #   "If the change being deployed touches lib/db/schema.ts, stop: the column or
+      #    enum must exist in production BEFORE the code reading it ships."
+      #
+      # drizzle/ is not a record of production and `db:push` against production would
+      # ALTER and DROP, so there is nothing to run here — only a stop.
+      # Skipped on workflow_dispatch, which is how you proceed once the column exists.
+      - name: Refuse to ship a schema change
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "previous tip $BEFORE is unavailable (new branch or force-push) — guard skipped"
+            exit 0
+          fi
+          if git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -q '^lib/db/schema\.ts$'; then
+            echo "::error::lib/db/schema.ts changed. Apply the column or enum to the production database by hand FIRST, then re-run this workflow from the Actions tab (workflow_dispatch skips this guard). Never point db:push at production."
+            exit 1
+          fi
+          echo "schema untouched"
+
+      - name: Link the project, and prove it is the right one
+        run: |
+          npx --yes "$VERCEL_CLI" pull --yes --environment=production
+          node -e 'const p = require("./.vercel/project.json");
+            if (p.projectName !== "dish-my-taste-job") {
+              console.error("::error::linked to " + p.projectName + ", not dish-my-taste-job");
+              process.exit(1);
+            }
+            console.log("linked to " + p.projectName);'
+          rm -f .vercel/.env.*.local
+
+      # Remote build, not `--prebuilt`. This is exactly what the skill did by hand, so
+      # nothing about the artifact production receives changes. `--prebuilt` would build
+      # on the runner's Node, which need not match the project's Node on Vercel.
+      #
+      # `-m commit=` writes the SHA into meta.commit. Vercel records githubCommitSha on
+      # its own too; this is belt and braces, and it survives if that stops.
+      #
+      # --logs prints Vercel's REMOTE build output to stderr, so it lands in the job log
+      # while stdout stays the deployment URL alone.
+      - name: Deploy to production
+        id: deploy
+        shell: bash
+        run: |
+          url=$(npx --yes "$VERCEL_CLI" deploy --prod --yes --logs -m commit="$GITHUB_SHA" | tail -1)
+          case "$url" in
+            https://*.vercel.app) ;;
+            *) echo "::error::unexpected deploy output: $url"; exit 1 ;;
+          esac
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "deployed $url"
+
+      # readyState and target are `inspect --json` field names. `vercel deploy` never
+      # prints them, and plain `vercel inspect` says `status ● Ready` instead.
+      - name: Assert the deployment is ready and targets production
+        shell: bash
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          npx --yes "$VERCEL_CLI" inspect "$DEPLOY_URL" --json > inspect.json
+          node -e 'const d = require("./inspect.json");
+            const bad = [];
+            if (d.readyState !== "READY") bad.push("readyState=" + d.readyState);
+            if (d.target !== "production") bad.push("target=" + d.target);
+            if (bad.length) { console.error("::error::" + bad.join(" ")); process.exit(1); }
+            console.log("READY, target production");'
+
+      # The only check that proves the alias MOVED.
+      #
+      # Not the `Aliases` block of `vercel inspect <deployment-url>`: it lists aliases a
+      # deployment MAY serve, so the previous production deployment prints the identical
+      # list and the check passes even when the alias never moved. Not `x-vercel-id`
+      # either — it is a per-request id and differs on every call.
+      #
+      # `2>&1` is required: this output goes to stderr.
+      - name: Assert the production alias serves the new deployment
+        shell: bash
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          host=${DEPLOY_URL#https://}
+          for attempt in 1 2 3 4 5 6; do
+            fetched=$(npx --yes "$VERCEL_CLI" inspect "$ALIAS" 2>&1 | grep -m1 'Fetched deployment' || true)
+            echo "attempt $attempt: ${fetched:-<no Fetched line>}"
+            case "$fetched" in
+              *"$host"*) echo "the alias serves $host"; exit 0 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::$ALIAS still does not serve $host"
+          exit 1
+
+      # All four answers come from middleware.ts, before any route handler, page render
+      # or database query. Passing 4/4 proves the middleware deployed and its Supabase
+      # variables are present. It proves NOTHING about the database, the API payload or
+      # any rendered page — see the deploy skill for what stays human.
+      #
+      # The API path answering 3xx instead of 401 is a real regression: middleware.ts
+      # returns JSON for /api/ on purpose so client-side fetch can react. Comparing the
+      # body byte for byte also catches mojibake in place of the é.
+      - name: Probe the unauthenticated gate
+        shell: bash
+        run: |
+          base="https://$ALIAS"
+          fail=0
+
+          probe() {
+            got=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$base$1")
+            want="$2 $3"
+            if [ "$got" = "$want" ]; then
+              echo "ok    $1 -> $got"
+            else
+              echo "FAIL  $1 -> $got (expected $want)"
+              fail=1
+            fi
+          }
+
+          probe /          307 "$base/login"
+          probe /recherche 307 "$base/login?suite=%2Frecherche"
+          probe /login     200 ""
+
+          resp=$(curl -sS -w $'\n%{http_code}' "$base/api/etablissements")
+          code=${resp##*$'\n'}
+          body=${resp%$'\n'*}
+          if [ "$code" = 401 ] && [ "$body" = '{"error":"non autorisé"}' ]; then
+            echo "ok    /api/etablissements -> 401 $body"
+          else
+            echo "FAIL  /api/etablissements -> $code $body (expected 401 {\"error\":\"non autorisé\"})"
+            fail=1
+          fi
+
+          [ "$fail" = 0 ] || { echo "::error::the unauthenticated gate is not what it should be"; exit 1; }
+
+      # No automatic rollback. `vercel rollback` has two ways of turning on you — passing
+      # the alias reverts to the broken deployment itself, and the bare form silently
+      # becomes `rollback status` and reverts nothing. Firing that off a flaky curl would
+      # be worse than the failure it answers.
+      - name: Say how to roll back
+        if: failure()
+        run: |
+          {
+            echo "## Production deploy failed"
+            echo ""
+            echo "Nothing was rolled back. To do it by hand:"
+            echo ""
+            echo '```bash'
+            echo "npx vercel ls --prod"
+            echo '```'
+            echo ""
+            echo "Pick a row that is \`● Ready\` and is NOT the deployment just published"
+            echo "(the list includes \`● Error\` rows, which never served anything), then:"
+            echo ""
+            echo '```bash'
+            echo "npx vercel rollback <that-deployment-hostname> --yes"
+            echo "npx vercel rollback status"
+            echo "npx vercel inspect $ALIAS 2>&1 | head -5"
+            echo '```'
+            echo ""
+            echo "The last line must name the deployment you rolled back to."
+            echo "Never pass the production alias, and never run \`rollback\` bare."
+            echo "See \`.claude/skills/deploy/SKILL.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"

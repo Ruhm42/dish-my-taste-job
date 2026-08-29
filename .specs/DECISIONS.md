@@ -1,6 +1,6 @@
 # Journal des décisions
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
 
 Format : *contexte → options écartées → décision → conséquences*. Une décision sans
 alternative écartée n'est pas une décision, c'est une note.
@@ -900,3 +900,69 @@ Le détail de la reprise, de la fraîcheur des horaires et des critères d'accep
 période : il reste de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits par mois. La
 question du périmètre, du dépassement assumé et du sort des horaires périmés au-delà de 30
 jours reste entière — et c'est un seul arbitrage, pas trois. Il ouvrira sa propre entrée.
+
+---
+
+## D29 — Le déploiement passe par GitHub Actions, et les tests le conditionnent
+
+**Contexte.** Rien ne vérifiait le code automatiquement : `.github/workflows/` ne contenait que
+le balayage mensuel et le maintien en vie, et aucun des deux ne lançait `npm test`,
+`npx tsc --noEmit` ni `npm run build`. Chaque mise en production était une trentaine de
+commandes jouées à la main depuis le poste, décrites par la skill `deploy` — préflight, scan de
+secrets, poussée, `vercel deploy --prod`, contrôle de l'alias, sondes HTTP.
+
+Deux défauts, et le second est le plus grave. Le geste est coûteux, donc espacé, donc chaque
+livraison porte plus de changements que la précédente. Et surtout : **`vercel deploy` téléverse
+l'arbre de travail, pas une référence git.** Un fichier non suivi que `.gitignore` ne couvrait
+pas partait en production ; un arbre en retard sur `origin/main` annulait silencieusement les
+commits des autres. La skill s'en défendait par deux contrôles humains — `git status --porcelain`
+doit être vide, `behind` doit valoir 0 — c'est-à-dire par de la discipline.
+
+**Options écartées**
+- *L'App GitHub Vercel* — c'est l'état que [`08-infrastructure.md`](technique/08-infrastructure.md)
+  décrivait déjà, et c'est zéro secret et zéro maintenance. Mais Vercel déploie sur webhook,
+  hors de portée d'Actions : un commit dont les tests échouent part quand même en production, à
+  moins d'ajouter une protection de branche et donc un flux de PR obligatoire sur un projet
+  solo. Et le commit hebdomadaire de maintien en vie déclencherait un redéploiement — celui-là
+  même que [`09-deploiement.md`](technique/09-deploiement.md) refuse.
+- *Un artefact pré-bâti (`vercel build` puis `deploy --prebuilt`)* — bâtirait sur le Node du
+  runner, qui n'est pas nécessairement celui du projet chez Vercel. On expédierait un artefact
+  bâti ailleurs que là où il s'exécute pour économiser une minute de build distant.
+- *Le retour arrière automatique quand une sonde échoue* — `vercel rollback` a deux façons de se
+  retourner contre soi : passer l'alias fait revenir au déploiement cassé lui-même, et la forme
+  nue devient `rollback status` et ne revient sur rien. Le déclencher sur un `curl` capricieux
+  serait pire que la panne à laquelle il répond.
+- *N'ajouter que les tests et garder le déploiement manuel* — traite la moitié du problème et
+  laisse l'autre entière. C'est le déploiement, pas la vérification, qui coûtait.
+
+**Décision.** Un fichier, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), trois jobs.
+`check` — scan de secrets, `tsc`, tests, build — sur chaque poussée de chaque branche. `preview`
+pour les branches. `production` pour `main`, qui déclare **`needs: check`** et déploie par le CLI
+Vercel avec un `VERCEL_TOKEN` en secret de dépôt, puis vérifie : le projet lié, l'état du
+déploiement, le déplacement de l'alias, et les quatre sondes non authentifiées.
+
+**Conséquences.**
+
+Déployer un arbre rouge devient **structurellement impossible**, sans dépendre d'une protection
+de branche ni d'un flux de PR. Et la production est désormais **le commit poussé** : toute la
+classe de pannes « l'arbre de travail n'est pas ce qui est commité » disparaît, avec les deux
+contrôles humains qui la tenaient en respect.
+
+Le garde-fou sur `lib/db/schema.ts` est **remplacé, pas supprimé.** La skill imposait un arrêt
+humain — la colonne doit exister en production avant que le code qui la lit ne parte. Retirer
+l'humain sans rien mettre à la place aurait été une régression, donc le job refuse une poussée
+dont le diff touche ce fichier. Un `workflow_dispatch` le contourne : déclencher à la main
+devient l'énoncé délibéré que la colonne existe déjà.
+
+La skill `deploy` cesse de décrire un déploiement. Elle décrit ce que la chaîne **ne peut pas**
+vérifier — tout ce qui est derrière le login, et la panne intermittente de [D23](#d23--jamais-de-requêtes-concurrentes-sur-une-connexion-poolée)
+qu'aucun `curl` non authentifié n'atteindra jamais — et le retour arrière.
+
+La garantie « le maintien en vie ne redéploie rien » ne repose plus sur un comportement
+implicite de `GITHUB_TOKEN` mais sur un `paths-ignore` qui se relit.
+
+**Ce que cette décision coûte.** Un secret de plus à faire vivre, `VERCEL_TOKEN`, dont
+l'expiration se manifestera par un déploiement rouge et non par une panne. Et les previews
+pointent sur la base de **production**, faute d'une seconde base : les données d'établissement
+sont en lecture seule et les previews sont derrière le SSO Vercel, mais c'est à savoir avant
+d'y tester une écriture.
