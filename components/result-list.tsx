@@ -183,23 +183,26 @@ function ResultRow({ row, selected, onSelect, onHover }: {
           />
           {/* truncate, never wrap: a long name must not make this row taller than the next
               one, or scrolling stops being predictable. */}
-          <span className="truncate font-medium">{row.name}</span>
+          <span className="truncate text-sm font-medium">{row.name}</span>
           <span className="ml-auto shrink-0 text-xs text-stone-400">{row.commune}</span>
         </span>
-        <span className="mt-1 flex flex-nowrap items-center gap-1.5 overflow-hidden">
+        {/*
+          One badge, then plain words.
+          The column is deliberately narrow, and three bordered chips do not fit in it. The
+          split shift keeps its chip because it is what people came for; the other two are
+          secondary and read just as well as text — which takes half the room. The full set
+          is in the panel.
+        */}
+        <span className="mt-1 flex items-baseline gap-2 overflow-hidden">
           <span className={`shrink-0 rounded border px-1.5 py-0.5 text-xs ${risk.className}`}>
             {risk.label}
           </span>
-          {row.closedWeekend && (
-            <span className="shrink-0 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-xs text-sky-900">
-              Week-end libre
-            </span>
-          )}
-          {row.maxConsecutiveDaysOff >= 2 && (
-            <span className="shrink-0 rounded border border-stone-300 bg-stone-50 px-1.5 py-0.5 text-xs text-stone-700">
-              2 jours d’affilée
-            </span>
-          )}
+          <span className="truncate text-xs text-stone-500">
+            {[
+              row.closedWeekend && 'Week-end libre',
+              row.maxConsecutiveDaysOff >= 2 && '2 j. d’affilée',
+            ].filter(Boolean).join(' · ')}
+          </span>
         </span>
       </button>
     </li>

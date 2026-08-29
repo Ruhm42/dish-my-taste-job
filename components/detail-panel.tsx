@@ -74,17 +74,33 @@ export function DetailPanel({ id, initial, onClose }: Props) {
 
   return (
     <>
-      {/* Small screens only: the panel is full width there, and the backdrop is what says
-          the rest of the screen is on hold. */}
+      {/* Small screens only: the panel covers the screen there, and the backdrop is what
+          says the rest is on hold. On a large screen it takes its own column, so there is
+          nothing to put on hold. */}
       <div
         className="fixed inset-0 z-30 bg-stone-900/20 lg:hidden"
         onClick={onClose}
         aria-hidden
       />
+      {/*
+        Three placements, one rule: NEVER over the map.
+        The sheet says what the rhythm is, the map says where the place is, and the two are
+        read together — covering one to show the other is exactly what moving the detail out
+        of the list was meant to stop.
+
+         - phone: a drawer over everything, since nothing else is legible at that width
+         - from `lg`: it sits over the LIST column, whose width it matches. Four columns do
+           not fit under 1536px, and squeezing the map to three hundred pixels would give
+           back the defect we just fixed. The list is what gets covered — you have just
+           picked from it, and closing brings it straight back.
+         - from `2xl`: its own column, everything visible at once
+      */}
       <aside
         role="dialog"
         aria-label={row ? `Fiche de ${row.name}` : 'Fiche établissement'}
-        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-stone-200 bg-white shadow-xl"
+        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-stone-200 bg-white shadow-xl
+          lg:absolute lg:inset-y-0 lg:left-0 lg:right-auto lg:z-20 lg:w-80 lg:max-w-none lg:rounded-lg lg:border lg:shadow-lg
+          2xl:static 2xl:z-auto 2xl:min-h-0 2xl:w-96 2xl:shrink-0 2xl:shadow-sm"
       >
         <div className="flex items-start justify-between gap-3 border-b border-stone-200 p-4">
           <div className="min-w-0">

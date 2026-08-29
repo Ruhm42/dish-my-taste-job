@@ -34,8 +34,28 @@ interface Props {
 
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 
-/** Sentinel reason, distinguished from an Error message by the fallback view. */
+/** Sentinel reasons, distinguished from an Error message by the fallback view. */
 const NO_API_KEY = 'no-api-key'
+const KEY_REFUSED = 'key-refused'
+
+/**
+ * A rejected key does not reject the script.
+ *
+ * Google loads its bundle normally, then paints its own English panel over the map and
+ * calls this global. Without hooking it, the page shows a foreign error box in the middle
+ * of a French tool and our fallback — which still draws the real spread — never appears.
+ *
+ * The usual cause is the referrer allowlist on the browser key: it names the production
+ * domain and `localhost`, and a dev server that landed on another port is not in it.
+ */
+const authListeners = new Set<() => void>()
+let authFailed = false
+
+function onKeyRefused(listener: () => void): () => void {
+  if (authFailed) listener()
+  authListeners.add(listener)
+  return () => { authListeners.delete(listener) }
+}
 
 const LEGEND_ORDER: SplitShiftRisk[] = ['none', 'low', 'medium', 'high', 'unknown']
 
@@ -60,7 +80,14 @@ function loadMapsScript(apiKey: string): Promise<void> {
 
     // `loading=async` requires going through `callback`: the script's `load` event
     // fires BEFORE the constructors exist on `google.maps`.
-    ;(window as unknown as Record<string, () => void>)[CALLBACK_NAME] = () => resolve()
+    const globals = window as unknown as Record<string, () => void>
+    globals[CALLBACK_NAME] = () => resolve()
+
+    // Installed before the script, since Google calls it as soon as it has judged the key.
+    globals.gm_authFailure = () => {
+      authFailed = true
+      authListeners.forEach((listener) => listener())
+    }
 
     const timer = setTimeout(
       () => reject(new Error('délai dépassé au chargement')),
@@ -144,6 +171,10 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
       .catch((e: Error) => mounted && setError(e.message))
     return () => { mounted = false }
   }, [])
+
+  // A refused key arrives after the script has loaded, so it cannot come through the
+  // promise above: Google announces it by calling a global.
+  useEffect(() => onKeyRefused(() => setError(KEY_REFUSED)), [])
 
   /**
    * Single instantiation.
@@ -293,7 +324,11 @@ function MapFallback({ points, reason }: { points: MapPoint[]; reason: string })
       <p className="mb-2 text-xs text-stone-500">
         {reason === NO_API_KEY
           ? 'Aperçu de la répartition — la carte Google s’activera dès que la clé sera configurée.'
-          : `Aperçu de la répartition — carte Google indisponible (${reason}).`}
+          : reason === KEY_REFUSED
+            ? 'Aperçu de la répartition — Google a refusé la clé pour cette adresse. '
+              + 'La clé Maps est restreinte par référent : cette adresse (port compris) doit '
+              + 'figurer dans la liste autorisée.'
+            : `Aperçu de la répartition — carte Google indisponible (${reason}).`}
       </p>
       <svg viewBox="0 0 100 100" className="min-h-0 flex-1 rounded bg-stone-100">
         {points.map((p) => (

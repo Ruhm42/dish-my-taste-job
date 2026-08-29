@@ -145,7 +145,7 @@ export function SearchScreen({
         {filters}
       </aside>
 
-      <main className="flex min-h-0 flex-1 flex-col gap-2">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
         {/* The count is visible whichever surface is on screen — including on a phone,
             where only one of the two is. */}
         <div className="flex shrink-0 items-center gap-3 pt-1">
@@ -186,9 +186,21 @@ export function SearchScreen({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 gap-3">
+        {/* `relative`: from `lg` the detail panel is positioned against this row, so it
+            lands exactly on the list column and leaves the map alone. */}
+        <div className="relative flex min-h-0 flex-1 gap-3">
+          {/*
+            A fixed width, not a share of the space. The list is read line by line: past
+            roughly twenty-five characters the eye stops tracking rows and the column just
+            wastes what the map could use. `min-w-0` is what lets the names actually
+            truncate — a flex child defaults to min-width:auto, and without it the longest
+            establishment name sets the width of the whole column and squeezes the map to a
+            sliver.
+          */}
+          {/* `lg:w-80` is not a free choice: below 2xl the detail panel overlays this exact
+              column, and the two widths have to match or the overlay leaves a sliver. */}
           <div
-            className={`min-h-0 flex-1 flex-col ${mobileView === 'liste' ? 'flex' : 'hidden'} lg:flex`}
+            className={`min-h-0 min-w-0 flex-col ${mobileView === 'liste' ? 'flex' : 'hidden'} lg:flex lg:w-80 lg:flex-none`}
           >
             <ResultList
               rows={rows}
@@ -204,8 +216,10 @@ export function SearchScreen({
             />
           </div>
 
+          {/* The map takes everything the other two leave: it is the widest surface, and it
+              is the one that needs the room. */}
           <div
-            className={`min-h-0 flex-1 ${mobileView === 'carte' ? 'block' : 'hidden'} lg:block`}
+            className={`min-h-0 min-w-0 flex-1 ${mobileView === 'carte' ? 'block' : 'hidden'} lg:block`}
           >
             <RestaurantMap
               points={points}
@@ -216,14 +230,16 @@ export function SearchScreen({
               onHover={setHoveredId}
             />
           </div>
+
+          {/* In the flow on a large screen, so opening a sheet never covers the map: the
+              two are read together — the verdict on one side, where it is on the other. */}
+          <DetailPanel
+            id={selectedId}
+            initial={preloaded}
+            onClose={() => setSelectedId(null)}
+          />
         </div>
       </main>
-
-      <DetailPanel
-        id={selectedId}
-        initial={preloaded}
-        onClose={() => setSelectedId(null)}
-      />
     </div>
   )
 }
