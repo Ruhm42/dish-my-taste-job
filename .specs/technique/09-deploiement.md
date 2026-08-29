@@ -309,7 +309,10 @@ de données.
     et les URL de redirection Supabase. ⚠️ Tant que ce n'est pas fait, la clé Maps est
     utilisable par n'importe qui. Y ajouter le motif des URL de prévisualisation, sinon la
     carte ne se charge pas sur les branches — et la panne est muette de notre côté, seul
-    `gm_authFailure` la signale
+    `gm_authFailure` la signale. ⚠️ **Vercel tronque le nom du projet** dans les noms d'hôte
+    qu'il engendre : c'est `dish-my-taste-<hash>-hipopo-2684.vercel.app`, pas
+    `dish-my-taste-job-…`. Un motif bâti sur le nom complet du projet ne correspond à rien,
+    et il échoue exactement comme le `localhost:*` qui ne couvre aucun port
 
 ### Mise en service
 11. Déclencher **manuellement le maintien en vie** — il vérifie d'un coup le secret de base,
