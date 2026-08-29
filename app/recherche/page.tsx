@@ -23,7 +23,7 @@ type Params = Promise<Record<string, string | string[] | undefined>>
  */
 type RestaurantRow = Pick<typeof restaurant.$inferSelect,
   | 'id' | 'name' | 'commune' | 'lat' | 'lng' | 'phone' | 'formattedAddress'
-  | 'googlePlaceId' | 'category' | 'headcountCode' | 'splitShiftRisk' | 'confidence'
+  | 'googlePlaceId' | 'category' | 'cuisine' | 'headcountCode' | 'splitShiftRisk' | 'confidence'
   | 'closedWeekend' | 'maxConsecutiveDaysOff' | 'explanation' | 'schedule'>
 
 export default async function SearchPage({ searchParams }: { searchParams: Params }) {
@@ -47,7 +47,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
       id: restaurant.id, name: restaurant.name, commune: restaurant.commune,
       lat: restaurant.lat, lng: restaurant.lng, phone: restaurant.phone,
       formattedAddress: restaurant.formattedAddress, googlePlaceId: restaurant.googlePlaceId,
-      category: restaurant.category, headcountCode: restaurant.headcountCode,
+      category: restaurant.category, cuisine: restaurant.cuisine,
+      headcountCode: restaurant.headcountCode,
       splitShiftRisk: restaurant.splitShiftRisk, confidence: restaurant.confidence,
       closedWeekend: restaurant.closedWeekend,
       maxConsecutiveDaysOff: restaurant.maxConsecutiveDaysOff,
@@ -72,7 +73,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
 
   const points = results.map((r) => ({
     id: r.id, name: r.name, lat: r.lat, lng: r.lng, splitShiftRisk: r.splitShiftRisk,
-    category: r.category, commune: r.commune, explanation: r.explanation,
+    category: r.category, cuisine: r.cuisine, commune: r.commune, explanation: r.explanation,
     headcountCode: r.headcountCode, phone: r.phone, googlePlaceId: r.googlePlaceId,
   }))
 
@@ -162,6 +163,7 @@ function ResultRow({ row }: { row: RestaurantRow }) {
           <p className="text-xs text-stone-500">
             Fiabilité : {CONFIDENCE_LABELS[row.confidence]}
             {' · '}{CATEGORY_LABELS[row.category]}
+            {row.cuisine && <> · {row.cuisine}</>}
             {/* The headcount is the hinge of the whole verdict: opening hours alone never
                 say whether a split shift lands on the staff. Showing it lets the reader
                 judge the reasoning rather than trust the badge. */}

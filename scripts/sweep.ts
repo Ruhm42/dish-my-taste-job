@@ -21,7 +21,7 @@ import {
   DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES,
   GOOGLE_TO_SIRENE_RATIO, MAX_NEARBY_RESULTS, HOURS_TTL_DAYS, GOOGLE_PLACE_TYPES,
 } from '../lib/config'
-import { inferCategory } from '../lib/category'
+import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
@@ -228,11 +228,16 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
     const windows = parseOpeningHours(hours)
     const name = place.displayName?.text ?? '(sans nom)'
 
-    // `other` means "no clue": it must not overwrite an already inferred category.
+    // `other` from a place with no types at all is ignorance and must not overwrite what
+    // is stored; `other` decided from real types is a verdict — a supermarket is not an
+    // eating place — and it must.
     const stored = previous.get(id)
     const inferred = inferCategory({ types: place.types, naf: stored?.naf, name })
-    const category: Category = inferred === 'other' ? (stored?.category ?? 'other') : inferred
+    const hadSignal = (place.types?.length ?? 0) > 0
+    const category: Category =
+      inferred === 'other' && !hadSignal ? (stored?.category ?? 'other') : inferred
 
+    const cuisine = inferCuisine(place.types)
     const profile = computeProfile({ windows, headcountCode: stored?.headcount, category })
 
     const point = nearestSirenePoint(state, lat, lng)
@@ -250,6 +255,7 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
       commune: point ? (COMMUNE_NAMES[point.communeCode] ?? point.commune) : null,
       district: point ? (DISTRICT_BY_COMMUNE[point.communeCode] ?? null) : null,
       category,
+      cuisine,
       phone: place.nationalPhoneNumber ?? null,
       rawOpeningHours: hours,
       hoursFetchedAt: hours ? now : null,

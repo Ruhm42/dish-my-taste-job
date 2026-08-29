@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useTransition } from 'react'
-import { CATEGORY_LABELS, ZONES } from './badges'
+import { CATEGORY_LABELS, FILTERABLE_CATEGORIES, ZONES } from './badges'
 
 /**
  * Filters live in the URL: a search can be bookmarked and shared.
@@ -88,9 +88,11 @@ export function FiltersPanel({ activeCount }: { activeCount: number }) {
 
       <Section title="Type d’établissement">
         <div className="flex flex-wrap gap-1.5">
-          {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
+          {/* Driven by FILTERABLE_CATEGORIES, not by every label: `canteen` and
+              `fine_dining` exist in the enum but would only ever return nothing. */}
+          {FILTERABLE_CATEGORIES.map((key) => (
             <Chip key={key} active={isOn('categorie', key)} onClick={() => toggle('categorie', key)}>
-              {label}
+              {CATEGORY_LABELS[key]}
             </Chip>
           ))}
         </div>

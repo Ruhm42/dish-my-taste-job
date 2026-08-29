@@ -15,7 +15,7 @@
  * See .specs/technique/05-inference-des-horaires.md and 06-pipeline-ingestion.md (step 6).
  */
 import { eq } from 'drizzle-orm'
-import { inferCategory } from '../lib/category'
+import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type {
   Category, Confidence, GoogleOpeningHours, RhythmProfile, ServiceWindow, SplitShiftRisk,
@@ -38,13 +38,18 @@ const BATCH_SIZE = 100
 interface Recomputed {
   row: Row
   category: Category
+  cuisine: string | null
   windows: ServiceWindow[]
   profile: RhythmProfile
 }
 
 /**
- * `other` means "no clue", not "something else": a silent inference must never erase an
- * already known category.
+ * `other` carries two different meanings, and only one of them should overwrite.
+ *
+ * From an establishment that gave us no types at all, it means "no clue" — a silent
+ * inference must not erase a category that is already there. From an establishment with
+ * real types, it is a VERDICT: a supermarket is not an eating place, and saying so is the
+ * point of the guard.
  */
 function pickCategory(row: Row): Category {
   const inferred = inferCategory({
@@ -52,14 +57,16 @@ function pickCategory(row: Row): Category {
     naf: row.nafCode,
     name: row.name,
   })
-  return inferred === 'other' ? row.category : inferred
+  const hadSignal = (row.googleTypes?.length ?? 0) > 0
+  return inferred === 'other' && !hadSignal ? row.category : inferred
 }
 
 function recompute(row: Row): Recomputed {
   const windows = parseOpeningHours(row.rawOpeningHours as GoogleOpeningHours | null)
   const category = pickCategory(row)
+  const cuisine = inferCuisine(row.googleTypes)
   const profile = computeProfile({ windows, headcountCode: row.headcountCode, category })
-  return { row, category, windows, profile }
+  return { row, category, cuisine, windows, profile }
 }
 
 /**
@@ -69,7 +76,7 @@ function recompute(row: Row): Recomputed {
  * label that contradicts it.
  */
 function writtenColumns(r: Recomputed) {
-  return { category: r.category, ...profileColumns(r.windows, r.profile) }
+  return { category: r.category, cuisine: r.cuisine, ...profileColumns(r.windows, r.profile) }
 }
 
 interface Divergence {

@@ -8,8 +8,17 @@ export const confidenceEnum = pgEnum('confidence', ['confirmed', 'likely', 'unve
 export const servicePatternEnum = pgEnum('service_pattern', [
   'lunch_only', 'dinner_only', 'split', 'continuous', 'mixed',
 ])
+/**
+ * Establishment categories, ordered by how the work actually feels rather than by cuisine.
+ *
+ * `brasserie` was merged into `bistro`: Google has no such type and nothing in the data
+ * separates the two. `canteen` and `fine_dining` are near-empty in practice and hidden
+ * from the filter panel, but `canteen` stays because it short-circuits the split-shift
+ * inference — see lib/hours/profile.ts.
+ */
 export const categoryEnum = pgEnum('category', [
-  'bistro', 'brasserie', 'fine_dining', 'fast_food', 'canteen', 'bar', 'pizzeria', 'other',
+  'restaurant', 'bistro', 'fine_dining', 'fast_food', 'pizzeria',
+  'bar', 'cafe', 'bakery', 'caterer', 'canteen', 'other',
 ])
 export const applicationStatusEnum = pgEnum('application_status', [
   'to_contact', 'cv_submitted', 'followed_up', 'interview', 'accepted', 'rejected',
@@ -35,6 +44,8 @@ export const restaurant = pgTable('restaurant', {
   commune: text('commune'),
   district: smallint('district'),
   category: categoryEnum('category').notNull().default('other'),
+  /** French cuisine label ("japonais", "libanais"), shown as information. Never a filter. */
+  cuisine: text('cuisine'),
   phone: text('phone'),
 
   // SIRENE link — null when unmatched: empty beats wrong.

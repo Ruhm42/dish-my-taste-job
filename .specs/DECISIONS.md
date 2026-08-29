@@ -603,3 +603,58 @@ charge qui vérifie, pas la première réponse encourageante.
 > `raw_opening_hours`, la colonne la plus volumineuse de la table. Le type de ligne est
 > restreint aux colonnes réellement affichées, de sorte qu'ajouter un champ au rendu sans
 > l'ajouter à la requête **ne compile pas**.
+
+---
+
+## D24 — Catégories par rythme de travail, cuisine en information
+
+**Contexte.** Le filtre « type d'établissement » était inexploitable : **41,6 %** des 4 465
+établissements en « autre », et 1,9 % de bistrots — à Lyon. La cause tenait en une ligne :
+la déduction réduisait les types Google à un `Set`, **détruisant leur ordre**, alors que
+`types[0]` est le type principal et règle à lui seul 94,8 % des cas. Elle testait aussi le
+code d'activité « débit de boissons » avant tout le reste, ce qui aurait rangé en `bar` les
+**600 établissements à la fois bar et restaurant** — le café-restaurant français ordinaire.
+
+**Options écartées**
+- *Une catégorie « cuisine du monde »* — ferait tomber le générique de 46 % à 28 %, mais
+  mettrait un japonais gastronomique et un kebab assis dans le même sac.
+- *Un filtre cuisine complet* — ajouterait une quatrième dimension à un panneau qui en a
+  déjà trois, pour une information qui ne dit rien du rythme.
+- *Sortir boulangeries et traiteurs du périmètre* — ce sont des employeurs légitimes du
+  secteur, et une boulangerie a même un rythme très recherché : tôt le matin, sans coupure.
+- *Garder « gastronomique » et « collectivité » dans le filtre* — 7 et 2 établissements.
+  Une puce qui ne renvoie jamais rien est pire qu'une puce absente.
+
+**Décision.** Neuf catégories filtrables, ordonnées par **rythme de travail et non par
+cuisine** : restaurant, bistrot/brasserie, restauration rapide, pizzeria, bar, café,
+boulangerie/pâtisserie, traiteur/livraison, autre. `brasserie` est fusionnée dans `bistro` —
+Google n'a pas ce type et rien dans les données ne les sépare. `canteen` et `fine_dining`
+restent dans l'énumération mais sortent du panneau : `canteen` court-circuite l'inférence
+de coupure.
+
+**La cuisine devient une information affichée sur la fiche**, jamais un filtre. C'est le bon
+axe de fond : un japonais et un bouchon ont le même profil d'horaires ; ce qui les distingue
+relève du métier, pas du planning.
+
+**Conséquences, mesurées.** « Autre » passe de **41,6 % à 2,1 %**, et les 94 restants sont
+des commerces correctement écartés. 1 397 établissements portent une cuisine. La répartition
+des risques de coupure est **strictement inchangée** — 50,1 % / 23,1 % / 22,4 % — ce qui
+confirme que seule la catégorisation a bougé.
+
+> **Deux pièges trouvés en vérifiant sur échantillon, pas en relisant le code.**
+>
+> **61 supermarchés classés en « restauration rapide ».** Le balayage demande le type
+> `meal_takeaway`, donc un Carrefour City remonte, et le repli trouvait ce type. Une liste
+> de types explicitement non-restauration coupe court. Les hôtels en sont volontairement
+> absents : l'hôtel-restaurant est un vrai employeur.
+>
+> **`other` a deux sens, et un seul doit écraser.** Venant d'un établissement sans aucun
+> type, c'est « aucune idée » — il ne doit pas effacer une catégorie déjà connue. Venant
+> d'un établissement avec de vrais types, c'est un **verdict** : un supermarché n'est pas un
+> lieu de restauration. Sans cette distinction, le garde-fou ci-dessus ne modifiait aucune
+> ligne.
+
+**Gratuit au passage** : `places.primaryType` est ajouté au field mask. Ce champ relève du
+palier Pro, or `regularOpeningHours` place déjà l'appel en Enterprise et la facturation suit
+le champ le plus cher. Le prochain balayage aura donc la classification officielle de Google
+au lieu de la déduire de `types[0]`.

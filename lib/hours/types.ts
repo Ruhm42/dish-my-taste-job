@@ -18,9 +18,14 @@ export type Confidence = 'confirmed' | 'likely' | 'unverified'
 export type ServicePattern = 'lunch_only' | 'dinner_only' | 'split' | 'continuous' | 'mixed'
 export type TeamSize = 'small' | 'medium' | 'large' | 'unknown'
 
+/**
+ * Establishment kinds, grouped by how the work feels rather than by cuisine — the cuisine
+ * is reported separately and says nothing about the rhythm.
+ * Must stay in step with the `category` enum in lib/db/schema.ts.
+ */
 export type Category =
-  | 'bistro' | 'brasserie' | 'fine_dining' | 'fast_food'
-  | 'canteen' | 'bar' | 'pizzeria' | 'other'
+  | 'restaurant' | 'bistro' | 'fine_dining' | 'fast_food' | 'pizzeria'
+  | 'bar' | 'cafe' | 'bakery' | 'caterer' | 'canteen' | 'other'
 
 /** Shape of the opening hours Google returns (`regularOpeningHours`). */
 export interface GoogleTimePoint { day: number; hour: number; minute: number }

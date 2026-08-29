@@ -74,6 +74,10 @@ export const FIELD_MASK = [
   'places.formattedAddress',
   'places.location',
   'places.types',
+  // Google's own primary classification. It belongs to the Pro tier, and billing follows
+  // the most expensive field requested — `regularOpeningHours` already puts this call on
+  // Enterprise, so this one is free. It replaces our inference from `types[0]`.
+  'places.primaryType',
   'places.businessStatus',
   'places.regularOpeningHours',
   'places.nationalPhoneNumber',

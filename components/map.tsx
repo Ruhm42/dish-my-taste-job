@@ -17,6 +17,7 @@ export interface MapPoint {
   headcountCode: string | null
   phone: string | null
   googlePlaceId: string
+  cuisine: string | null
 }
 
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -177,7 +178,7 @@ function buildCard(p: MapPoint): HTMLElement {
   title.style.cssText = 'font-weight: 600; margin-bottom: 2px'
   root.append(title)
 
-  const context = [p.commune, CATEGORY_LABELS[p.category]].filter(Boolean).join(' · ')
+  const context = [p.commune, CATEGORY_LABELS[p.category], p.cuisine].filter(Boolean).join(' · ')
   if (context) {
     const line = document.createElement('div')
     line.textContent = context

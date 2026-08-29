@@ -29,10 +29,23 @@ export const CONFIDENCE_LABELS: Record<Confidence, string> = {
 
 /** Insertion order drives the filter chips, so it is also the order on screen. */
 export const CATEGORY_LABELS: Record<Category, string> = {
-  bistro: 'Bistrot', brasserie: 'Brasserie', fine_dining: 'Gastronomique',
-  fast_food: 'Restauration rapide', canteen: 'Restauration collective',
-  bar: 'Bar', pizzeria: 'Pizzeria', other: 'Autre',
+  restaurant: 'Restaurant', bistro: 'Bistrot / Brasserie', fine_dining: 'Gastronomique',
+  fast_food: 'Restauration rapide', pizzeria: 'Pizzeria', bar: 'Bar', cafe: 'Café',
+  bakery: 'Boulangerie / Pâtisserie', caterer: 'Traiteur / Livraison',
+  canteen: 'Restauration collective', other: 'Autre',
 }
+
+/**
+ * The categories offered as filter chips.
+ *
+ * `canteen` (2 establishments) and `fine_dining` (7) are left out: company canteens are
+ * not on Google Maps because they are not open to the public, and Google barely uses
+ * `fine_dining_restaurant`. A chip that can only ever return nothing is worse than no
+ * chip. Both stay in the enum — `canteen` short-circuits the split-shift inference.
+ */
+export const FILTERABLE_CATEGORIES: Category[] = [
+  'restaurant', 'bistro', 'fast_food', 'pizzeria', 'bar', 'cafe', 'bakery', 'caterer', 'other',
+]
 
 /**
  * Zone filter chips, derived from the sweep perimeter rather than listed by hand.
@@ -57,20 +70,22 @@ export const ZONES = COMMUNE_CODES.map((insee) => ({
  * anything more detailed turns to mush at that size.
  */
 export const CATEGORY_SHAPES: Record<Category, string> = {
-  bistro: 'M 0,-8 A 8,8 0 1,1 0,8 A 8,8 0 1,1 0,-8 Z',        // cercle
-  brasserie: 'M -7,-7 H 7 V 7 H -7 Z',                         // carré
-  fine_dining: 'M 0,-9 L 9,0 L 0,9 L -9,0 Z',                  // losange
-  fast_food: 'M -8,-5 H 8 V 5 H -8 Z',                         // rectangle plat
-  canteen: 'M 0,-8 L 7,-4 V 4 L 0,8 L -7,4 V -4 Z',            // hexagone
-  bar: 'M 0,8 L 8,-6 L -8,-6 Z',                               // triangle pointe en bas
-  pizzeria: 'M 0,-8 L 8,6 L -8,6 Z',                           // triangle pointe en haut
-  other: 'M 0,-6 A 6,6 0 1,1 0,6 A 6,6 0 1,1 0,-6 Z',          // petit cercle
+  restaurant: 'M 0,-8 A 8,8 0 1,1 0,8 A 8,8 0 1,1 0,-8 Z',   // cercle
+  bistro: 'M -7,-7 H 7 V 7 H -7 Z',                          // carré
+  fine_dining: 'M 0,-9 L 9,0 L 0,9 L -9,0 Z',                // losange
+  fast_food: 'M -9,-5 H 9 V 5 H -9 Z',                       // rectangle plat
+  pizzeria: 'M 0,-8 L 8,6 L -8,6 Z',                         // triangle pointe en haut
+  bar: 'M 0,8 L 8,-6 L -8,-6 Z',                             // triangle pointe en bas
+  cafe: 'M -6,-6 H 6 L 4,7 H -4 Z',                          // tasse (trapèze)
+  bakery: 'M 0,-8 L 7,-4 V 4 L 0,8 L -7,4 V -4 Z',           // hexagone
+  caterer: 'M -2,-8 H 2 V -2 H 8 V 2 H 2 V 8 H -2 V 2 H -8 V -2 H -2 Z',  // croix
+  canteen: 'M -6,-8 H 6 L 8,0 L 6,8 H -6 L -8,0 Z',          // octogone allongé
+  other: 'M 0,-5 A 5,5 0 1,1 0,5 A 5,5 0 1,1 0,-5 Z',        // petit cercle
 }
 
 /** Shapes worth showing in the legend, in the order they read best. */
-export const SHAPE_LEGEND: Category[] = [
-  'bistro', 'brasserie', 'fine_dining', 'fast_food', 'canteen', 'bar', 'pizzeria', 'other',
-]
+/** Only the shapes a user can actually meet in the filter, in the order they read best. */
+export const SHAPE_LEGEND: Category[] = FILTERABLE_CATEGORIES
 
 /**
  * Deep link to the establishment's own Google Maps page — the fastest way to check the

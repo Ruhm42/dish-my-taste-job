@@ -42,7 +42,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   // Closed Sunday + Monday: two consecutive days off, but a certain split shift.
   lyonBistro: { category: 'bistro', headcountCode: '02', periods: periods(TUE_TO_SAT, [[12, 0, 14, 0], [19, 0, 22, 0]]) },
   // Continuous service, large team: no split shift possible.
-  continuousBrasserie: { category: 'brasserie', headcountCode: '12', periods: periods(EVERY_DAY, [[11, 30, 23, 0]]) },
+  continuousBrasserie: { category: 'bistro', headcountCode: '12', periods: periods(EVERY_DAY, [[11, 30, 23, 0]]) },
   // The prize profile: neither split shift nor weekend.
   staffCanteen: { category: 'canteen', headcountCode: '11', periods: periods(WEEKDAYS, [[7, 0, 15, 0]]) },
   officeLunch: { category: 'bistro', headcountCode: '02', periods: periods(WEEKDAYS, [[11, 30, 15, 0]]) },
@@ -53,7 +53,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   wineBar: { category: 'bar', headcountCode: '01', periods: periods(TUE_TO_SAT, [[17, 0, 1, 0]]) },
   eveningPizzeria: { category: 'pizzeria', headcountCode: '02', periods: periods([TUE, WED, THU, FRI, SAT, SUN], [[18, 30, 23, 0]]) },
   // Split shift in the opening hours, but 20+ employees: two brigades are likely.
-  splitShiftBrasserie: { category: 'brasserie', headcountCode: '12', periods: periods([MON, TUE, WED, THU, FRI, SAT], [[12, 0, 15, 0], [19, 0, 23, 0]]) },
+  splitShiftBrasserie: { category: 'bistro', headcountCode: '12', periods: periods([MON, TUE, WED, THU, FRI, SAT], [[12, 0, 15, 0], [19, 0, 23, 0]]) },
   // Unknown headcount: the confidence must degrade visibly.
   splitShiftUnknownHeadcount: { category: 'bistro', headcountCode: null, periods: periods(TUE_TO_SAT, [[12, 0, 14, 30], [19, 0, 22, 30]]) },
   // Google does not know the opening hours: we display the place anyway.
