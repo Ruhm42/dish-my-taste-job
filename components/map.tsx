@@ -33,9 +33,9 @@ const LEGEND_ORDER: SplitShiftRisk[] = ['none', 'low', 'medium', 'high', 'unknow
  * change would spend a billable load.
  * See .specs/technique/02-budget-google-et-garde-fous.md
  */
-export function RestaurantMap({ points }: { points: MapPoint[] }) {
+export function RestaurantMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
   if (!API_KEY) return <MapFallback points={points} reason={NO_API_KEY} />
-  return <GoogleMap points={points} />
+  return <GoogleMap points={points} fitKey={fitKey} />
 }
 
 /**
@@ -74,10 +74,10 @@ function loadMapsScript(apiKey: string): Promise<void> {
   return scriptPromise
 }
 
-function GoogleMap({ points }: { points: MapPoint[] }) {
+function GoogleMap({ points, fitKey }: { points: MapPoint[]; fitKey: string }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<google.maps.Map | null>(null)
-  const markers = useRef<google.maps.Marker[]>([])
+  const markers = useRef<Map<string, google.maps.Marker>>(new Map())
   const infoWindow = useRef<google.maps.InfoWindow | null>(null)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -101,15 +101,24 @@ function GoogleMap({ points }: { points: MapPoint[] }) {
     })
   }, [ready])
 
-  // Only the markers change when the filters move.
+  // Markers are reconciled, not rebuilt.
+  //
+  // Infinite scroll appends: rebuilding every marker on each page would recreate hundreds
+  // of Google objects for the sake of fifty new ones, and the map would stutter more the
+  // further you scrolled.
   useEffect(() => {
     if (!ready || !map.current) return
-    markers.current.forEach((m) => m.setMap(null))
     infoWindow.current ??= new google.maps.InfoWindow()
 
-    markers.current = points.map((p) => {
+    const wanted = new Set(points.map((p) => p.id))
+    for (const [id, marker] of markers.current) {
+      if (!wanted.has(id)) { marker.setMap(null); markers.current.delete(id) }
+    }
+
+    for (const p of points) {
+      if (markers.current.has(p.id)) continue
       const marker = new google.maps.Marker({
-        map: map.current!,
+        map: map.current,
         position: { lat: p.lat, lng: p.lng },
         title: p.name,
         icon: {
@@ -129,21 +138,28 @@ function GoogleMap({ points }: { points: MapPoint[] }) {
         infoWindow.current!.setContent(buildCard(p))
         infoWindow.current!.open({ map: map.current!, anchor: marker })
       })
-      return marker
-    })
-    if (points.length) {
-      const bounds = new google.maps.LatLngBounds()
-      points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }))
-      map.current.fitBounds(bounds, 48)
-
-      // On a single result, fitBounds zooms all the way in and every landmark is lost:
-      // keep enough context to place the neighbourhood.
-      const m = map.current
-      google.maps.event.addListenerOnce(m, 'idle', () => {
-        if ((m.getZoom() ?? 0) > 15) m.setZoom(15)
-      })
+      markers.current.set(p.id, marker)
     }
   }, [ready, points])
+
+  // Framing follows the SEARCH, not the scroll.
+  //
+  // Refitting on every points change would yank the map back to a new frame each time the
+  // reader loaded another page — the map jumping under you as you scroll the list.
+  useEffect(() => {
+    if (!ready || !map.current || points.length === 0) return
+    const bounds = new google.maps.LatLngBounds()
+    points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }))
+    map.current.fitBounds(bounds, 48)
+
+    // On a single result, fitBounds zooms all the way in and every landmark is lost:
+    // keep enough context to place the neighbourhood.
+    const m = map.current
+    google.maps.event.addListenerOnce(m, 'idle', () => {
+      if ((m.getZoom() ?? 0) > 15) m.setZoom(15)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately not `points`
+  }, [ready, fitKey])
 
   // A map that fails to load must not leave an empty frame: fall back to the preview,
   // which stays usable.

@@ -50,7 +50,7 @@ Liste volontairement explicite : c'est elle qui protège du glissement de périm
 |---|---|
 | **Corriger ou modifier un établissement** | Lecture seule. Les données viennent de Google ; on ne les édite pas, on ne les complète pas |
 | **Avis, notes, commentaires** | Ce n'est pas un site d'avis. Le jugement sur un employeur ne se publie pas ici |
-| **Offres d'emploi** | On ne dit jamais si un établissement recrute. On dit s'il correspond aux critères ; c'est à l'utilisateur d'aller voir — on lui indique **où** chercher, jamais **qui** recrute (D25) |
+| **Offres d'emploi** | On ne dit jamais si un établissement recrute. On dit s'il correspond aux critères ; c'est à l'utilisateur d'aller voir — on lui indique **où** chercher, jamais **qui** recrute (D26) |
 | **Messagerie, candidature en ligne** | On ne met personne en relation. On donne une adresse et un numéro |
 | **Inscription publique** | L'accès est sur liste d'emails autorisés |
 | **Autres villes** | Métropole de Lyon uniquement. Le changement de ville est possible, mais c'est une décision, pas une fonctionnalité |

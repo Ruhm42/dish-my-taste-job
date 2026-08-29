@@ -67,7 +67,7 @@ sur un établissement de la liste**. C'est la limite qui fait tenir la promesse 
 indique où chercher, on ne dit pas qui recrute. Quand la recherche ne renvoie rien, l'écran
 renvoie vers ce bloc.
 
-Voir D25.
+Voir D26.
 
 ## La carte
 

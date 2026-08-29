@@ -63,6 +63,7 @@ See [`.specs/technique/02-budget-google-et-garde-fous.md`](.specs/technique/02-b
 ```bash
 npm run db:up            # local Postgres (docker, port 5434)
 npm run db:push          # apply the Drizzle schema
+npm run db:pull          # copy production into the local DB (public schema only, never auth)
 npm run seed             # 37 fictional demo establishments
 npm run dev              # Next.js
 npm test                 # vitest

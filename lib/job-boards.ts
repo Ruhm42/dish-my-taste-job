@@ -10,7 +10,7 @@
  * Static URLs only. The online app calls no external API (.specs/technique/00-architecture),
  * which also keeps the feature at zero euro and free of any third-party outage.
  *
- * See D25.
+ * See D26.
  */
 
 /**
