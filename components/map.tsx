@@ -324,6 +324,11 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
 
   // Emphasis: only the markers entering or leaving it are restyled. Touching all of them
   // would cost four thousand redraws for a mouse moving down the list.
+  //
+  // `visible` for the same reason as the effect above: the markers do not exist until the map
+  // does. A phone reader picks their row in the list tab, so this ran against an empty map and
+  // never again — the map then opened on the right point wearing the plain icon, which is the
+  // one thing the reveal is there to prevent.
   useEffect(() => {
     if (!ready) return
     const next = new Set([selectedId, hoveredId].filter((id): id is string => !!id))
@@ -347,7 +352,7 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     }
 
     emphasised.current = next
-  }, [ready, selectedId, hoveredId, pointById])
+  }, [ready, visible, selectedId, hoveredId, pointById])
 
   /**
    * A row picked in the list must be findable on the map.
