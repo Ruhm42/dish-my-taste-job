@@ -61,6 +61,14 @@ function onKeyRefused(listener: () => void): () => void {
   return () => { authListeners.delete(listener) }
 }
 
+/**
+ * The clusterer groups up to this zoom — a street is read point by point, not in bulk.
+ *
+ * The level just above is therefore the first one on which every point is drawn on its own,
+ * which is where a point buried inside a group reappears.
+ */
+const CLUSTER_MAX_ZOOM = 17
+
 const LEGEND_ORDER: SplitShiftRisk[] = ['none', 'low', 'medium', 'high', 'unknown']
 
 export function RestaurantMap(props: Props) {
@@ -264,6 +272,11 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
   // Markers are reconciled, not rebuilt: changing one filter usually keeps most of the
   // points, and rebuilding four thousand Google objects to add ten is what makes a map
   // stutter.
+  //
+  // `visible` is a dependency because the map is not created until it is true. The script is
+  // ready long before a phone reader taps the map tab, so this used to run once against a map
+  // that did not exist yet and never again: the map opened framed on Lyon and completely
+  // empty, which is the silent subset this project refuses everywhere else.
   useEffect(() => {
     if (!ready || !map.current) return
 
@@ -292,8 +305,7 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
       renderer: clusterRenderer,
       algorithm: new SuperClusterAlgorithm({
         radius: 70,
-        // Past this zoom, points stand alone — a street is read point by point, not in bulk.
-        maxZoom: 17,
+        maxZoom: CLUSTER_MAX_ZOOM,
         /**
          * Nothing groups below four.
          *
@@ -308,7 +320,7 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     })
     clusterer.current.clearMarkers(true)
     clusterer.current.addMarkers([...markers.current.values()])
-  }, [ready, points, pointById])
+  }, [ready, visible, points, pointById])
 
   // Emphasis: only the markers entering or leaving it are restyled. Touching all of them
   // would cost four thousand redraws for a mouse moving down the list.
@@ -337,17 +349,43 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     emphasised.current = next
   }, [ready, selectedId, hoveredId, pointById])
 
-  // A row picked in the list must be findable on the map. We pan only when the point is
-  // off-screen: recentring on every click would move the map under a reader who is
-  // comparing two places side by side.
-  useEffect(() => {
-    if (!ready || !map.current || !selectedId) return
+  /**
+   * A row picked in the list must be findable on the map.
+   *
+   * Panning is not enough on its own. A point caught in a group is not merely small on
+   * screen: the clusterer takes it off the map and draws a count in its place, so
+   * emphasising it changed nothing and centring on it centred on a number. The zoom is what
+   * gets it back — one level past where the clusterer stops grouping is the first frame that
+   * draws it alone.
+   *
+   * When it IS drawn, the map moves as little as it can: a pan only if the point sits
+   * off-screen, nothing at all otherwise. Recentring on every click would move the map under
+   * a reader comparing two places side by side.
+   */
+  const reveal = useCallback(() => {
+    const m = map.current
+    if (!m || !selectedId) return
     const point = pointById.get(selectedId)
-    if (!point) return
+    const marker = markers.current.get(selectedId)
+    if (!point || !marker) return
+
     const position = { lat: point.lat, lng: point.lng }
-    const bounds = map.current.getBounds()
-    if (bounds && !bounds.contains(position)) map.current.panTo(position)
-  }, [ready, selectedId, pointById])
+    if (!marker.getMap()) {
+      m.setZoom(CLUSTER_MAX_ZOOM + 1)
+      m.panTo(position)
+      return
+    }
+
+    const bounds = m.getBounds()
+    if (bounds && !bounds.contains(position)) m.panTo(position)
+  }, [selectedId, pointById])
+
+  // Through a ref, so the framing effect below can hand over to it without taking the
+  // selection as a dependency and refitting on every click.
+  const revealRef = useRef(reveal)
+  revealRef.current = reveal
+
+  useEffect(() => { if (ready) reveal() }, [ready, reveal])
 
   // Framing follows the SEARCH, not the scroll.
   //
@@ -360,11 +398,22 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }))
     map.current.fitBounds(bounds, 48)
 
-    // On a single result, fitBounds zooms all the way in and every landmark is lost:
-    // keep enough context to place the neighbourhood.
+    // Whatever moved the map, the selected point ends up visible on it: a frame that hides
+    // the establishment whose sheet is open answers a click with nothing. On a phone this is
+    // the only path there — the row is picked in the list tab, and the map is framed the
+    // moment the reader switches to it.
     const m = map.current
     google.maps.event.addListenerOnce(m, 'idle', () => {
-      if ((m.getZoom() ?? 0) > 15) m.setZoom(15)
+      // On a single result, fitBounds zooms all the way in and every landmark is lost:
+      // keep enough context to place the neighbourhood.
+      if ((m.getZoom() ?? 0) > 15) {
+        m.setZoom(15)
+        // What the clusterer draws is recomputed at the new zoom, on the next idle. Reading
+        // it now would judge the frame we just left.
+        google.maps.event.addListenerOnce(m, 'idle', () => revealRef.current())
+        return
+      }
+      revealRef.current()
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately not `points`
   }, [ready, visible, fitKey])

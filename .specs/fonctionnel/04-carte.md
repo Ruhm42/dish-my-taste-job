@@ -78,6 +78,14 @@ gagner la largeur d'un marqueur — le pire taux de change que la carte puisse p
 obligeait à zoomer pour défaire ce qu'on venait de cacher. Les petits groupes restent des
 points colorés ; seul un tas réellement illisible devient un chiffre.
 
+**Un point choisi n'est jamais caché.** Un point pris dans un regroupement n'est pas seulement
+petit à l'écran : il n'est pas dessiné du tout, le nombre occupe sa place. Mettre sa ligne en
+évidence ne changeait donc rien, et se recentrer dessus revenait à se centrer sur un chiffre.
+Choisir une ligne zoome jusqu'au niveau où le regroupement se défait, et le point réapparaît,
+seul et coloré. Quand il est déjà dessiné, la carte bouge le moins possible : un déplacement
+s'il est hors cadre, rien du tout sinon — se recentrer à chaque clic déplacerait la carte sous
+quelqu'un qui compare deux adresses.
+
 **Pour juger un quartier d'un regard, on filtre.** « Sans coupure », et la carte ne garde que
 ceux-là : la densité des points restants *est* la réponse. C'est plus honnête qu'une couleur
 agrégée, et c'est ce que la dissociation rend enfin possible — avant, filtrer ne changeait
@@ -119,7 +127,7 @@ Dissocier le chargement ne veut pas dire dissocier l'usage : les deux surfaces s
 | Survoler une ligne | Son point est mis en avant sur la carte |
 | Survoler un point | Sa ligne est mise en évidence, si elle est chargée |
 | **Cliquer un point** | **Le détail de l'établissement s'ouvre**, directement |
-| Cliquer une ligne | Le même détail s'ouvre |
+| Cliquer une ligne | Le même détail s'ouvre, et **son point devient visible sur la carte** |
 
 Le clic sur un point ouvre le détail **sans passer par la liste**. C'est le changement que la
 dissociation impose : la carte porte des milliers d'établissements, la liste n'en a chargé que
