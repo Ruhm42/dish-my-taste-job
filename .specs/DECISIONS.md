@@ -1189,3 +1189,67 @@ l'expiration se manifestera par un déploiement rouge et non par une panne. Et l
 pointent sur la base de **production**, faute d'une seconde base : les données d'établissement
 sont en lecture seule et les previews sont derrière le SSO Vercel, mais c'est à savoir avant
 d'y tester une écriture.
+
+---
+
+## D33 — Un balayage en échec n'emporte plus les étapes hors ligne
+
+**Contexte.** `cron:refresh` enchaîne `plan:cells`, `sweep:google`, `match:sirene` et
+`compute:profiles`. La première erreur interrompait le cycle. Or [D22](#d22) veut qu'un
+balayage s'arrête sur son plafond de quota, et [D28](#d28) a mesuré qu'il ne converge pas en
+une période : **l'échec est donc l'état normal de chaque mois**, pas l'exception.
+
+Conséquence observée le 1er septembre : le balayage s'arrête sur un `HTTP 500` de Google
+après 737 appels, 115 établissements sont importés et payés — et repartent sans effectif
+SIRENE, avec un profil calculé selon des règles antérieures, pour aussi longtemps que dure
+la convergence. Le travail déjà payé était abandonné à cause d'une étape qui, elle, ne coûte
+rien.
+
+**Décision.** Les deux étapes **hors ligne** — `match:sirene` et `compute:profiles` — tournent
+même quand une étape antérieure a échoué. Elles ne dépensent aucun appel Google et ne
+dépendent pas de la complétude du balayage : chacune travaille **établissement par
+établissement** sur des lignes déjà en base. Le cycle échoue toujours : la **première** erreur
+est conservée et relancée à la fin, donc le code de sortie et la construction rouge sont
+inchangés.
+
+**Ce qui dépendait réellement de la complétude, et qui est traité ailleurs.**
+
+Le canari de `match:sirene` cherche une **commune** dont le taux de non-appariement se
+détache du taux global — cette concentration est ce qui trahit un défaut de normalisation ou
+de géocodage. Sur un balayage inachevé, toutes les communes sont uniformément non appariées
+pour une raison étrangère à l'appariement : la référence monte partout et la concentration
+s'y dissout. Le détecteur se taisait précisément quand il aurait servi.
+
+Le script décide donc lui-même : tant que des cellules sont dues, il **affiche** les chiffres,
+**annonce qu'il ne les enregistre pas** et dit pourquoi. `sirene_unmatched` n'est pas écrit —
+y mettre un nombre dénué de sens polluerait la comparaison d'un balayage à l'autre, seule
+raison d'être de la colonne. La détection est demandée au script plutôt que passée en
+drapeau : une seule source de vérité, et la règle reste juste quand quelqu'un lance
+`match:sirene` à la main après une interruption.
+
+> Mesuré sur la production le 1er septembre : Villeurbanne à **84,7 %** de non-appariés. Sur
+> un balayage complet, c'est une alarme ; ce jour-là, cela signifiait seulement que
+> Villeurbanne n'avait pas encore été balayée.
+
+**Options écartées.**
+
+- *Garder l'arrêt sec* — abandonne chaque mois un travail déjà payé, pour protéger un seul
+  indicateur qu'il suffit de retirer.
+- *Un drapeau `--sweep-incomplete` passé par `cron:refresh`* — deux sources de vérité, et
+  faux dès qu'on lance le script à la main.
+- *Faire aussi tourner `plan:cells` et `sweep:google` après un échec* — refusé : ce sont les
+  étapes qui dépensent, et rejouer un balayage qui vient d'échouer, c'est payer deux fois.
+- *Rendre le cycle vert malgré l'échec* — le silence est le mode de panne que ce projet
+  refuse partout ailleurs.
+
+**Conséquence sur le mode sec.** Les deux étapes hors ligne ont désormais un mode sans
+écriture dans le cycle (`match:sirene --dry-run`, `compute:profiles --check`). Un cycle sec
+répète donc la chaîne entière au lieu de s'arrêter après le balayage — ce qui rend cet
+enchaînement vérifiable, et c'est ainsi qu'il a été vérifié.
+
+**Vérification.** Échec provoqué dans la boucle sur une copie du script, base locale, mode
+sec : `sweep:google` échoue, `! sweep:google failed — continuing with the offline steps`,
+puis `match:sirene` et `compute:profiles` s'exécutent, le canari se retire en s'expliquant, la
+fraîcheur est rapportée, et le cycle finit sur `MONTHLY CYCLE FAILED — sweep:google failed
+(exit code 1)`. Sur la production en mode sec : **25 effectifs** et **33 profils** que
+l'ancien enchaînement abandonnait.

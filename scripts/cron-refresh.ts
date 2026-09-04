@@ -88,9 +88,14 @@ interface Step {
   args: string[]
   /**
    * Arguments in dry run, or `null` when the step has no write-free mode: it is then
-   * skipped. We do not pretend to match against a database we have not swept.
+   * skipped.
    */
   dryRunArgs: string[] | null
+  /**
+   * Spends no Google quota and needs no complete sweep: it reworks what is already in the
+   * database, row by row. These still run when the sweep fails.
+   */
+  offline?: boolean
   /** Overrides `dryRunArgs` when the cycle is resuming an unfinished sweep. */
   dryRunOnResume?: string[]
 }
@@ -107,8 +112,10 @@ const STEPS: Step[] = [
   // something real to read and is the only thing that reports what the quota period still
   // allows. Without it a dry cycle on an unfinished sweep played nothing at all.
   { name: 'sweep:google', file: 'sweep.ts', args: ['--go'], dryRunArgs: null, dryRunOnResume: ['--dry-run'] },
-  { name: 'match:sirene', file: 'match-sirene.ts', args: [], dryRunArgs: null },
-  { name: 'compute:profiles', file: 'compute-profiles.ts', args: [], dryRunArgs: null },
+  // Both have a write-free mode, so a dry cycle rehearses the whole chain instead of
+  // stopping after the sweep. That is also what makes the ordering above testable.
+  { name: 'match:sirene', file: 'match-sirene.ts', args: [], dryRunArgs: ['--dry-run'], offline: true },
+  { name: 'compute:profiles', file: 'compute-profiles.ts', args: [], dryRunArgs: ['--check'], offline: true },
 ]
 
 /**
@@ -133,10 +140,7 @@ function run(step: Step, args: string[]): void {
     throw new Error(`${step.name} was interrupted by signal ${result.signal}`)
   }
   if (result.status !== 0) {
-    // The cycle stops dead. Chaining `match:sirene` after an incomplete sweep would match
-    // against a truncated database and display a reassuring canary for the wrong reasons —
-    // exactly the defect that does not show up in the UI.
-    throw new Error(`${step.name} failed (exit code ${result.status}) — cycle interrupted`)
+    throw new Error(`${step.name} failed (exit code ${result.status})`)
   }
 }
 
@@ -188,19 +192,40 @@ async function main(): Promise<void> {
   // freshness matters most: reporting it only when everything else went well would keep it
   // quiet for exactly as long as the sweep takes to converge.
   let failure: Error | null = null
-  try {
-    for (const step of STEPS) {
-      if (skipPlanning && step.name === 'plan:cells') continue
-
-      const stepArgs = go ? step.args : (skipPlanning && step.dryRunOnResume) || step.dryRunArgs
-      if (stepArgs === null) {
-        console.log(`\n=== ${step.name} — not played in dry run ===`)
-        continue
-      }
-      run(step, stepArgs)
+  /**
+   * A failing step no longer abandons the offline ones.
+   *
+   * The sweep fails on its quota ceiling every month until it converges (D22), and it used to
+   * take `match:sirene` and `compute:profiles` down with it — so establishments that HAD been
+   * imported and paid for sat there with no headcount and a profile computed under older
+   * rules, for as long as convergence took. Neither step spends a call, and neither depends
+   * on the sweep being complete: both work establishment by establishment on rows already in
+   * the database.
+   *
+   * What did depend on completeness was `match:sirene`'s canary, and that is handled where it
+   * belongs — the script now withholds it itself and says why. The cycle still fails: the
+   * first error is kept and rethrown below, so the exit code and the red build are unchanged.
+   */
+  for (const step of STEPS) {
+    if (skipPlanning && step.name === 'plan:cells') continue
+    if (failure && !step.offline) {
+      console.log(`\n=== ${step.name} — skipped, an earlier step failed ===`)
+      continue
     }
-  } catch (error) {
-    failure = error as Error
+
+    const stepArgs = go ? step.args : (skipPlanning && step.dryRunOnResume) || step.dryRunArgs
+    if (stepArgs === null) {
+      console.log(`\n=== ${step.name} — not played in dry run ===`)
+      continue
+    }
+    try {
+      run(step, stepArgs)
+    } catch (error) {
+      // The FIRST failure is the one that gets reported: a later step erroring because of it
+      // would bury the cause.
+      failure ??= error as Error
+      console.error(`\n! ${step.name} failed — continuing with the offline steps.`)
+    }
   }
 
   // While the sweep still owes cells, expiry is a known consequence of a sweep that

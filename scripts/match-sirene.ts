@@ -16,7 +16,8 @@
  */
 import { desc, eq, sql } from 'drizzle-orm'
 import { db } from '../lib/db/client'
-import { restaurant, sweepRun } from '../lib/db/schema'
+import { cell, restaurant, sweepRun } from '../lib/db/schema'
+import { countUnfinished } from '../lib/coverage'
 import { COMMUNE_NAMES } from '../lib/config'
 import { computeProfile, parseOpeningHours, teamSize } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
@@ -320,6 +321,20 @@ function printCanary(registry: SireneRow[], matchedSirets: Set<string>): number 
 }
 
 /**
+ * Whether the sweep still owes Google calls.
+ *
+ * Asked here rather than passed in as a flag: the answer has one source of truth, and it
+ * stays right when someone runs this script by hand after an interrupted sweep — which is
+ * exactly when it matters.
+ */
+async function sweepOwesCalls(): Promise<number> {
+  const cells = await db
+    .select({ id: cell.id, parentId: cell.parentId, status: cell.status })
+    .from(cell)
+  return countUnfinished(cells)
+}
+
+/**
  * The canary gets read back later, next to the sweep that produced it: the
  * `sirene_unmatched` column exists for that and nobody was writing it. Without it,
  * comparing two successive sweeps means digging up the console output of the right night.
@@ -386,8 +401,31 @@ async function main(): Promise<void> {
   console.log(`matched: ${kept.size} Google establishments out of ${restaurants.length}`
     + `  (match rate ${pct(kept.size, restaurants.length)})`)
 
+  /**
+   * The matching above is per-establishment and stands on its own: each Google row is paired
+   * with the registry by name and distance, and a cell nobody queried yet cannot make a pair
+   * that was made wrong. So the headcounts are applied whatever the sweep's state.
+   *
+   * The canary is the opposite. It looks for a COMMUNE whose unmatched rate stands out from
+   * the global one — that concentration is what betrays a normalization or geocoding bug. On
+   * an unfinished sweep every commune is uniformly unmatched for a reason that has nothing to
+   * do with matching, so the baseline rises everywhere and the concentration vanishes into
+   * it: the detector goes quiet precisely when it would be most useful. Recording that number
+   * in `sirene_unmatched` would also poison the sweep-to-sweep comparison the column exists
+   * for.
+   */
+  const owed = await sweepOwesCalls()
   const unmatched = printCanary(registry, matchedSirets)
-  if (!dryRun) await recordCanary(unmatched)
+  if (owed > 0) {
+    console.log('')
+    console.log(`! canary NOT recorded — the sweep still owes ${owed} cell(s).`)
+    console.log('  Read the number above as a floor, not a rate: a commune nobody has swept')
+    console.log('  yet is unmatched for lack of a sweep, not for lack of a match, and that')
+    console.log('  raises every commune at once — which is what hides a real concentration.')
+    console.log('  The headcounts ARE applied; only the canary waits for convergence.')
+  } else if (!dryRun) {
+    await recordCanary(unmatched)
+  }
 
   const usableBefore = restaurants.filter((r) => hasUsableHeadcount(headcountsBefore.get(r.id) ?? null))
   const usableAfter = restaurants.filter((r) => hasUsableHeadcount(headcountsAfter.get(r.id) ?? null))
