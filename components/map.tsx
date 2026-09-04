@@ -3,7 +3,9 @@
 import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CATEGORY_LABELS, CATEGORY_SHAPES, SHAPE_LEGEND, SPLIT_SHIFT_BADGES } from './badges'
+import { isRetryable, messageFor } from '@/lib/geolocation'
 import type { Category, SplitShiftRisk } from '@/lib/hours'
+import { useUserPosition } from './use-user-position'
 
 /**
  * What a marker needs — and nothing else.
@@ -70,6 +72,19 @@ function onKeyRefused(listener: () => void): () => void {
 const CLUSTER_MAX_ZOOM = 17
 
 const LEGEND_ORDER: SplitShiftRisk[] = ['none', 'low', 'medium', 'high', 'unknown']
+
+/**
+ * The reader's own position, in blue.
+ *
+ * The verdict palette is green, lime, amber, red and stone (see badges.ts): blue appears
+ * nowhere in it, so this dot cannot be misread as a split-shift verdict. It is in the
+ * legend all the same — a colour on this map always means something, and this one means
+ * something else.
+ */
+const USER_COLOR = '#2563eb'
+
+/** Above the selected marker, which sits at 1000. */
+const USER_MARKER_Z = 1200
 
 export function RestaurantMap(props: Props) {
   if (!API_KEY) return <MapFallback points={props.points} reason={NO_API_KEY} />
@@ -166,12 +181,43 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
   const markers = useRef<Map<string, google.maps.Marker>>(new Map())
   const clusterer = useRef<MarkerClusterer | null>(null)
   const emphasised = useRef<Set<string>>(new Set())
+  /** Whether the map has ever drawn a tile. A map only has to prove itself once. */
+  const painted = useRef(false)
+  const userMarker = useRef<google.maps.Marker | null>(null)
+  const userCircle = useRef<google.maps.Circle | null>(null)
+  /**
+   * The map follows the FIRST fix after a click, and no other.
+   *
+   * Recentring on every GPS update would drag the map out from under someone comparing two
+   * addresses — the same restraint `reveal()` applies to a chosen point.
+   */
+  const recenterOnNextFix = useRef(false)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Whether the map's own box is on screen. On a phone the map lives in a tab that starts
   // closed, and a `display:none` container has no tile to load, no size to fit to, and
   // nothing worth paying a map load for.
   const [visible, setVisible] = useState(false)
+
+  /**
+   * The reader's own position.
+   *
+   * `visible` is exactly the right switch, and it already exists: below `lg` the map lives
+   * in a tab that starts closed, so this is what keeps the GPS off until someone actually
+   * opens the map, and turns it off again when they go back to the list. Nothing here
+   * costs anything — `navigator.geolocation` is a browser API and never reaches Google.
+   */
+  const { state: userState, position: userPosition, request: requestPosition } =
+    useUserPosition(visible)
+  const userMessage = messageFor(userState)
+  const locateLabel =
+    userState.kind === 'locating'
+      ? 'Localisation en cours…'
+      : userState.kind === 'failed'
+        ? 'Réessayer de vous localiser'
+        : userPosition
+          ? 'Recentrer sur ma position'
+          : 'Me localiser'
 
   // Through refs: a marker listener is registered once, but the parent hands down a new
   // function on every render. Without this, every render would rebuild every marker.
@@ -244,6 +290,22 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
       mapTypeControl: false,
       streetViewControl: false,
     })
+
+    /**
+     * Registered here, for the map's whole life, and never removed.
+     *
+     * This listener used to live with the watchdog below and come and go with `visible` —
+     * which lost the very event it existed to catch: tiles routinely finish loading while
+     * the container is hidden, so the listener was removed a moment before firing and the
+     * next one waited on a map that had already finished. Recording the proof once, on the
+     * map itself, is what makes it survive the reader switching tabs.
+     */
+    google.maps.event.addListenerOnce(map.current, 'tilesloaded', () => {
+      painted.current = true
+      // A tile arriving after the deadline must be able to undo the verdict. A refused key
+      // must not: that one is a real failure and stays.
+      setError((current) => (current === NEVER_PAINTED ? null : current))
+    })
   }, [ready, visible])
 
   /**
@@ -256,17 +318,25 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
    *
    * So we stop trusting the announcement and watch the result: no first tile inside the
    * timeout means the map did not draw, whatever the reason, and the preview takes over.
+   *
+   * It judges the FIRST paint and nothing else. It used to re-arm on every `visible`
+   * toggle, so a reader switching to the list tab and back started a fresh countdown
+   * against a map that had finished painting long before — and `tilesloaded` does not fire
+   * again for tiles already loaded. Eight seconds later the map declared itself broken
+   * while showing a perfectly good picture of Lyon. That is the same false verdict this
+   * watchdog exists to prevent, reached from the other side.
+   *
+   * The countdown still runs only while the map is on screen: a map that is merely hidden
+   * has no tile to draw and must never be blamed for it.
    */
   useEffect(() => {
-    if (!ready || !visible || !map.current) return
-    const timer = setTimeout(() => setError((current) => current ?? NEVER_PAINTED), FIRST_PAINT_TIMEOUT_MS)
-    const listener = google.maps.event.addListenerOnce(map.current, 'tilesloaded', () => {
-      clearTimeout(timer)
-      // A tile arriving after the deadline must be able to undo the verdict. A refused key
-      // must not: that one is a real failure and stays.
-      setError((current) => (current === NEVER_PAINTED ? null : current))
-    })
-    return () => { clearTimeout(timer); listener.remove() }
+    if (!ready || !visible || !map.current || painted.current) return
+    const timer = setTimeout(() => {
+      // The proof can land while the countdown is still running.
+      if (painted.current) return
+      setError((current) => current ?? NEVER_PAINTED)
+    }, FIRST_PAINT_TIMEOUT_MS)
+    return () => clearTimeout(timer)
   }, [ready, visible])
 
   // Markers are reconciled, not rebuilt: changing one filter usually keeps most of the
@@ -423,19 +493,168 @@ function GoogleMap({ points, fitKey, selectedId, hoveredId, onSelect, onHover }:
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately not `points`
   }, [ready, visible, fitKey])
 
-  // A map that fails to load must not leave an empty frame: fall back to the preview,
-  // which stays usable.
-  if (error) return <MapFallback points={points} reason={error} />
+  /**
+   * The blue dot and the circle that keeps it honest.
+   *
+   * Both are created once and then moved — never rebuilt — like everything else on this
+   * map. The circle is not decoration: a dot drawn sharp on a fix accurate to two
+   * kilometres looks exactly like one accurate to ten metres, and this map does not do
+   * that. Its radius IS the accuracy the browser reported.
+   */
+  useEffect(() => {
+    const m = map.current
+    if (!ready || !visible || !m) return
+
+    if (!userPosition) {
+      userMarker.current?.setMap(null)
+      userCircle.current?.setMap(null)
+      userMarker.current = null
+      userCircle.current = null
+      return
+    }
+
+    const at = { lat: userPosition.lat, lng: userPosition.lng }
+
+    // `map` is passed here, and nowhere else on this map: establishment markers are
+    // created WITHOUT it because the clusterer owns what is drawn. This one must never be
+    // handed to the clusterer, or the reader's own position would be swallowed into a grey
+    // count as soon as four restaurants sat near it.
+    userMarker.current ??= new google.maps.Marker({
+      map: m,
+      // It must not intercept the click of a restaurant sitting underneath it.
+      clickable: false,
+      zIndex: USER_MARKER_Z,
+      title: 'Votre position',
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 7,
+        fillColor: USER_COLOR,
+        fillOpacity: 1,
+        strokeColor: '#ffffff',
+        strokeWeight: 3,
+      },
+    })
+    userMarker.current.setPosition(at)
+
+    userCircle.current ??= new google.maps.Circle({
+      map: m,
+      clickable: false,
+      fillColor: USER_COLOR,
+      fillOpacity: 0.12,
+      strokeColor: USER_COLOR,
+      strokeOpacity: 0.35,
+      strokeWeight: 1,
+      zIndex: USER_MARKER_Z - 100,
+    })
+    userCircle.current.setCenter(at)
+    userCircle.current.setRadius(userPosition.accuracy)
+
+    if (recenterOnNextFix.current) {
+      recenterOnNextFix.current = false
+      m.panTo(at)
+      // Close enough to read the street, without throwing away the surroundings.
+      if ((m.getZoom() ?? 0) < 16) m.setZoom(16)
+    }
+  }, [ready, visible, userPosition])
+
+  // The two objects the filter never removes, so nothing else would ever detach them.
+  useEffect(() => () => {
+    userMarker.current?.setMap(null)
+    userCircle.current?.setMap(null)
+  }, [])
+
+  const locate = useCallback(() => {
+    const m = map.current
+    // Only a position we are still WATCHING makes this a recentring. Testing the point
+    // alone would strand the reader after a lost signal: the watch is stopped by then, and
+    // a click that merely panned back to the stale dot would never ask for a new one.
+    if (userState.kind === 'active' && userPosition && m) {
+      m.panTo({ lat: userPosition.lat, lng: userPosition.lng })
+      if ((m.getZoom() ?? 0) < 16) m.setZoom(16)
+      return
+    }
+    recenterOnNextFix.current = true
+    // This is the only path to the browser's permission prompt: it is never raised on
+    // arrival, only by this click.
+    requestPosition()
+  }, [userState.kind, userPosition, requestPosition])
 
   return (
     <div className="relative h-full w-full overflow-hidden rounded-lg bg-stone-200">
+      {/*
+        The container stays mounted even while the preview is up, and the preview is laid
+        OVER it rather than swapped in.
+
+        Swapping tore the div out from under a live map, and Google cannot move a map to a
+        new one: the instance was orphaned, so when a late tile withdrew the verdict the
+        reader got a grey rectangle instead of the map. Building a second map would be the
+        one thing this component may never do — a map load is billed per instantiation.
+        Kept underneath, the map is simply revealed again.
+      */}
       <div ref={container} className="h-full w-full" />
-      {!ready && (
+      {!ready && !error && (
         <p className="absolute inset-0 flex items-center justify-center text-sm text-stone-500">
           Chargement de la carte…
         </p>
       )}
-      <Legend className="absolute bottom-2 left-2 max-w-[calc(100%-1rem)] rounded bg-white/90 px-2 py-1 shadow" />
+      {error && (
+        <div className="absolute inset-0">
+          <MapFallback points={points} reason={error} />
+        </div>
+      )}
+      {/* Nothing of the position layer while the preview is up: there is no map under it to
+          put a dot on. Top-left is the only free corner otherwise — the legend holds the
+          bottom-left, Google's zoom controls the bottom-right, its fullscreen button the
+          top-right. Button and message share one stack so they never overlap. */}
+      {!error && (
+      <div className="absolute left-2 top-2 flex max-w-[min(20rem,calc(100%-1rem))] flex-col items-start gap-1.5">
+        {/*
+          Nothing is offered where nothing can happen. A browser without the API, a page
+          served over http, and above all a refusal the browser has memorised are dead
+          ends a click cannot leave — a button there would promise a prompt that will
+          never appear again. The message below carries the way out instead.
+        */}
+        {isRetryable(userState) && (
+          <button
+            type="button"
+            onClick={locate}
+            disabled={userState.kind === 'locating'}
+            // The icon carries no words, so the name has to live here — for a screen
+            // reader, and as the tooltip that tells a first-time reader what it does.
+            title={locateLabel}
+            aria-label={locateLabel}
+            className={`flex h-9 w-9 items-center justify-center rounded bg-white/90 shadow
+              hover:bg-white disabled:cursor-default ${
+                userState.kind === 'locating' ? 'animate-pulse text-stone-400' : 'text-stone-600'
+              }`}
+            // Blue once we are actually following, grey otherwise: the same colour as the
+            // dot, so the control and what it points at read as one thing.
+            style={userState.kind === 'active' ? { color: USER_COLOR } : undefined}
+          >
+            <CrosshairIcon className="h-5 w-5" />
+          </button>
+        )}
+
+        {/* Announced, not just shown: a refusal that only exists as grey text is a refusal
+            a screen reader never reports. */}
+        {userMessage && (
+          <p
+            aria-live="polite"
+            className="rounded bg-white/95 px-2 py-1 text-[11px] leading-snug text-stone-600 shadow"
+          >
+            {userMessage}
+          </p>
+        )}
+      </div>
+      )}
+
+      {/* The preview carries a legend of its own. */}
+      {!error && (
+        <Legend
+          className="absolute bottom-2 left-2 max-w-[calc(100%-1rem)] rounded bg-white/90 px-2 py-1 shadow"
+          userPosition={!!userPosition}
+        />
+      )}
     </div>
   )
 }
@@ -490,11 +709,29 @@ function MapFallback({ points, reason }: { points: MapPoint[]; reason: string })
 }
 
 /**
+ * The crosshair every map application uses for "where am I" — Material's `my_location`.
+ *
+ * Drawn inline rather than pulled from an icon set: it is the only icon in the project,
+ * and a dependency for one path would cost more than it saves.
+ */
+function CrosshairIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden focusable="false">
+      <path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3c-.46-4.17-3.77-7.48-7.94-7.94V1h-2v2.06C6.83 3.52 3.52 6.83 3.06 11H1v2h2.06c.46 4.17 3.77 7.48 7.94 7.94V23h2v-2.06c4.17-.46 7.48-3.77 7.94-7.94H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z" />
+    </svg>
+  )
+}
+
+/**
  * Two dimensions, so the legend has to explain both: colour carries the split-shift risk,
  * shape carries the kind of place. Colour comes first — it is the criterion people came
  * for; the shape is context.
  */
-function Legend({ className = '' }: { className?: string }) {
+function Legend({ className = '', userPosition = false }: {
+  className?: string
+  /** Only labelled when a dot is actually on the map — the preview never has one. */
+  userPosition?: boolean
+}) {
   return (
     <div className={`space-y-1 text-[11px] text-stone-600 ${className}`}>
       <div className="flex flex-wrap gap-x-3 gap-y-1">
@@ -507,6 +744,15 @@ function Legend({ className = '' }: { className?: string }) {
             {SPLIT_SHIFT_BADGES[risk].label}
           </span>
         ))}
+        {userPosition && (
+          <span className="flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: USER_COLOR }}
+            />
+            Votre position
+          </span>
+        )}
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-stone-500">
         {SHAPE_LEGEND.map((category) => (
