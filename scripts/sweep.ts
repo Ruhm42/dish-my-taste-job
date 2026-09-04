@@ -19,7 +19,7 @@
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-09-01T03:00:00Z
  */
 import { and, count, desc, eq, gte, inArray, isNotNull, lt, sum } from 'drizzle-orm'
-import { db, sql as rawSql } from '../lib/db/client'
+import { db, isTransactionPooler, sql as rawSql } from '../lib/db/client'
 import { cell, restaurant, sireneEstablishment, sweepRun } from '../lib/db/schema'
 import {
   DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES, FREE_MONTHLY_QUOTA,
@@ -48,6 +48,49 @@ const AS_OF = '--as-of='
 
 /** Arbitrary but fixed: an advisory lock key is only ever compared with itself. */
 const SWEEP_LOCK_KEY = 828_100_128
+
+type ReservedConnection = Awaited<ReturnType<typeof rawSql.reserve>>
+
+/**
+ * The reserved connection holding the advisory lock, at module scope so that every way out
+ * of this script can give it back — the top-level `catch` included.
+ */
+let heldLock: ReservedConnection | null = null
+
+/**
+ * Hands the advisory lock back, explicitly.
+ *
+ * The comment where the lock is taken used to claim that a session-level lock leaves with
+ * its connection, so a killed process frees it. Measured, that holds in exactly one case:
+ *
+ *  - giving the connection back mid-run frees nothing, on any kind of connection. `release()`
+ *    returns it to postgres.js's pool, the backend stays alive, and the lock stays held —
+ *    which is what the refusal below relied on and got wrong.
+ *  - a process that dies on a DIRECT connection does free it, with the socket.
+ *  - a process that dies through a POOLER does not: the backend stays parked at Supavisor
+ *    still holding the lock, and every later sweep — the monthly cron included — is then
+ *    refused by a lock whose owner is gone. It happened, and clearing it took a
+ *    `pg_terminate_backend` on the holder.
+ *
+ * Called before each `process.exit` rather than from a `finally`, because `process.exit`
+ * does not run one. Idempotent, so no call site has to know whether another already did it.
+ */
+async function releaseLock(): Promise<void> {
+  const lock = heldLock
+  if (!lock) return
+  heldLock = null
+  try {
+    await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY})`
+  } catch (error) {
+    console.error(
+      `! the sweep lock could not be released: ${(error as Error).message}\n` +
+      '  Every later sweep will be refused until it is cleared. Find the holder with\n' +
+      `  select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}\n` +
+      '  and terminate that backend.',
+    )
+  }
+  await lock.release()
+}
 
 const SWEEP_SUCCEEDED = 'succeeded'
 const SWEEP_FAILED = 'failed'
@@ -465,6 +508,22 @@ async function main() {
   }
   if (asOf) console.log(`SIMULATED CLOCK — reading the plan as of ${now.toISOString()}\n`)
 
+  // A batch script must not come in through the transaction pooler: its pool holds exactly
+  // one connection, and the advisory lock below reserves it — every query issued after that
+  // waits for a connection that never frees, with no error and no timeout. The dry run is
+  // refused too, because a check that only fires under `--go` is a check that fires while
+  // spending.
+  if (isTransactionPooler) {
+    console.error(
+      'REFUSING TO START: DATABASE_URL points at the transaction pooler (:6543), which ' +
+      'hands out a single connection.\n' +
+      'The sweep reserves one for its advisory lock, so the run would hang for ever — no ' +
+      'error, no timeout, no call spent.\n' +
+      'Use the session pooler: same host, port 5432.',
+    )
+    process.exit(1)
+  }
+
   // 1. The plan. A run with cells still to do, or with cells that failed.
   const pendingRuns = await db
     .selectDistinct({ runId: cell.sweepRunId })
@@ -578,17 +637,24 @@ async function main() {
   // The ceiling is read once and spent against for hours. Without a lock, a local --go
   // overlapping the scheduled one reads the same figure twice and each spends the whole
   // remainder. The workflow's concurrency group guards CI against CI, and nothing guards
-  // this. Session-level, so a killed process releases it with its connection.
+  // this. It is released explicitly on the way out — see `releaseLock`.
   const lock = await rawSql.reserve()
   const [{ acquired }] = await lock`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`
   if (!acquired) {
     console.error(
       '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
-      'reading the same remaining quota would each spend it in full.',
+      'reading the same remaining quota would each spend it in full.\n' +
+      'If no sweep is running, the lock was leaked by one that was killed: through a pooler ' +
+      'the backend stays parked still holding it. Find it with\n' +
+      `  select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}\n` +
+      'and terminate that backend. Ask from a session-pooler connection — through the ' +
+      'transaction pooler the question can land on the holding backend and be granted ' +
+      're-entrantly, which reads as free when it is not.',
     )
     await lock.release()
     process.exit(1)
   }
+  heldLock = lock
 
   // Re-read UNDER the lock. The figure printed above was read before it, and closing the
   // read-then-spend race is the only reason the lock exists: a sweep that finished in that
@@ -599,6 +665,7 @@ async function main() {
       `\nREFUSING TO START: ${lockedPeriodSpent} of ${SWEEP.maxCallsPerPeriod} calls were ` +
       `spent in ${period} while this execution was starting up. Nothing left to spend.`,
     )
+    await releaseLock()
     process.exit(1)
   }
 
@@ -747,6 +814,8 @@ async function main() {
     error: succeeded ? null : reasons.join(' ; '),
   }).where(eq(sweepRun.id, runId))
 
+  await releaseLock()
+
   if (!succeeded) {
     console.error(`\nSWEEP FAILED — ${reasons.join(' ; ')}`)
     console.error('A silently incomplete database is worse than a script in error: ' +
@@ -758,4 +827,10 @@ async function main() {
   process.exit(0)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+main().catch(async (e) => {
+  console.error(e)
+  // The lock outlives the process through a pooler, so an unexpected throw has to give it
+  // back too — otherwise one crash refuses every sweep that follows.
+  await releaseLock()
+  process.exit(1)
+})
