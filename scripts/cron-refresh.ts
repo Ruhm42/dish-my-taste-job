@@ -27,8 +27,9 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../lib/db/client'
-import { cell } from '../lib/db/schema'
+import { cell, sweepRun } from '../lib/db/schema'
 import { buildCoverage, countOwed } from '../lib/coverage'
 import { monthWindow } from '../lib/quota'
 import { COMMUNE_NAMES, DISTRICT_BY_COMMUNE, HOURS_TTL_DAYS } from '../lib/config'
@@ -57,15 +58,31 @@ interface PlanState {
  * unresolved until they ARE, and not for ever — nothing moves a cell out of `truncated`, so
  * counting every truncated cell would be a rule that can never come true.
  *
+ * Scoped to the run the sweep would pick — the most recent one with cells — and not to the
+ * whole table. A recalibration leaves the previous plan's rows in place, on purpose: their
+ * `queried_at` is the period's spend ledger and deleting them re-opens a ceiling already
+ * paid for. Counting them here would have the cycle announce a figure the sweep does not
+ * walk, which is the kind of disagreement that ends in a wrong cost forecast.
+ *
  * Read whole rather than counted in SQL: coverage is recursive, it is the same rule the
  * sweep reports its own truncations with, and the table is a few thousand rows.
  */
 async function planState(): Promise<PlanState> {
+  const runs = await db.selectDistinct({ runId: cell.sweepRunId }).from(cell)
+  if (runs.length === 0) return { total: 0, owed: 0, unresolved: 0 }
+
+  const [latest] = await db.select({ id: sweepRun.id }).from(sweepRun)
+    .where(inArray(sweepRun.id, runs.map((r) => r.runId)))
+    .orderBy(desc(sweepRun.startedAt))
+    .limit(1)
+  const runId = latest?.id ?? runs[0].runId
+
   const cells = await db
     .select({
       id: cell.id, parentId: cell.parentId, status: cell.status, queriedAt: cell.queriedAt,
     })
     .from(cell)
+    .where(eq(cell.sweepRunId, runId))
   const isCovered = buildCoverage(cells)
   return {
     total: cells.length,
