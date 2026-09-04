@@ -11,8 +11,9 @@
  */
 import { count, inArray } from 'drizzle-orm'
 import {
-  COMMUNE_CODES, COMMUNE_NAMES, FREE_MONTHLY_QUOTA, GOOGLE_TO_SIRENE_RATIO,
-  GRID, MAX_NEARBY_RESULTS, SWEEP,
+  CELLS_PER_TRUNCATION, COMMUNE_CODES, COMMUNE_NAMES, EXPECTED_TRUNCATION_RATE,
+  FREE_MONTHLY_QUOTA, GOOGLE_TO_SIRENE_RATIO, GRID, MAX_NEARBY_RESULTS,
+  PAID_PRICE_PER_1000_CALLS, PERIMETER_REVIEW_ABOVE, SWEEP,
 } from '../lib/config'
 import { db } from '../lib/db/client'
 import { cell, sireneEstablishment, sweepRun } from '../lib/db/schema'
@@ -118,20 +119,58 @@ function printPlan(cells: Cell[], pointCount: number) {
   row(`estimated >= ${MAX_NEARBY_RESULTS} at Google`, num(truncationRisk), `measured ratio x${GOOGLE_TO_SIRENE_RATIO}`)
 }
 
+/**
+ * What this plan costs EVERY MONTH, and the arbitration D30 rule 4 wrote in advance so that
+ * the number decides and not the other way round.
+ *
+ * Every month, not once: a cell owes one call per quota period because everything it collects
+ * expires in 30 days (D30 rule 1). So the cell count is not the price of reaching coverage,
+ * it is the price of holding it.
+ *
+ * And it is a floor. The cells a truncation adds stay in the plan and owe a call of their own
+ * from then on, which is what `converged` forecasts from the measured rate — the figure to
+ * arbitrate on is that one, not the bare cell count.
+ */
 function printCost(cells: Cell[]) {
   const calls = cells.length
-  const headroom = FREE_MONTHLY_QUOTA - calls
+  const truncations = Math.round(calls * EXPECTED_TRUNCATION_RATE)
+  const converged = calls + Math.round(truncations * CELLS_PER_TRUNCATION)
 
-  console.log('\nSWEEP COST')
-  row('Nearby Search calls', num(calls))
+  console.log('\nWHAT THIS COSTS EVERY MONTH')
+  row('cells in the plan', num(calls))
+  row(`truncations expected (${Math.round(100 * EXPECTED_TRUNCATION_RATE)}%)`, num(truncations))
+  row('cells they will add', num(converged - calls), `x${CELLS_PER_TRUNCATION} each, measured`)
+  row('CONVERGED PLAN', num(converged), 'calls per month')
   row('ceiling per quota period', num(SWEEP.maxCallsPerPeriod))
   row('free monthly quota', num(FREE_MONTHLY_QUOTA))
-  row(
-    'headroom for subdivisions',
-    num(headroom),
-    headroom > 0 ? `${Math.round((100 * headroom) / calls)}% of the cells` : 'OVER BUDGET',
-  )
-  return calls
+
+  console.log('\nARBITRATION (D30 rule 4)')
+  if (converged <= SWEEP.maxCallsPerPeriod) {
+    console.log(
+      `  Nothing to arbitrate: ${num(converged)} <= ${num(SWEEP.maxCallsPerPeriod)}.\n` +
+      '  Zero euro holds, the full monthly re-sweep holds, and D7 is true by construction\n' +
+      '  rather than by vigilance.',
+    )
+  } else if (converged <= PERIMETER_REVIEW_ABOVE) {
+    console.log(
+      `  ${num(converged)} sits between ${num(SWEEP.maxCallsPerPeriod)} and ` +
+      `${num(PERIMETER_REVIEW_ABOVE)}: the perimeter is reduced at MEASURED YIELD\n` +
+      '  until it comes back under the ceiling — not at geography. The 1st and 5th\n' +
+      '  arrondissements weigh 953 SIRENE for 20 usable results, Villeurbanne 816 for 40.\n' +
+      '  See .specs/technique/11-convergence-du-balayage.md rule 5.',
+    )
+  } else {
+    const overage = converged - FREE_MONTHLY_QUOTA
+    const price = Math.ceil(overage / 1000) * PAID_PRICE_PER_1000_CALLS
+    console.log(
+      `  ${num(converged)} is above ${num(PERIMETER_REVIEW_ABOVE)}: "zero euro" does not hold\n` +
+      `  at this perimeter. It reopens explicitly, with its price — ${num(overage)} calls\n` +
+      `  beyond the free quota, $${PAID_PRICE_PER_1000_CALLS} per 1,000, so about $${price} a month —\n` +
+      '  and with its own entry in the decision log. Raising the ceiling is not one of the\n' +
+      '  options: the guard rail has one purpose, and removing it while keeping it is not it.',
+    )
+  }
+  return { calls, converged }
 }
 
 async function writePlan(cells: Cell[]) {
@@ -198,21 +237,31 @@ async function main() {
     row(COMMUNE_NAMES[code] ?? code, num(n))
   }
 
-  const calls = printCost(cells)
+  const { calls, converged } = printCost(cells)
 
+  // The refusal is on the plan's OWN cells, not on the forecast: a plan whose first pass
+  // already exceeds a period cannot be swept in one, and writing it would enshrine that.
+  // A plan that fits but converges above the ceiling is a legitimate plan awaiting the
+  // arbitration above — refusing it would leave the worse plan in place.
   if (calls > SWEEP.maxCallsPerPeriod) {
     console.log(
-      `\n!!! WARNING — the plan asks for ${num(calls)} calls, beyond what one quota period ` +
-        `allows (${num(SWEEP.maxCallsPerPeriod)}).\n` +
-        `    The free monthly quota is ${num(FREE_MONTHLY_QUOTA)} calls and truncated cells\n` +
-        '    subdivide: the sweep will spend more than that figure.\n' +
-        '    Rework GRID (target, maxRadius) or shrink the perimeter before sweeping.',
+      `\n!!! WARNING — the plan asks for ${num(calls)} calls before a single truncation, ` +
+        `beyond what one quota period allows (${num(SWEEP.maxCallsPerPeriod)}).\n` +
+        '    Apply the arbitration above before writing it: reduce the perimeter at measured\n' +
+        '    yield, or reopen the zero-euro constraint knowingly. Reworking GRID will not\n' +
+        '    help — the radius ceiling is what dominates, not the density target.',
     )
     if (write) {
       throw new Error(
         'write refused: a plan above the ceiling must not become executable.',
       )
     }
+  } else if (converged > SWEEP.maxCallsPerPeriod) {
+    console.log(
+      `\n! the plan fits a period (${num(calls)}), the plan it converges to does not ` +
+        `(${num(converged)}).\n` +
+        '  It is writable and sweepable; what it is not is settled. See the arbitration above.',
+    )
   }
 
   if (write) await writePlan(cells)

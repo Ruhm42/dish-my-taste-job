@@ -34,9 +34,11 @@ import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
-// The grid laid its circles down with THIS distance: cross-checking them with another
-// approximation would push points the plan had placed inside a circle out of it.
-import { distanceInMeters, METERS_PER_DEGREE_LAT } from '../lib/grid'
+// The grid laid its circles down with THIS distance and THIS planner: resolving a
+// truncation with another approximation would push points the plan had placed inside a
+// circle out of it, and replanning by any other rule than the one that drew the plan is
+// how the four-way split came to cost four calls for 12% of the density (D30 rule 2).
+import { distanceInMeters, planRecovery, pointsInCircle } from '../lib/grid'
 // Shared with cron:refresh: the same rules decide what a period owes and what a
 // truncation still hides, so the sweep and the cycle cannot disagree about either.
 import { buildCoverage, countOwed, owesCall } from '../lib/coverage'
@@ -45,8 +47,6 @@ const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby'
 
 /** Beyond this, the nearest SIRENE point is no longer proof of a commune, just a neighbour. */
 const COMMUNE_ATTACHMENT_RADIUS = 300
-
-const RAD = Math.PI / 180
 
 /** Simulates a quota period so spec 10's acceptance criteria can be played, not argued. */
 const AS_OF = '--as-of='
@@ -137,46 +137,19 @@ interface State {
   withHours: Set<string>
   withoutCommune: Set<string>
   sirenePoints: SirenePoint[]
+  /**
+   * Truncations the SIRENE density could not split, resolved by quarters instead.
+   *
+   * Worth counting rather than only logging: each one is a place where Google holds more
+   * than the registry knows about, which is where a hole in the coverage would hide.
+   */
+  quarterFallbacks: number
 }
 
 // --- Geometry ----------------------------------------------------------------------
 
 function distance(aLat: number, aLng: number, bLat: number, bLng: number): number {
   return distanceInMeters({ lat: aLat, lng: aLng }, { lat: bLat, lng: bLng })
-}
-
-/** Bounding-box prefilter before the exact distance — there is no PostGIS (D12). */
-function pointsInCircle(points: SirenePoint[], lat: number, lng: number, radius: number): SirenePoint[] {
-  const dLat = radius / METERS_PER_DEGREE_LAT
-  const dLng = dLat / Math.max(0.01, Math.cos(lat * RAD))
-  return points.filter(
-    (p) =>
-      Math.abs(p.lat - lat) <= dLat &&
-      Math.abs(p.lng - lng) <= dLng &&
-      distance(lat, lng, p.lat, p.lng) <= radius,
-  )
-}
-
-/**
- * Four circles covering the parent circle WITH NO GAP.
- *
- * We cover the square circumscribing the parent: each of its four quadrants, of side R,
- * fits inside a circle of radius R·√2/2 centred on that quadrant. A tighter split (four
- * circles of radius R/2) would leave four areas that are never queried — exactly the kind
- * of defect that never shows up in the UI.
- */
-function subdivide(parent: CellRow): { lat: number; lng: number; radius: number }[] {
-  const radius = Math.max(GRID.minRadius, parent.radius * Math.SQRT1_2)
-  const half = parent.radius / 2
-  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.max(0.01, Math.cos(parent.lat * RAD))
-
-  return [
-    [-half, -half], [half, -half], [-half, half], [half, half],
-  ].map(([dx, dy]) => ({
-    lat: parent.lat + dy / METERS_PER_DEGREE_LAT,
-    lng: parent.lng + dx / metersPerDegreeLng,
-    radius,
-  }))
 }
 
 /**
@@ -442,11 +415,17 @@ async function processCell(c: CellRow, state: State): Promise<void> {
     return
   }
 
-  const children = subdivide(c).map((child) => ({
+  const recovery = planRecovery(c, state.sirenePoints, {
+    target: GRID.target, minRadius: GRID.minRadius,
+  })
+  if (!recovery.fromDensity) state.quarterFallbacks++
+  const children = recovery.cells.map((child) => ({
     sweepRunId: c.sweepRunId,
     lat: child.lat,
     lng: child.lng,
     radius: child.radius,
+    // The geometric count, not the planner's assignment: it is what the truncation detector
+    // reads, and a circle drawn around N points can hold more than N.
     sireneCount: pointsInCircle(state.sirenePoints, child.lat, child.lng, child.radius).length,
     depth: c.depth + 1,
     parentId: c.id,
@@ -460,7 +439,14 @@ async function processCell(c: CellRow, state: State): Promise<void> {
     await tx.insert(cell).values(children)
   })
 
-  console.log(`  truncation (${reason}) -> 4 cells of ${Math.round(children[0].radius)} m`)
+  const radii = children.map((x) => Math.round(x.radius))
+  console.log(
+    `  truncation (${reason}) -> ${children.length} cell(s) of ${Math.min(...radii)}-` +
+    `${Math.max(...radii)} m, ` +
+    (recovery.fromDensity
+      ? 'replanned on the SIRENE density inside it'
+      : 'BY QUARTERS: the registry sees no density to split here, Google does'),
+  )
 }
 
 // --- What the quota period has already paid for -----------------------------------------
@@ -767,6 +753,7 @@ async function main() {
     withHours: new Set(),
     withoutCommune: new Set(),
     sirenePoints: points as SirenePoint[],
+    quarterFallbacks: 0,
   }
 
   console.log('\n--- Sweep running ---')
@@ -838,6 +825,7 @@ async function main() {
   console.log(`truncations resolved     : ${resolved}`)
   console.log(`truncations UNRESOLVED   : ${unresolved}`)
   console.log(`irreducible cells        : ${irreducible}`)
+  console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no SIRENE density to replan on)`)
   console.log(`failed cells             : ${failed}`)
   console.log(`cells STILL OWED         : ${stillOwed}  (${period})`)
   console.log(`  of them never queried  : ${neverQueried}`)
