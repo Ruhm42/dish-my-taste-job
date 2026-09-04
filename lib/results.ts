@@ -1,10 +1,31 @@
-import { and, asc, count, eq, gt, or, sql } from 'drizzle-orm'
+import { and, asc, count, eq, gt, or, sql, type SQL } from 'drizzle-orm'
 import { db } from './db/client'
 import { cell, restaurant, sireneEstablishment } from './db/schema'
-import { buildConditions, buildUserConditions, type Filters } from './filters'
+import { buildConditions, buildUserConditions, HOURS_USABLE, type Filters } from './filters'
 
 import { PAGE_SIZE } from './config'
 export { PAGE_SIZE }
+
+/** What replaces the verdict once the hours behind it are past the 30 days (D7). */
+const EXPIRED_EXPLANATION = 'Horaires à revérifier — relevés il y a plus de 30 jours'
+
+type Stored = typeof restaurant.$inferSelect
+
+/**
+ * Reads a column only while the hours are usable, and the fallback otherwise.
+ *
+ * D30 rule 6: what has expired is not displayed. The record stays — it is still an employer
+ * with an address and a phone number — and everything the hours were inferred from falls
+ * back to what a record with no hours at all shows (D29). The rhythm columns are all
+ * written together by one profile, so they expire together too: showing a verdict beside a
+ * blank week would be the worst of the two.
+ *
+ * In SQL rather than after the query, so that the projection, the FILTER and the counts all
+ * read ONE clock — the database's. Two clocks means a record hidden from the list and
+ * counted nowhere, or the reverse.
+ */
+const whileUsable = <K extends keyof Stored>(column: K, fallback: SQL) =>
+  sql<Stored[K]>`CASE WHEN ${HOURS_USABLE} THEN ${restaurant[column]} ELSE ${fallback} END`
 
 /**
  * Exactly the columns the list and the map render.
@@ -25,12 +46,12 @@ const COLUMNS = {
   category: restaurant.category,
   cuisine: restaurant.cuisine,
   headcountCode: restaurant.headcountCode,
-  splitShiftRisk: restaurant.splitShiftRisk,
-  confidence: restaurant.confidence,
-  closedWeekend: restaurant.closedWeekend,
-  maxConsecutiveDaysOff: restaurant.maxConsecutiveDaysOff,
-  explanation: restaurant.explanation,
-  schedule: restaurant.schedule,
+  splitShiftRisk: whileUsable('splitShiftRisk', sql`'unknown'`),
+  confidence: whileUsable('confidence', sql`'unverified'`),
+  closedWeekend: whileUsable('closedWeekend', sql`false`),
+  maxConsecutiveDaysOff: whileUsable('maxConsecutiveDaysOff', sql`0`),
+  explanation: whileUsable('explanation', sql`${EXPIRED_EXPLANATION}`),
+  schedule: whileUsable('schedule', sql`NULL`),
 }
 
 export type ResultRow = {
@@ -101,7 +122,9 @@ const POINT_COLUMNS = {
   name: restaurant.name,
   lat: restaurant.lat,
   lng: restaurant.lng,
-  splitShiftRisk: restaurant.splitShiftRisk,
+  // The marker's colour IS the verdict, so it expires with it: a green dot on a record
+  // whose hours we may no longer show is the map telling the reader something it cannot.
+  splitShiftRisk: whileUsable('splitShiftRisk', sql`'unknown'`),
   category: restaurant.category,
 }
 
@@ -148,6 +171,8 @@ export interface Excluded {
   closed: number
   /** Establishments still trading, whose hours Google does not publish. */
   unknownHours: number
+  /** Establishments whose hours were collected more than 30 days ago (D30 rule 6). */
+  expiredHours: number
 }
 
 /**
@@ -160,15 +185,21 @@ export interface Excluded {
  */
 export async function countExcluded(filters: Filters): Promise<Excluded> {
   const open = sql`(${restaurant.businessStatus} IS NULL OR ${restaurant.businessStatus} = 'OPERATIONAL')`
+  // The two silences are counted apart because they are not the same admission: one is
+  // information Google never published, the other is information we had and are no longer
+  // allowed to keep. Read against NOT the usable expression rather than a second date
+  // comparison, so a row can never fall outside both buckets and vanish from the count.
   const [row] = await db
     .select({
       closed: sql<number>`count(*) FILTER (WHERE NOT ${open})::int`,
       unknownHours: sql<number>`count(*) FILTER (WHERE ${open} AND NOT ${restaurant.hasHours})::int`,
+      expiredHours: sql<number>`
+        count(*) FILTER (WHERE ${open} AND ${restaurant.hasHours} AND NOT (${HOURS_USABLE}))::int`,
     })
     .from(restaurant)
     .where(buildUserConditions(filters))
 
-  return row ?? { closed: 0, unknownHours: 0 }
+  return row ?? { closed: 0, unknownHours: 0, expiredHours: 0 }
 }
 
 export interface SweepProgress {
