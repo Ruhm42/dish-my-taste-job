@@ -23,10 +23,22 @@ name: Keepalive
 
 on:
   schedule:
-    # Every Monday. Off-the-hour time: schedules on a round hour queue up on GitHub's
-    # side and can be delayed by tens of minutes. A weekly cadence leaves two attempts
-    # before Supabase's 7 days.
-    - cron: '17 5 * * 1'
+    # Mondays AND Thursdays, not weekly. Off-the-hour, because schedules on a round hour
+    # queue up on GitHub's side.
+    #
+    # Supabase pauses a free project after 7.00 days of inactivity, and a weekly cron leaves
+    # no margin against that: the last successful pair of wakes measured 6.95 days apart —
+    # 1.2 hours of slack. GitHub then ate it. This schedule says 05:17 UTC, but the runs
+    # actually landed at 10:27, 10:45, 11:38 and 12:24, because scheduled workflows queue
+    # behind load and the delay varies by hours.
+    #
+    # The project paused between 7 and 14 September 2026, and every later run failed with
+    # `(ENOTFOUND) tenant/user not found`: a paused project cannot be woken by connecting
+    # to it, only restored from the dashboard — so the keepalive could no longer repair what
+    # it had failed to prevent.
+    #
+    # Two wakes a week put the worst gap at ~4 days, which survives hours of drift.
+    - cron: '17 5 * * 1,4'
   workflow_dispatch:
 
 concurrency:
