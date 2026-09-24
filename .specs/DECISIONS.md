@@ -1,6 +1,6 @@
 # Journal des décisions
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-09-04
 
 Format : *contexte → options écartées → décision → conséquences*. Une décision sans
 alternative écartée n'est pas une décision, c'est une note.
@@ -1253,3 +1253,65 @@ puis `match:sirene` et `compute:profiles` s'exécutent, le canari se retire en s
 fraîcheur est rapportée, et le cycle finit sur `MONTHLY CYCLE FAILED — sweep:google failed
 (exit code 1)`. Sur la production en mode sec : **25 effectifs** et **33 profils** que
 l'ancien enchaînement abandonnait.
+
+---
+
+## D34 — La position vient du navigateur, et on ne la demande jamais à froid
+
+**Contexte.** La carte dit où sont les établissements, jamais où est le lecteur, alors que le
+produit est fait pour une tournée à pied avec un téléphone à la main. Afficher sa position
+demande de trancher trois choses distinctes : d'où vient la position, quand on la demande, et
+combien de temps on la suit.
+
+**Options écartées**
+- *La `Geolocation API` de Google* — payante, et plafonnée à 0 appel/jour de notre côté
+  précisément pour qu'elle ne puisse pas facturer. Le navigateur rend le même service
+  gratuitement, sans passer par notre clé ni par notre quota. Il n'y avait rien à acheter.
+- *La géolocalisation par adresse IP* — situe au quartier près dans le meilleur des cas, et
+  se trompe de ville dès qu'un opérateur mobile s'en mêle. À l'échelle qui compte ici — le
+  bon côté de la rue — c'est une précision qui ment, et elle mentirait sans le dire.
+- *Demander la permission à l'arrivée sur la carte* — écarté sur la conséquence, pas sur le
+  principe : un refus est **définitif du point de vue du navigateur**, qui cesse ensuite de
+  proposer quoi que ce soit. Une popup gagnée à l'arrivée se paie donc en fonctionnalité
+  perdue pour toute la durée de vie du navigateur, chez quelqu'un qui n'avait encore aucune
+  raison de dire oui.
+- *Un relevé unique au clic* — le point devient faux au premier pâté de maisons, c'est-à-dire
+  pendant l'usage même auquel il est destiné. Un point figé qui a l'air juste est le mode de
+  panne que ce projet refuse partout.
+- *Un suivi permanent, dès l'autorisation obtenue* — le GPS est le poste le plus coûteux en
+  batterie d'un téléphone, et le public est dehors toute la journée. Faire tourner un relevé
+  pour une carte que personne ne regarde ne coûte rien à personne, sauf au lecteur.
+- *Faire entrer la position dans l'adresse de la page* — les filtres y sont pour qu'une
+  recherche se mette en favori et s'envoie à quelqu'un (voir `fonctionnel/02`). Une position
+  est une donnée personnelle : elle n'a rien à faire dans un lien qu'on partage.
+- *Trier ou filtrer les résultats par distance* — hors périmètre pour l'instant, et pas
+  gratuit : la pagination est soudée au curseur `(nom, id)`, un tri par distance demande un
+  curseur composite. La position s'affiche, elle ne décide de rien.
+
+**Décision.** `navigator.geolocation` du navigateur. La fenêtre de permission n'est levée que
+par un clic sur *Me localiser*, jamais à l'arrivée ; mais une permission **déjà accordée** est
+réutilisée en silence à la visite suivante. Le suivi est continu tant que la carte est à
+l'écran et que la page est au premier plan, et s'arrête sinon. La position s'affiche — un
+point bleu et son cercle de précision — et ne modifie ni le tri, ni les filtres, ni
+l'ensemble des résultats.
+
+**Conséquences.** Coût nul et strictement hors quota : la règle de `04-carte.md` — le coût est
+adossé au nombre de balayages, jamais au nombre de visites — tient sans modification.
+
+Le bleu est disponible : la palette des verdicts est vert, lime, ambre, rouge et pierre, donc
+le point ne peut pas être lu comme un risque de coupure. Il entre néanmoins dans la légende,
+parce que sur cette carte une couleur veut toujours dire quelque chose.
+
+**Point d'attention.** Le vrai sujet n'est pas d'afficher un point, c'est de dire quand il
+n'en est pas un. Un point bleu figé au mauvais endroit est indiscernable d'un point juste, ce
+qui en fait exactement le défaut silencieux contre lequel le reste du projet est construit.
+Chaque état de non-fonctionnement — refus, page non sécurisée, navigateur sans la fonction,
+signal perdu, précision inexploitable, position hors secteur — a donc un message qui nomme le
+remède, et le bouton **disparaît** là où plus aucun clic ne peut aboutir. Un signal perdu
+conserve le dernier point et le déclare tel : l'effacer perdrait une information encore utile,
+le laisser sans un mot serait le mensonge.
+
+**Conséquence sur les tests.** La logique de permission vit dans un module pur, séparée du
+branchement au navigateur, parce que le projet n'a pas d'environnement DOM de test et que
+toutes les suites existantes portent sur une fonction pure. C'est la partie qui décide qui est
+vérifiée, pas celle qui appelle.
