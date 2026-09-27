@@ -4,6 +4,7 @@ import { and, type SQL } from 'drizzle-orm'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import {
   buildConditions, buildUserConditions, EXCLUDED_BECAUSE, HOURS_EXPIRED, HOURS_USABLE, parseFilters,
+  requiresUsableHours,
 } from '@/lib/filters'
 
 /*
@@ -216,5 +217,32 @@ describe('what a search sets aside, and says it did', () => {
         }
       }
     }
+  })
+})
+
+describe('requiresUsableHours — one predicate for the exclusion and for the offer', () => {
+  it('is true under each rhythm criterion', () => {
+    expect(requiresUsableHours(parseFilters({ coupure: 'sans' }))).toBe(true)
+    expect(requiresUsableHours(parseFilters({ coupure: 'sans-ou-probable' }))).toBe(true)
+    expect(requiresUsableHours(parseFilters({ weekend: 'libre' }))).toBe(true)
+    expect(requiresUsableHours(parseFilters({ weekend: 'dimanche' }))).toBe(true)
+    expect(requiresUsableHours(parseFilters({ repos2: '1' }))).toBe(true)
+  })
+
+  it('is false with no rhythm criterion, whatever else is set', () => {
+    expect(requiresUsableHours(parseFilters({}))).toBe(false)
+    expect(requiresUsableHours(parseFilters({ inconnus: '1', q: 'bouchon', taille: 'petit' }))).toBe(false)
+  })
+
+  it('agrees with the exclusion: a rhythm criterion gates on usable hours even with inconnus=1', () => {
+    const sql = (f: ReturnType<typeof parseFilters>) =>
+      new PgDialect().sqlToQuery(buildConditions(f) as SQL).sql
+    const withRhythm = parseFilters({ weekend: 'libre', inconnus: '1' })
+    const withoutRhythm = parseFilters({ inconnus: '1' })
+    const gate = new PgDialect().sqlToQuery(HOURS_USABLE).sql
+    expect(requiresUsableHours(withRhythm)).toBe(true)
+    expect(sql(withRhythm)).toContain(gate)
+    expect(requiresUsableHours(withoutRhythm)).toBe(false)
+    expect(sql(withoutRhythm) ?? '').not.toContain(gate)
   })
 })

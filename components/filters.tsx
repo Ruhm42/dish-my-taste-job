@@ -12,7 +12,7 @@ import { JobBoards } from './job-boards'
  * hold. `categorie` is the exception: its values are the `category` enum, so they moved
  * with it. See lib/filters.ts.
  */
-export function FiltersPanel({ activeCount }: { activeCount: number }) {
+export function FiltersPanel({ activeCount, hoursRequired }: { activeCount: number; hoursRequired: boolean }) {
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
@@ -93,6 +93,14 @@ export function FiltersPanel({ activeCount }: { activeCount: number }) {
               Google n’en publie pas, ou ils datent de plus de 30 jours. Dans les deux cas
               l’outil ne peut rien dire de leur rythme de travail.
             </span>
+            {/* Kept clickable: it sets a preference that applies again once the rhythm criterion
+                is cleared. Saying so beats a box that silently changes nothing. */}
+            {hoursRequired && (
+              <span className="block text-xs text-amber-700">
+                Sans effet tant qu’un critère de rythme est coché : il faut des horaires encore
+                valides pour y répondre.
+              </span>
+            )}
           </span>
         </label>
       </Section>

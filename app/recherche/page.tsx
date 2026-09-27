@@ -19,6 +19,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   const params = await searchParams
   const user = await getUser()
   const filters = parseFilters(params)
+  const hoursRequired = requiresUsableHours(filters)
 
   // Sequential, never Promise.all.
   //
@@ -85,7 +86,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
         ) : sweepUnfinished || freshness.expired > 0 ? (
           <div className="mt-1.5 flex flex-wrap gap-2">
             {sweepUnfinished && <SweepBanner progress={progress} />}
-            {freshness.expired > 0 && <HoursFreshnessBanner freshness={freshness} />}
+            {freshness.expired > 0 && <HoursFreshnessBanner freshness={freshness} hoursRequired={hoursRequired} />}
           </div>
         ) : null}
       </header>
@@ -99,7 +100,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
         activeFilterCount={countActive(filters)}
         excluded={excluded}
         unknownHoursIncluded={filters.includeUnknownHours}
-        hoursRequired={requiresUsableHours(filters)}
+        hoursRequired={hoursRequired}
       />
     </div>
   )

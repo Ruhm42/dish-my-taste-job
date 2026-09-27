@@ -218,7 +218,7 @@ export function SearchScreen({
           never a reason for the page to build this one.
         */}
         <Suspense fallback={<p className="text-sm text-stone-400">Chargement des filtres…</p>}>
-          <FiltersPanel activeCount={activeFilterCount} />
+          <FiltersPanel activeCount={activeFilterCount} hoursRequired={hoursRequired} />
         </Suspense>
       </aside>
 
@@ -261,7 +261,10 @@ export function SearchScreen({
                     no hours that could back the claim, so they stay out either way. Offering
                     "les masquer" would tell the reader they are on the page when they are not. */}
                 {(excluded.unknownHours > 0 || excluded.expiredHours > 0) && (hoursRequired ? (
-                  <span>, exclus par le critère de rythme</span>
+                  <span>
+                    , écarté{excluded.unknownHours + excluded.expiredHours > 1 ? 's' : ''} tant qu’un
+                    critère de rythme est actif
+                  </span>
                 ) : (
                   <>
                     {', '}

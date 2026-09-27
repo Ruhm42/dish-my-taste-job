@@ -9,7 +9,7 @@ vi.hoisted(() => {
 })
 
 const { isTransactionPoolerUrl } = await import('@/lib/db/client')
-const { LEDGER_SLACK, ledgerLossMessage, loggedFloor } = await import('@/scripts/sweep')
+const { LEDGER_SLACK, ledgerLossMessage, lockRelease, loggedFloor } = await import('@/scripts/sweep')
 
 const CEILING = SWEEP.maxCallsPerPeriod
 const at = (iso: string) => new Date(iso)
@@ -140,5 +140,30 @@ describe('the transaction pooler test', () => {
   it('fails without printing the password it could not parse', () => {
     expect(() => isTransactionPoolerUrl('postgres://u:hunter2@host:notaport/db')).toThrow(/not a valid URL/)
     expect(() => isTransactionPoolerUrl('postgres://u:hunter2@host:notaport/db')).not.toThrow(/hunter2/)
+  })
+})
+
+describe('lockRelease — what the way out does with the advisory lock', () => {
+  it('sends the unlock while the try-lock has not answered, without treating false as news', () => {
+    // A signal during the in-flight try-lock: the unlock is serialised behind it on the
+    // reserved connection, so it frees the lock if that turns out granted.
+    expect(lockRelease(false, false)).toEqual({ sendUnlock: true, warnIfUnlockFails: false })
+  })
+
+  it('skips the unlock once the lock is known refused', () => {
+    expect(lockRelease(true, false)).toEqual({ sendUnlock: false, warnIfUnlockFails: false })
+  })
+
+  it('sends the unlock when the lock was granted, and a false answer is news', () => {
+    expect(lockRelease(true, true)).toEqual({ sendUnlock: true, warnIfUnlockFails: true })
+  })
+
+  it('never skips the unlock while the lock may be held', () => {
+    for (const answered of [false, true]) {
+      for (const granted of [false, true]) {
+        const mayBeHeld = granted || !answered
+        if (mayBeHeld) expect(lockRelease(answered, granted).sendUnlock).toBe(true)
+      }
+    }
   })
 })

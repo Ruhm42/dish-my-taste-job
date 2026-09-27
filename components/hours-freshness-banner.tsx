@@ -34,7 +34,9 @@ const date = (d: Date | null) =>
  * Mounted by the page only while something HAS expired: at zero there is nothing to state,
  * and a banner that says all is well is a banner readers learn to skip.
  */
-export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness }) {
+export function HoursFreshnessBanner(
+  { freshness, hoursRequired }: { freshness: HoursFreshness; hoursRequired: boolean },
+) {
   const { withHours, expired, oldestFetchedAt, nextExpiryAt } = freshness
   const since = date(oldestFetchedAt)
   const next = date(nextExpiryAt)
@@ -61,7 +63,10 @@ export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness 
           Ces fiches ne sont pas supprimées : l’adresse et le téléphone restent, mais le
           rythme de travail repasse en <em>horaires inconnus</em> et elles sortent des
           résultats par défaut — comme un établissement dont Google ne publie pas les
-          horaires. Un clic sur <em>les afficher</em> les ramène.
+          horaires.{' '}
+          {hoursRequired
+            ? <>Tant qu’un critère de rythme est actif, elles restent écartées : il faut des horaires encore valides pour y répondre.</>
+            : <>Un clic sur <em>les afficher</em> les ramène.</>}
         </p>
 
         {next && (

@@ -98,21 +98,32 @@ function releaseLock(): Promise<void> {
   return releasing ?? Promise.resolve()
 }
 
+/**
+ * What to do with the reserved connection on the way out, from what the try-lock has said.
+ * Exported for the tests: the lock's safety turns on these states.
+ *
+ *  - not answered yet — a signal landed while the try-lock was in flight: send the unlock. A
+ *    reserved connection runs its statements in order, so it executes after that try-lock:
+ *    it frees the lock if it was granted and is a no-op if not. Measured on a throwaway key.
+ *  - refused: skip it. Postgres answers an unlock of a lock you do not own with a "you don't
+ *    own a lock" WARNING, printed right under the refusal an operator is reading.
+ *  - granted: send it, and a false answer is news.
+ */
+export function lockRelease(answered: boolean, granted: boolean) {
+  return {
+    sendUnlock: !(answered && !granted),
+    warnIfUnlockFails: granted,
+  }
+}
+
 async function giveBack(lock: ReservedConnection): Promise<void> {
   try {
-    // Sent unless the lock is KNOWN not to be ours. The connection is held from its reservation
-    // on, so a signal can land while pg_try_advisory_lock is still in flight — and then nobody
-    // knows yet. A reserved connection runs its statements in order, so an unlock sent then
-    // executes after that try-lock: it frees the lock if it was granted and is a no-op if not.
-    // Measured on a throwaway key, both ways. Once the answer is a refusal, the unlock is
-    // skipped: Postgres would answer it with a "you don't own a lock" WARNING, printed right
-    // under the refusal an operator is trying to read.
-    const knownRefused = lockAnswered && !lockGranted
-    if (!knownRefused) {
+    if (lockRelease(lockAnswered, lockGranted).sendUnlock) {
       const [{ unlocked }] = await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY}) AS unlocked`
-      // False is only news when the lock WAS granted: this backend should have held it, and the
-      // statement reaching another one means that one still holds it for a process about to exit.
-      if (!unlocked && lockGranted) {
+      // Read again after the await: a try-lock still in flight when this began may have answered
+      // since. A refusal that lands after the unlock was sent still draws Postgres's WARNING —
+      // the price of not knowing yet, paid on the safe side.
+      if (!unlocked && lockRelease(lockAnswered, lockGranted).warnIfUnlockFails) {
         console.error(
           '! pg_advisory_unlock returned false: this connection did not hold the sweep lock.\n' +
           '  If another backend still holds it, every later sweep will be refused. Check with\n' +
@@ -182,6 +193,8 @@ let stopping = false
  * 7.5 s later, then SIGKILL 2.5 s after that.
  */
 const SHUTDOWN_GRACE_MS = 5_000
+/** How long the interrupted run's summary may take before the unlock goes anyway. */
+const RECORD_GRACE_MS = 2_500
 
 const EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } as const
 
@@ -208,7 +221,14 @@ function onStopSignal(signal: keyof typeof EXIT_CODE): void {
 
   void (async () => {
     try {
-      await recordInterruption(`interrupted by ${signal}`)
+      // Bounded, so the unlock always gets its share of the grace period. Recording first is
+      // deliberate — a successor that takes the lock then reads an up-to-date calls_made — but a
+      // write stuck on a slow pooler must not let the grace timer exit with the lock still held,
+      // which through Supavisor is the 4 September leak again. A failed write must not either.
+      await Promise.race([
+        recordInterruption(`interrupted by ${signal}`).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, RECORD_GRACE_MS).unref()),
+      ])
       await releaseLock()
       await rawSql.end({ timeout: 2 })
     } finally {
@@ -255,10 +275,11 @@ interface State {
   withoutCommune: Set<string>
   sirenePoints: SirenePoint[]
   /**
-   * Truncations the SIRENE density could not split, resolved by quarters instead.
+   * Truncations resolved by quarters rather than by a density plan.
    *
-   * Worth counting rather than only logging: each one is a place where Google holds more
-   * than the registry knows about, which is where a hole in the coverage would hide.
+   * The normal case since recovery must cover the parent's whole disk: a density plan wins
+   * only when it covers the disk in strictly fewer cells, which on real data happens about
+   * twice in 432. A high count is expected and says nothing about a hole in coverage.
    */
   quarterFallbacks: number
 }
@@ -893,6 +914,13 @@ async function main() {
   const [{ acquired }] = await lock`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`
   lockAnswered = true
   lockGranted = acquired
+  // A signal landed while the try-lock was in flight. The handler has already sent the unlock
+  // and owns the exit; carrying on would reopen the run as 'running' and erase the previous
+  // error before the exit lands.
+  if (stopping) {
+    await releaseLock()
+    return
+  }
   if (!acquired) {
     console.error(
       '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
@@ -1111,11 +1139,13 @@ async function main() {
 // entry point would exit 0 having done nothing, and the monthly cycle would go green on a
 // sweep that never ran. The tests import this file for its pure guards.
 //
-// `--go` overrides the gate. VITEST is set by tooling, not by this project, and cron-refresh
-// hands its environment straight through: a stray VITEST in a live run would otherwise make
-// the sweep exit 0 having spent nothing, and the cycle would report it as a success. No test
-// passes --go.
-if (!process.env.VITEST || process.argv.includes('--go')) {
+// Any of the script's own flags overrides the gate. VITEST is set by tooling, not by this
+// project, and cron-refresh hands its environment straight through: a stray VITEST would
+// otherwise make a live run exit 0 having spent nothing — reported as a success — and a dry
+// cycle rehearse nothing. No test passes these flags.
+const invokedAsScript = process.argv.slice(2)
+  .some((a) => a === '--go' || a === '--dry-run' || a === '--force' || a.startsWith(AS_OF))
+if (!process.env.VITEST || invokedAsScript) {
   process.on('SIGINT', () => onStopSignal('SIGINT'))
   process.on('SIGTERM', () => onStopSignal('SIGTERM'))
 

@@ -177,6 +177,11 @@ export const EXPECTED_TRUNCATION_RATE = 0.16
  * With the whole disk required, 430 of the 432 recoveries fall back to the quarters, which
  * cover it by construction. Recovery cells stay in the plan and owe a call every period like
  * any other (D30 rule 1).
+ *
+ * One level only. plan:cells multiplies the expected truncations by this, so its converged
+ * figure counts the cells a truncation adds and not the truncations THOSE cells hit in turn —
+ * and quarters go back into the band that truncates. The figure is a floor, not the monthly
+ * cost; do not arbitrate D30 rule 4 on it alone.
  */
 export const CELLS_PER_TRUNCATION = 4
 
