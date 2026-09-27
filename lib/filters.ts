@@ -1,4 +1,4 @@
-import { and, eq, gte, ilike, inArray, isNull, or, type SQL } from 'drizzle-orm'
+import { and, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import { restaurant } from './db/schema'
 
 /**
@@ -27,6 +27,23 @@ export interface Filters {
 
 /** The only Google business status the directory lists. See D29. */
 const OPERATIONAL = 'OPERATIONAL'
+
+/**
+ * Whether the hours stored on a row may still be shown.
+ *
+ * Two conditions, and only one of them is written by anything: Google gave us hours, and
+ * they are less than 30 days old. Past that the terms of service no longer let us keep them
+ * (D7), and D30 rule 6 makes that the displayed behaviour rather than a silent drift — the
+ * record stays and stops claiming a rhythm it can no longer prove.
+ *
+ * Read at query time and never written by a script, because nothing writes to a row on the
+ * day it expires: the clock moves, the row does not. `hours_expires_at` had been written by
+ * every sweep since the first one and read by nobody.
+ *
+ * Exported because the same expression has to gate the FILTER, the projection and the
+ * counts: two of the three agreeing is a total that drops without a word.
+ */
+export const HOURS_USABLE = sql`${restaurant.hasHours} AND ${restaurant.hoursExpiresAt} > now()`
 
 /** Inverse of the headcount table in lib/hours: keep the brackets in sync with it. */
 const HEADCOUNT_CODES_BY_SIZE: Record<string, string[]> = {
@@ -61,6 +78,11 @@ function userConditions(f: Filters): SQL[] {
 
   if (f.zones.length) c.push(inArray(restaurant.inseeCode, f.zones))
 
+  // Deliberately NOT gated on the hours being usable, though the verdict they read is.
+  // These are the reader's own criteria, and `countExcluded` measures the exclusions
+  // against them: a record set aside for expiry has to still MATCH here, or the total drops
+  // and the line underneath has nothing to report — the silent subset this project refuses
+  // everywhere else. The gate lives in `exclusions`, once.
   if (f.splitShift === 'sans') c.push(eq(restaurant.splitShiftRisk, 'none'))
   else if (f.splitShift === 'sans-ou-probable') {
     c.push(inArray(restaurant.splitShiftRisk, ['none', 'low']))
@@ -90,11 +112,13 @@ function userConditions(f: Filters): SQL[] {
  *  - **Google says the place is shut.** That is not missing information, it is information:
  *    a closed restaurant is not an employer. It never appears, and the screen says how many
  *    were set aside rather than letting the count drop without a word.
- *  - **Google publishes no hours.** Measured: those establishments match SIRENE 8% of the
- *    time against 41% for the rest, and carry a phone number once in five against nine in
- *    ten. Thin sheets, and the tool can say nothing about the one thing it exists to say.
- *    They are set aside BY DEFAULT and come back in one click — the spec forbids hiding
- *    what we do not know, not leaving it out of the default answer.
+ *  - **Google publishes no hours, or published them more than 30 days ago.** Measured: the
+ *    establishments with no hours at all match SIRENE 8% of the time against 41% for the
+ *    rest, and carry a phone number once in five against nine in ten. Thin sheets, and the
+ *    tool can say nothing about the one thing it exists to say. The expired ones join them:
+ *    we knew and are no longer allowed to (D7), which for a reader is the same silence.
+ *    Both are set aside BY DEFAULT and come back in one click — the spec forbids hiding what
+ *    we do not know, not leaving it out of the default answer.
  */
 function exclusions(f: Filters): SQL[] {
   const out: SQL[] = []
@@ -102,7 +126,7 @@ function exclusions(f: Filters): SQL[] {
   const stillTrading = or(isNull(restaurant.businessStatus), eq(restaurant.businessStatus, OPERATIONAL))
   if (stillTrading) out.push(stillTrading)
 
-  if (!f.includeUnknownHours) out.push(eq(restaurant.hasHours, true))
+  if (!f.includeUnknownHours) out.push(HOURS_USABLE)
 
   return out
 }

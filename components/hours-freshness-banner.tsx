@@ -6,8 +6,14 @@ const date = (d: Date | null) =>
   d ? new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) : null
 
 /**
- * Says that part of the opening hours on screen are older than the 30 days the Google
- * terms of service allow us to keep them (D7).
+ * Says how many records have stopped showing their hours, and since when.
+ *
+ * Not "hours to refresh on screen" any more: past 30 days they are not on screen at all.
+ * The terms of service no longer let us keep them (D7), so the record stays without its
+ * rhythm and is set aside by default like an establishment Google publishes no hours for
+ * (D30 rule 6). What the banner exists for is that the drop be stated: a directory that
+ * quietly holds fewer answers than last week is the failure mode this project names as its
+ * worst.
  *
  * A sibling of SweepBanner rather than a section of it: the sweep can converge while the
  * hours rot, and the hours can be fresh while the sweep still owes cells. Merging them
@@ -15,6 +21,9 @@ const date = (d: Date | null) =>
  *
  * Same `<details>` as the other banner, for the same reason: a `title` tooltip never opens
  * on a touch screen, and the audience is on a phone.
+ *
+ * Mounted by the page only while something HAS expired: at zero there is nothing to state,
+ * and a banner that says all is well is a banner readers learn to skip.
  */
 export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness }) {
   const { withHours, expired, oldestFetchedAt } = freshness
@@ -24,11 +33,11 @@ export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness 
     <details className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
       <summary className="cursor-pointer list-none">
         <span className="underline decoration-dotted underline-offset-2">
-          Horaires à rafraîchir
+          Horaires périmés
         </span>
         {' — '}
-        <strong>{fr(expired)}</strong> fiches sur {fr(withHours)} n’ont pas été revues
-        depuis plus de 30 jours
+        <strong>{fr(expired)}</strong> fiches sur {fr(withHours)} n’affichent plus leurs
+        horaires
       </summary>
 
       <div className="mt-2 max-w-prose space-y-1.5 border-t border-amber-200 pt-2 font-normal">
@@ -39,9 +48,15 @@ export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness 
         </p>
 
         <p>
-          Elles restent affichées, parce qu’une fiche sans horaires ne se filtre plus du
-          tout. Mais un établissement a pu changer de rythme depuis : sur celles-là,
-          <em> vérifiez avant de vous déplacer</em>.
+          Ces fiches ne sont pas supprimées : l’adresse et le téléphone restent, mais le
+          rythme de travail repasse en <em>horaires inconnus</em> et elles sortent des
+          résultats par défaut — comme un établissement dont Google ne publie pas les
+          horaires. Un clic sur <em>les afficher</em> les ramène.
+        </p>
+
+        <p>
+          Le relevé mensuel rachète d’abord les plus anciennes, avant d’aller en chercher de
+          nouvelles.
         </p>
       </div>
     </details>

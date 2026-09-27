@@ -10,8 +10,8 @@
  * expiry (D7).
  *
  * IT SPENDS QUOTA, through `sweep:google`: `--dry-run` is therefore its default mode, and
- * `--go` the only way to spend. In dry run it only runs the two steps that know how to
- * write nothing — the plan and the dry sweep.
+ * `--go` the only way to spend. Dry, every step has a write-free mode, so the whole chain is
+ * rehearsed without a call or a row.
  *
  *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts        # nothing is spent
  *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts --go   # actually spends
@@ -27,31 +27,68 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../lib/db/client'
-import { cell } from '../lib/db/schema'
-import { countUnfinished } from '../lib/coverage'
+import { cell, sweepRun } from '../lib/db/schema'
+import { buildCoverage, countOwed } from '../lib/coverage'
+import { monthWindow } from '../lib/quota'
 import { COMMUNE_NAMES, DISTRICT_BY_COMMUNE, HOURS_TTL_DAYS } from '../lib/config'
 import { fetchHoursFreshness, type HoursFreshness } from '../lib/results'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 
+interface PlanState {
+  /** Cells in the database, all runs taken together. Zero means there is no plan. */
+  total: number
+  /** Cells this quota period still has to pay for: content to buy back, and discovery. */
+  owed: number
+  /** Truncations whose recovering cells are not themselves covered. */
+  unresolved: number
+}
+
 /**
- * Cells that still owe a Google call, all runs taken together.
+ * What the plan is, and what this period still owes on it — two questions, both needed.
  *
- * A truncated cell has been paid for, but the subdivisions that recover what it hid may
- * not have been — so it counts as unfinished until they ARE, and not for ever. Counting
- * every truncated cell as unfinished, which is what this did, could never reach zero:
- * nothing moves a cell out of `truncated`. Planning would then be skipped for ever, and
- * every cycle would fail the moment the last pending cell was queried.
+ * `owed` decides nothing about planning any more; it is the cycle's budget figure. Under
+ * D30 rule 1 every cell owes a call once per quota period, since everything it collects
+ * expires in 30 days, so this is nonzero at the start of every period by construction.
+ *
+ * `unresolved` is the other thing a period cannot fix on its own: a truncated cell has been
+ * paid for, but the cells that recover what it hid may not have been. It counts as
+ * unresolved until they ARE, and not for ever — nothing moves a cell out of `truncated`, so
+ * counting every truncated cell would be a rule that can never come true.
+ *
+ * Scoped to the run the sweep would pick — the most recent one with cells — and not to the
+ * whole table. A recalibration leaves the previous plan's rows in place, on purpose: their
+ * `queried_at` is the period's spend ledger and deleting them re-opens a ceiling already
+ * paid for. Counting them here would have the cycle announce a figure the sweep does not
+ * walk, which is the kind of disagreement that ends in a wrong cost forecast.
  *
  * Read whole rather than counted in SQL: coverage is recursive, it is the same rule the
  * sweep reports its own truncations with, and the table is a few thousand rows.
  */
-async function unfinishedCellCount(): Promise<number> {
+async function planState(): Promise<PlanState> {
+  const runs = await db.selectDistinct({ runId: cell.sweepRunId }).from(cell)
+  if (runs.length === 0) return { total: 0, owed: 0, unresolved: 0 }
+
+  const [latest] = await db.select({ id: sweepRun.id }).from(sweepRun)
+    .where(inArray(sweepRun.id, runs.map((r) => r.runId)))
+    .orderBy(desc(sweepRun.startedAt))
+    .limit(1)
+  const runId = latest?.id ?? runs[0].runId
+
   const cells = await db
-    .select({ id: cell.id, parentId: cell.parentId, status: cell.status })
+    .select({
+      id: cell.id, parentId: cell.parentId, status: cell.status, queriedAt: cell.queriedAt,
+    })
     .from(cell)
-  return countUnfinished(cells)
+    .where(eq(cell.sweepRunId, runId))
+  const isCovered = buildCoverage(cells)
+  return {
+    total: cells.length,
+    owed: countOwed(cells, monthWindow(new Date())),
+    unresolved: cells.filter((c) => c.status === 'truncated' && !isCovered(c)).length,
+  }
 }
 
 const DISTRICT_LABEL = new Map(
@@ -96,21 +133,22 @@ interface Step {
    * database, row by row. These still run when the sweep fails.
    */
   offline?: boolean
-  /** Overrides `dryRunArgs` when the cycle is resuming an unfinished sweep. */
+  /** Overrides `dryRunArgs` when a plan is already in the database. */
   dryRunOnResume?: string[]
 }
 
 const STEPS: Step[] = [
-  // The only step playable dry, and the only one that matters for the budget: the number
-  // of cells it announces IS the number of calls the sweep will spend.
+  // The budget step: the number of cells it announces is what a converged sweep costs every
+  // month, since every cell owes one call per period (D30 rules 1 and 4). Played dry even
+  // when a plan is in place — that figure is the one the arbitration is made on.
   { name: 'plan:cells', file: 'plan-cells.ts', args: ['--write'], dryRunArgs: [] },
   // The dry run of `sweep` reads the plan from the database; in dry run the plan is
   // precisely not written there. Calling it anyway would fail on "no cell to do", a
   // failure that says nothing about the real sweep.
   //
-  // A RESUME is the exception: the plan is already in the database, so the dry sweep has
-  // something real to read and is the only thing that reports what the quota period still
-  // allows. Without it a dry cycle on an unfinished sweep played nothing at all.
+  // A PLAN ALREADY IN PLACE is the exception: the dry sweep then has something real to read
+  // and is the only thing that reports what the quota period still owes, and in which order.
+  // Without it a dry cycle on an existing plan played nothing at all.
   { name: 'sweep:google', file: 'sweep.ts', args: ['--go'], dryRunArgs: null, dryRunOnResume: ['--dry-run'] },
   // Both have a write-free mode, so a dry cycle rehearses the whole chain instead of
   // stopping after the sweep. That is also what makes the ordering above testable.
@@ -170,20 +208,23 @@ async function main(): Promise<void> {
 
   const startedAt = Date.now()
 
-  // An unfinished sweep must be RESUMED, never replanned.
+  // An existing plan is WALKED, never replanned.
   //
-  // `plan:cells --write` opens a brand-new run with its own cells. Doing that on top of an
-  // interrupted sweep would strand the pending subdivisions, re-query the cells already
-  // paid for, and spend a whole monthly quota without ever reaching the end — the base
-  // would stay incomplete while the bill says otherwise. Finish what was started first.
-  const unfinished = await unfinishedCellCount()
-  const skipPlanning = unfinished > 0
+  // `plan:cells --write` opens a brand-new run with its own cells. Doing that on top of the
+  // plan in place would strand its pending subdivisions, re-query cells this period has
+  // already paid for, and spend a whole monthly quota without ever reaching the end — the
+  // base would stay incomplete while the bill says otherwise. And under D30 rule 1 there is
+  // nothing to replan for: one single plan is walked once per period, in the order its
+  // content expires. Recalibrating it is a deliberate act, run by hand.
+  const plan = await planState()
+  const skipPlanning = plan.total > 0
 
   if (skipPlanning) {
     console.log(
-      `\nUNFINISHED SWEEP DETECTED — ${unfinished} cell(s) still to query.\n` +
-      'Planning is skipped: this cycle resumes the run in progress. Cells already\n' +
-      'queried are not replayed, so only the remainder is paid for.',
+      `\nPLAN IN PLACE — ${plan.total} cell(s), of which ${plan.owed} owed for this quota ` +
+      `period and ${plan.unresolved} truncation(s) unresolved.\n` +
+      'Planning is skipped in live mode: the cycle walks the plan it has, oldest content\n' +
+      'first. Cells already queried inside this period are not replayed.',
     )
   }
 
@@ -207,7 +248,10 @@ async function main(): Promise<void> {
    * first error is kept and rethrown below, so the exit code and the red build are unchanged.
    */
   for (const step of STEPS) {
-    if (skipPlanning && step.name === 'plan:cells') continue
+    // Dry, planning is still played: it writes nothing, and the number of cells it announces
+    // is what D30 rule 4 arbitrates on — the cost of a converged sweep, every month, before
+    // a call is spent. Live, it would replace the plan being walked.
+    if (skipPlanning && go && step.name === 'plan:cells') continue
     if (failure && !step.offline) {
       console.log(`\n=== ${step.name} — skipped, an earlier step failed ===`)
       continue
@@ -233,7 +277,8 @@ async function main(): Promise<void> {
   // base would be claiming a freshness it does not have.
   const freshness = await fetchHoursFreshness()
   reportFreshness(freshness)
-  const converged = (await unfinishedCellCount()) === 0
+  const after = await planState()
+  const converged = after.owed === 0 && after.unresolved === 0
 
   if (failure) throw failure
 
@@ -243,7 +288,8 @@ async function main(): Promise<void> {
       '(Enterprise usage ≈ number of cells, NOTHING on the Atmosphere tier), ' +
       'unresolved truncations, SIRENE unmatched rate.'
     : `\nDry run finished in ${minutes} min. Nothing was spent nor written.\n` +
-      'The number of cells announced above is the number of calls --go would spend.')
+      `This period owes ${plan.owed} call(s) on the plan in place; the cell count the plan ` +
+      'step announces is what a converged sweep would cost each month (D30 rule 4).')
 
   if (converged && freshness.expired > 0) {
     const message =

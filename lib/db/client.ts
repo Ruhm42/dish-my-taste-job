@@ -22,7 +22,7 @@ if (!url) throw new Error('DATABASE_URL is missing — copy .env.example to .env
  * diagnose. And `max: 1` because each serverless instance owns its pool: connections per
  * instance multiply by the number of instances.
  */
-const isTransactionPooler = url.includes(':6543')
+export const isTransactionPooler = url.includes(':6543')
 
 /**
  * Timeouts are not optional on serverless.
@@ -50,5 +50,11 @@ export { schema }
  * Such a lock lives on the connection that took it, and the pool hands statements to
  * whichever connection is free — so the sweep reserves one for its whole run rather than
  * locking on a connection it may never see again. See `scripts/sweep.ts`.
+ *
+ * That reservation is why `isTransactionPooler` is exported. With `max: 1`, reserving the
+ * connection takes the only one there is: every query issued afterwards waits for a
+ * connection that never frees, with no error and no timeout. The symptom is an hour of
+ * silence having spent nothing, which is why a batch script refuses the transaction pooler
+ * at startup instead of hanging on it.
  */
 export { sql }

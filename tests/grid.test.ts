@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { distanceInMeters, hilbertIndex, planCells } from '@/lib/grid'
-import type { Cell, Point } from '@/lib/grid'
+import {
+  distanceInMeters, hilbertIndex, planCells, planRecovery, pointsInCircle, subdivide,
+} from '@/lib/grid'
+import type { Cell, Circle, Point } from '@/lib/grid'
 import { GRID } from '@/lib/config'
 
 const OPTIONS = { target: 15, maxRadius: 200, minRadius: 40 }
@@ -240,5 +242,83 @@ describe('edge cases', () => {
     const cells = planCells(cloud(100, 500, 31), GRID)
     expect(cells.every((c) => c.sireneCount <= GRID.target)).toBe(true)
     expect(cells.every((c) => c.radius <= GRID.maxRadius)).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// Resolving a truncation — D30 rule 2
+//
+// The four-way split bought four calls to remove 12% of the
+// density: four circles of 0.72 R over a disc of R overlap to
+// 2.07 times its area, and the dense core falls in all four.
+// A truncation is a density problem, so it is resolved on
+// density — and never on four cells by principle.
+//
+// The ceiling is read on the planner's ASSIGNMENT, the scale the
+// 1.57 ratio was measured against. What a circle CONTAINS is a
+// different, much larger number: BAN geocodes co-located
+// establishments onto one coordinate, and no radius separates
+// points that share it.
+// ─────────────────────────────────────────────────────────────
+describe('resolving a truncation', () => {
+  const RECOVERY = { target: GRID.target, minRadius: GRID.minRadius }
+
+  /** A truncated cell: 30 establishments around a 260 m square, ~22 of them inside it. */
+  const dense = cloud(30, 260, 41)
+  const parent: Circle = { lat: BASE.lat, lng: BASE.lng, radius: 150 }
+  const inside = pointsInCircle(dense, parent.lat, parent.lng, parent.radius)
+
+  it('resolves on the density, and not into four cells by principle', () => {
+    const { cells, fromDensity } = planRecovery(parent, dense, RECOVERY)
+    expect(fromDensity).toBe(true)
+    expect(cells.length).toBeGreaterThan(1)
+    expect(cells.length).not.toBe(4)
+  })
+
+  it('costs fewer calls than the four-way split it replaces', () => {
+    // Measured over the 212 real truncations: 3.5 cells each, against four every time.
+    const { cells } = planRecovery(parent, dense, RECOVERY)
+    expect(cells.length).toBeLessThan(subdivide(parent, GRID.minRadius).length)
+  })
+
+  it('splits the cell into at least as many cells as the ceiling requires', () => {
+    // Under the ceiling by construction: the planner assigns at most `target` per cell.
+    const { cells } = planRecovery(parent, dense, RECOVERY)
+    expect(cells.length).toBeGreaterThanOrEqual(Math.ceil(inside.length / GRID.target))
+  })
+
+  it('never lays down a cell wider than the one that truncated', () => {
+    // A wider child would query the very places that truncated its parent.
+    const { cells } = planRecovery(parent, dense, RECOVERY)
+    expect(cells.every((c) => c.radius <= parent.radius)).toBe(true)
+  })
+
+  it('loses no point of the cell it replans', () => {
+    const { cells } = planRecovery(parent, dense, RECOVERY)
+    for (const p of inside) {
+      expect(cells.some((c) => distanceInMeters(c, p) <= c.radius)).toBe(true)
+    }
+  })
+
+  it('falls back on the quarters when the density has nothing to split', () => {
+    // Four establishments in the registry, and Google truncated anyway: it sees more here
+    // than SIRENE knows about, and the radius is the only handle left.
+    const { cells, fromDensity } = planRecovery(parent, cloud(4, 80, 43), RECOVERY)
+    expect(fromDensity).toBe(false)
+    expect(cells).toHaveLength(4)
+    expect(cells.every((c) => c.radius < parent.radius)).toBe(true)
+  })
+
+  it('falls back on the quarters for a cell the registry knows nothing about', () => {
+    const { cells, fromDensity } = planRecovery(parent, [], RECOVERY)
+    expect(fromDensity).toBe(false)
+    expect(cells).toHaveLength(4)
+  })
+
+  it('keeps the quarters covering their parent with no gap', () => {
+    // The reason they survive at all: a tighter split would leave four areas never queried.
+    for (const q of subdivide(parent, GRID.minRadius)) {
+      expect(distanceInMeters(parent, q) + q.radius).toBeGreaterThanOrEqual(parent.radius)
+    }
   })
 })

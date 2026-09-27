@@ -88,9 +88,10 @@ export function FiltersPanel({ activeCount }: { activeCount: number }) {
             onChange={(e) => set('inconnus', e.target.checked ? '1' : '')}
           />
           <span>
-            Afficher les établissements sans horaires publiés
+            Afficher les établissements sans horaires utilisables
             <span className="block text-xs text-stone-500">
-              L’outil ne peut rien dire de leur rythme de travail.
+              Google n’en publie pas, ou ils datent de plus de 30 jours. Dans les deux cas
+              l’outil ne peut rien dire de leur rythme de travail.
             </span>
           </span>
         </label>

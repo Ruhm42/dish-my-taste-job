@@ -9,6 +9,10 @@
  * The counters are indexed on the QUOTA PERIOD, never on the sweep: a sweep that outlives
  * the month paying for it must still be resumable (D28, spec technique/10).
  *
+ * And so is the plan itself: everything a cell collects expires 30 days later (D7), so
+ * `done` means "done in THIS period" and one single plan is walked in the order its content
+ * expires — refresh first, oldest first, discovery on what the quota leaves (D30 rule 1).
+ *
  * See .specs/technique/02-budget-google-et-garde-fous.md
  *  and .specs/technique/03-algorithme-de-balayage.md
  *
@@ -19,7 +23,7 @@
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-09-01T03:00:00Z
  */
 import { and, count, desc, eq, gte, inArray, isNotNull, lt, sum } from 'drizzle-orm'
-import { db, sql as rawSql } from '../lib/db/client'
+import { db, isTransactionPooler, sql as rawSql } from '../lib/db/client'
 import { cell, restaurant, sireneEstablishment, sweepRun } from '../lib/db/schema'
 import {
   DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES, FREE_MONTHLY_QUOTA,
@@ -30,24 +34,68 @@ import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
-// The grid laid its circles down with THIS distance: cross-checking them with another
-// approximation would push points the plan had placed inside a circle out of it.
-import { distanceInMeters, METERS_PER_DEGREE_LAT } from '../lib/grid'
-// Shared with cron:refresh, which decides from it whether to resume or replan.
-import { buildCoverage } from '../lib/coverage'
+// The grid laid its circles down with THIS distance and THIS planner: resolving a
+// truncation with another approximation would push points the plan had placed inside a
+// circle out of it, and replanning by any other rule than the one that drew the plan is
+// how the four-way split came to cost four calls for 12% of the density (D30 rule 2).
+import { distanceInMeters, planRecovery, pointsInCircle } from '../lib/grid'
+// Shared with cron:refresh: the same rules decide what a period owes and what a
+// truncation still hides, so the sweep and the cycle cannot disagree about either.
+import { buildCoverage, countOwed, owesCall } from '../lib/coverage'
 
 const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby'
 
 /** Beyond this, the nearest SIRENE point is no longer proof of a commune, just a neighbour. */
 const COMMUNE_ATTACHMENT_RADIUS = 300
 
-const RAD = Math.PI / 180
-
 /** Simulates a quota period so spec 10's acceptance criteria can be played, not argued. */
 const AS_OF = '--as-of='
 
 /** Arbitrary but fixed: an advisory lock key is only ever compared with itself. */
 const SWEEP_LOCK_KEY = 828_100_128
+
+type ReservedConnection = Awaited<ReturnType<typeof rawSql.reserve>>
+
+/**
+ * The reserved connection holding the advisory lock, at module scope so that every way out
+ * of this script can give it back — the top-level `catch` included.
+ */
+let heldLock: ReservedConnection | null = null
+
+/**
+ * Hands the advisory lock back, explicitly.
+ *
+ * The comment where the lock is taken used to claim that a session-level lock leaves with
+ * its connection, so a killed process frees it. Measured, that holds in exactly one case:
+ *
+ *  - giving the connection back mid-run frees nothing, on any kind of connection. `release()`
+ *    returns it to postgres.js's pool, the backend stays alive, and the lock stays held —
+ *    which is what the refusal below relied on and got wrong.
+ *  - a process that dies on a DIRECT connection does free it, with the socket.
+ *  - a process that dies through a POOLER does not: the backend stays parked at Supavisor
+ *    still holding the lock, and every later sweep — the monthly cron included — is then
+ *    refused by a lock whose owner is gone. It happened, and clearing it took a
+ *    `pg_terminate_backend` on the holder.
+ *
+ * Called before each `process.exit` rather than from a `finally`, because `process.exit`
+ * does not run one. Idempotent, so no call site has to know whether another already did it.
+ */
+async function releaseLock(): Promise<void> {
+  const lock = heldLock
+  if (!lock) return
+  heldLock = null
+  try {
+    await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY})`
+  } catch (error) {
+    console.error(
+      `! the sweep lock could not be released: ${(error as Error).message}\n` +
+      '  Every later sweep will be refused until it is cleared. Find the holder with\n' +
+      `  select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}\n` +
+      '  and terminate that backend.',
+    )
+  }
+  await lock.release()
+}
 
 const SWEEP_SUCCEEDED = 'succeeded'
 const SWEEP_FAILED = 'failed'
@@ -89,6 +137,13 @@ interface State {
   withHours: Set<string>
   withoutCommune: Set<string>
   sirenePoints: SirenePoint[]
+  /**
+   * Truncations the SIRENE density could not split, resolved by quarters instead.
+   *
+   * Worth counting rather than only logging: each one is a place where Google holds more
+   * than the registry knows about, which is where a hole in the coverage would hide.
+   */
+  quarterFallbacks: number
 }
 
 // --- Geometry ----------------------------------------------------------------------
@@ -97,38 +152,16 @@ function distance(aLat: number, aLng: number, bLat: number, bLng: number): numbe
   return distanceInMeters({ lat: aLat, lng: aLng }, { lat: bLat, lng: bLng })
 }
 
-/** Bounding-box prefilter before the exact distance — there is no PostGIS (D12). */
-function pointsInCircle(points: SirenePoint[], lat: number, lng: number, radius: number): SirenePoint[] {
-  const dLat = radius / METERS_PER_DEGREE_LAT
-  const dLng = dLat / Math.max(0.01, Math.cos(lat * RAD))
-  return points.filter(
-    (p) =>
-      Math.abs(p.lat - lat) <= dLat &&
-      Math.abs(p.lng - lng) <= dLng &&
-      distance(lat, lng, p.lat, p.lng) <= radius,
-  )
-}
-
 /**
- * Four circles covering the parent circle WITH NO GAP.
- *
- * We cover the square circumscribing the parent: each of its four quadrants, of side R,
- * fits inside a circle of radius R·√2/2 centred on that quadrant. A tighter split (four
- * circles of radius R/2) would leave four areas that are never queried — exactly the kind
- * of defect that never shows up in the UI.
+ * Expiry order: the cell queried longest ago is the one whose content dies first, so it is
+ * bought back first. Never-queried cells sort LAST — freshness before completeness (D30
+ * rule 1) — and among those the shallow before the deep, the order the plan was written in.
  */
-function subdivide(parent: CellRow): { lat: number; lng: number; radius: number }[] {
-  const radius = Math.max(GRID.minRadius, parent.radius * Math.SQRT1_2)
-  const half = parent.radius / 2
-  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.max(0.01, Math.cos(parent.lat * RAD))
-
-  return [
-    [-half, -half], [half, -half], [-half, half], [half, half],
-  ].map(([dx, dy]) => ({
-    lat: parent.lat + dy / METERS_PER_DEGREE_LAT,
-    lng: parent.lng + dx / metersPerDegreeLng,
-    radius,
-  }))
+function byExpiry(a: CellRow, b: CellRow): number {
+  if (a.queriedAt && b.queriedAt) return a.queriedAt.getTime() - b.queriedAt.getTime()
+  if (a.queriedAt) return -1
+  if (b.queriedAt) return 1
+  return a.depth - b.depth || a.id.localeCompare(b.id)
 }
 
 // --- Google call --------------------------------------------------------------------
@@ -371,11 +404,28 @@ async function processCell(c: CellRow, state: State): Promise<void> {
     return
   }
 
-  const children = subdivide(c).map((child) => ({
+  // A cell re-queried in a later period can truncate again, and it already has the cells
+  // that recover what it hid. Inserting a second set would multiply the plan on every
+  // period, and for nothing: the split is read from the SIRENE registry, which has not
+  // moved. So the measurement is written and the existing children stand.
+  const [existing] = await db.select({ n: count() }).from(cell).where(eq(cell.parentId, c.id))
+  if ((existing?.n ?? 0) > 0) {
+    await db.update(cell).set({ ...measurement, status: 'truncated' }).where(eq(cell.id, c.id))
+    console.log(`  truncation again (${reason}) -> ${existing.n} cell(s) already planned for it`)
+    return
+  }
+
+  const recovery = planRecovery(c, state.sirenePoints, {
+    target: GRID.target, minRadius: GRID.minRadius,
+  })
+  if (!recovery.fromDensity) state.quarterFallbacks++
+  const children = recovery.cells.map((child) => ({
     sweepRunId: c.sweepRunId,
     lat: child.lat,
     lng: child.lng,
     radius: child.radius,
+    // The geometric count, not the planner's assignment: it is what the truncation detector
+    // reads, and a circle drawn around N points can hold more than N.
     sireneCount: pointsInCircle(state.sirenePoints, child.lat, child.lng, child.radius).length,
     depth: c.depth + 1,
     parentId: c.id,
@@ -389,7 +439,14 @@ async function processCell(c: CellRow, state: State): Promise<void> {
     await tx.insert(cell).values(children)
   })
 
-  console.log(`  truncation (${reason}) -> 4 cells of ${Math.round(children[0].radius)} m`)
+  const radii = children.map((x) => Math.round(x.radius))
+  console.log(
+    `  truncation (${reason}) -> ${children.length} cell(s) of ${Math.min(...radii)}-` +
+    `${Math.max(...radii)} m, ` +
+    (recovery.fromDensity
+      ? 'replanned on the SIRENE density inside it'
+      : 'BY QUARTERS: the registry sees no density to split here, Google does'),
+  )
 }
 
 // --- What the quota period has already paid for -----------------------------------------
@@ -465,21 +522,35 @@ async function main() {
   }
   if (asOf) console.log(`SIMULATED CLOCK — reading the plan as of ${now.toISOString()}\n`)
 
-  // 1. The plan. A run with cells still to do, or with cells that failed.
-  const pendingRuns = await db
-    .selectDistinct({ runId: cell.sweepRunId })
-    .from(cell)
-    .where(inArray(cell.status, ['pending', 'failed']))
-
-  if (pendingRuns.length === 0) {
+  // A batch script must not come in through the transaction pooler: its pool holds exactly
+  // one connection, and the advisory lock below reserves it — every query issued after that
+  // waits for a connection that never frees, with no error and no timeout. The dry run is
+  // refused too, because a check that only fires under `--go` is a check that fires while
+  // spending.
+  if (isTransactionPooler) {
     console.error(
-      'No sweep plan to execute: not a single "pending" cell.\n' +
+      'REFUSING TO START: DATABASE_URL points at the transaction pooler (:6543), which ' +
+      'hands out a single connection.\n' +
+      'The sweep reserves one for its advisory lock, so the run would hang for ever — no ' +
+      'error, no timeout, no call spent.\n' +
+      'Use the session pooler: same host, port 5432.',
+    )
+    process.exit(1)
+  }
+
+  // 1. The plan. Every cell of it owes a call once per quota period, so a run whose cells
+  // are all `done` is a run to replay — not a run with nothing left to do.
+  const plannedRuns = await db.selectDistinct({ runId: cell.sweepRunId }).from(cell)
+
+  if (plannedRuns.length === 0) {
+    console.error(
+      'No sweep plan to execute: not a single cell.\n' +
       'Run `plan:cells` first — the sweep does not invent its own grid.',
     )
     process.exit(1)
   }
 
-  const ids = pendingRuns.map((r) => r.runId)
+  const ids = plannedRuns.map((r) => r.runId)
   const knownRuns = await db.select().from(sweepRun)
     .where(inArray(sweepRun.id, ids))
     .orderBy(desc(sweepRun.startedAt))
@@ -495,12 +566,19 @@ async function main() {
   }
   const runId = knownRuns[0]?.id ?? ids[0]
   if (ids.length > 1) {
-    console.warn(`! ${ids.length} pending plans — only the most recent one (${runId}) is swept.`)
+    console.warn(`! ${ids.length} plans in the database — only the most recent one (${runId}) is swept.`)
   }
 
   const cells = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
   const planned = cells.filter((c) => !c.parentId).length
-  const toQuery = cells.filter((c) => c.status === 'pending' || c.status === 'failed').length
+
+  // One plan, walked in the order its content expires. Not a refresh budget and a discovery
+  // budget to split: the cells whose content dies first come first, and what the quota
+  // leaves goes to the ones never queried (D30 rule 1).
+  const periodWindow = monthWindow(now)
+  const owedCells = cells.filter((c) => owesCall(c, periodWindow)).sort(byExpiry)
+  const toRefresh = owedCells.filter((c) => c.queriedAt).length
+  const toDiscover = owedCells.length - toRefresh
 
   // 2. Recency: the quota is monthly, two sweeps in a month consume it entirely.
   const [lastSucceeded] = await db.select().from(sweepRun)
@@ -517,27 +595,38 @@ async function main() {
   // opened. Judging the refusal on the run total deadlocked the resume: the total only
   // ever rises, so a run that reached the ceiling could never spend again (D28).
   const period = monthKey(now)
-  const periodSpent = await spentIn(monthWindow(now))
+  const periodSpent = await spentIn(periodWindow)
   const headroom = callsLeft(periodSpent, SWEEP.maxCallsPerPeriod)
   // Still on screen because it is the logbook figure D22 was written from. It decides nothing.
   const runTotalToDate = knownRuns[0]?.callsMade ?? 0
 
   console.log('--- Sweep plan ---')
   console.log(`run                     : ${runId}`)
-  console.log(`cells in the plan       : ${planned}`)
-  console.log(`cells to query          : ${toQuery}`)
-  console.log(`CALLS PLANNED           : ${toQuery}`)
-  console.log('  + 4 calls per truncated cell, until convergence')
+  console.log(`cells in the plan       : ${cells.length}  (${planned} at depth 0)`)
+  console.log(`CALLS OWED FOR ${period}  : ${owedCells.length}`)
+  console.log(`  content to buy back   : ${toRefresh}  (queried in an earlier period)`)
+  console.log(`  never queried         : ${toDiscover}`)
+  console.log('  + the cells a truncation adds, until convergence')
   console.log(`spent this period       : ${periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${period})`)
   console.log(`THIS RUN CAN SPEND      : ${headroom}  before the ceiling stops it`)
   console.log(`run total to date       : ${runTotalToDate}  (logbook only, no longer the refusal)`)
 
+  // The order is the rule, so it is printed rather than asserted: the head of the queue is
+  // what a dry run is read for before a period is paid for.
+  if (toRefresh > 0) {
+    const head = owedCells.filter((c) => c.queriedAt).slice(0, 3)
+    const tail = owedCells.filter((c) => c.queriedAt).slice(-1)
+    const day = (c: CellRow) => c.queriedAt!.toISOString().slice(0, 10)
+    console.log(`first to be bought back : ${head.map(day).join(', ')} … ${tail.map(day).join('')}`)
+  }
+
   if (headroom === 0) {
     console.warn('! the ceiling for this period is already reached: nothing can be spent.')
-  } else if (toQuery > headroom) {
+  } else if (owedCells.length > headroom) {
     console.warn(
-      `! ${toQuery} cells to query for ${headroom} call(s) left: the run will be cut short ` +
-      'and will have to be resumed next period. Nothing to replan.',
+      `! ${owedCells.length} cells owed for ${headroom} call(s) left: the run will be cut ` +
+      'short and what it does not reach stays old, counted, and said in the banner. ' +
+      'Nothing to replan.',
     )
   }
   if (tooRecent) {
@@ -578,17 +667,24 @@ async function main() {
   // The ceiling is read once and spent against for hours. Without a lock, a local --go
   // overlapping the scheduled one reads the same figure twice and each spends the whole
   // remainder. The workflow's concurrency group guards CI against CI, and nothing guards
-  // this. Session-level, so a killed process releases it with its connection.
+  // this. It is released explicitly on the way out — see `releaseLock`.
   const lock = await rawSql.reserve()
   const [{ acquired }] = await lock`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`
   if (!acquired) {
     console.error(
       '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
-      'reading the same remaining quota would each spend it in full.',
+      'reading the same remaining quota would each spend it in full.\n' +
+      'If no sweep is running, the lock was leaked by one that was killed: through a pooler ' +
+      'the backend stays parked still holding it. Find it with\n' +
+      `  select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}\n` +
+      'and terminate that backend. Ask from a session-pooler connection — through the ' +
+      'transaction pooler the question can land on the holding backend and be granted ' +
+      're-entrantly, which reads as free when it is not.',
     )
     await lock.release()
     process.exit(1)
   }
+  heldLock = lock
 
   // Re-read UNDER the lock. The figure printed above was read before it, and closing the
   // read-then-spend race is the only reason the lock exists: a sweep that finished in that
@@ -599,6 +695,7 @@ async function main() {
       `\nREFUSING TO START: ${lockedPeriodSpent} of ${SWEEP.maxCallsPerPeriod} calls were ` +
       `spent in ${period} while this execution was starting up. Nothing left to spend.`,
     )
+    await releaseLock()
     process.exit(1)
   }
 
@@ -621,8 +718,10 @@ async function main() {
       .where(and(eq(cell.sweepRunId, runId), eq(cell.status, 'failed')))
     console.log(`${toRetry} failed cell(s) put back to pending.`)
   }
-  const alreadyDone = cells.filter((c) => c.status === 'done').length
-  if (alreadyDone > 0) console.log(`${alreadyDone} cell(s) already done, not replayed.`)
+  const alreadyFresh = cells.length - owedCells.length
+  if (alreadyFresh > 0) {
+    console.log(`${alreadyFresh} cell(s) already queried in ${period}, not replayed.`)
+  }
 
   const points = await db
     .select({
@@ -654,21 +753,29 @@ async function main() {
     withHours: new Set(),
     withoutCommune: new Set(),
     sirenePoints: points as SirenePoint[],
+    quarterFallbacks: 0,
   }
 
   console.log('\n--- Sweep running ---')
   let interruption: Error | null = null
 
+  // What THIS execution has already paid for. A run can outlive its period, and the next
+  // one owes every cell again — without this the queue would hand back cells the run has
+  // just bought, for as long as it kept going.
+  const queriedHere = new Set<string>()
+
   try {
-    // Wave after wave: the children a truncation creates are picked up on the next pass.
+    // Wave after wave: the cells a truncation adds are picked up on the next pass.
     for (;;) {
-      const batch = await db.select().from(cell)
-        .where(and(eq(cell.sweepRunId, runId), eq(cell.status, 'pending')))
-        .orderBy(cell.depth, cell.id)
+      const inPlan = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
+      const batch = inPlan
+        .filter((c) => owesCall(c, periodWindow) && !queriedHere.has(c.id))
+        .sort(byExpiry)
       if (batch.length === 0) break
 
       for (const c of batch) {
         // Sequential and never parallel: the call counter has to stay exact.
+        queriedHere.add(c.id)
         await processCell(c, state)
         if (state.cellsQueried % 25 === 0) {
           console.log(`  ${state.calls} calls, ${state.seen.size} establishments`)
@@ -690,13 +797,15 @@ async function main() {
   const unresolved = truncatedCells.length - resolved
   const irreducible = finalCells.filter((c) => c.status === 'irreducible').length
   const failed = finalCells.filter((c) => c.status === 'failed').length
-  const remaining = finalCells.filter((c) => c.status === 'pending').length
+  // What the period still owes, refresh and discovery in one figure — the plan is one queue.
+  const stillOwed = countOwed(finalCells, periodWindow)
+  const neverQueried = finalCells.filter((c) => !c.queriedAt).length
 
   const reasons: string[] = []
   if (unresolved > 0) reasons.push(`${unresolved} unresolved truncation(s)`)
   if (irreducible > 0) reasons.push(`${irreducible} irreducible cell(s)`)
   if (failed > 0) reasons.push(`${failed} failed cell(s)`)
-  if (remaining > 0) reasons.push(`${remaining} cell(s) never queried`)
+  if (stillOwed > 0) reasons.push(`${stillOwed} cell(s) still owed for ${period}`)
   if (interruption) reasons.push(`interrupted: ${interruption.message}`)
 
   // Cumulative across resumes: this is the counter we compare with the billing console.
@@ -707,7 +816,7 @@ async function main() {
   console.log('\n--- Sweep summary ---')
   console.log(`cells planned            : ${planned}`)
   console.log(`cells queried            : ${state.cellsQueried}`)
-  console.log(`CALLS SPENT              : ${state.calls}  (planned: ${toQuery})`)
+  console.log(`CALLS SPENT              : ${state.calls}  (owed at the start: ${owedCells.length})`)
   console.log(`spent this period        : ${state.periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${state.period})`)
   if (resumed) {
     console.log(`  run total              : ${previousCalls + state.calls} calls, ` +
@@ -716,8 +825,10 @@ async function main() {
   console.log(`truncations resolved     : ${resolved}`)
   console.log(`truncations UNRESOLVED   : ${unresolved}`)
   console.log(`irreducible cells        : ${irreducible}`)
+  console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no SIRENE density to replan on)`)
   console.log(`failed cells             : ${failed}`)
-  console.log(`cells never queried      : ${remaining}`)
+  console.log(`cells STILL OWED         : ${stillOwed}  (${period})`)
+  console.log(`  of them never queried  : ${neverQueried}`)
   console.log(`establishments found     : ${state.seen.size}`)
   if (resumed) console.log(`  run total              : ${runTotal}`)
   console.log(`  with opening hours     : ${state.withHours.size} (${percent(state.withHours.size, state.seen.size)})`)
@@ -747,6 +858,8 @@ async function main() {
     error: succeeded ? null : reasons.join(' ; '),
   }).where(eq(sweepRun.id, runId))
 
+  await releaseLock()
+
   if (!succeeded) {
     console.error(`\nSWEEP FAILED — ${reasons.join(' ; ')}`)
     console.error('A silently incomplete database is worse than a script in error: ' +
@@ -758,4 +871,10 @@ async function main() {
   process.exit(0)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+main().catch(async (e) => {
+  console.error(e)
+  // The lock outlives the process through a pooler, so an unexpected throw has to give it
+  // back too — otherwise one crash refuses every sweep that follows.
+  await releaseLock()
+  process.exit(1)
+})

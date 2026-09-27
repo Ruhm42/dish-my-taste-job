@@ -48,8 +48,15 @@ export const BAN_CSV = 'https://api-adresse.data.gouv.fr/search/csv/'
 
 /** Grid parameters — see D17 and technique/03-algorithme-de-balayage.md */
 export const GRID = {
-  /** SIRENE establishments targeted per cell. */
-  target: 15,
+  /**
+   * SIRENE establishments targeted per cell — the density ceiling of D30 rule 3.
+   *
+   * 12, and it is arithmetic: 12 x 1.57 = 18.8, under the 20 Google truncates at, for nine
+   * cells out of ten. At 15 the same product read 23.6 and the plan authorised the density
+   * band that truncated 55% of the time. Expected truncation rate is now that of the 10-14
+   * band, 16%.
+   */
+  target: 12,
   /**
    * Maximum radius in meters. This is the DOMINANT constraint, and it is measured:
    * beyond ~265 m Google truncates to 20 results, and at 168 m it already returns 18.
@@ -95,19 +102,26 @@ export const FREE_MONTHLY_QUOTA = 1000
 export const MAX_NEARBY_RESULTS = 20
 
 /**
- * Measured (D16): Google returns 1.16 establishments where SIRENE counts 1.
- * Shared between `plan:cells`, which PREDICTS truncation, and `sweep:google`, which
- * DETECTS it — two diverging values would forecast a cost the sweep never spends,
- * with nothing signalling the gap.
+ * Google establishments per SIRENE establishment, at the NINTH DECILE of the measured
+ * distribution — not at its mean.
  *
- * D30 has since ruled that this ceiling calibrates on the NINTH DECILE of the measured
- * ratio (1.57) rather than its mean (0.91) — a cell truncates by what it has of the
- * extreme, never by its average — and caps a cell at 12 SIRENE establishments. Changing
- * the value belongs to that implementation: lowering it toward the mean would raise the
- * bar of the sweep's second truncation signal and make the detector LESS sensitive,
- * which is the direction of a silently incomplete database.
+ * Measured on the 687 cells that did not truncate, the only ones where the Google count is
+ * a count and not a ceiling: mean 0.91, median 0.86, **ninth decile 1.57**. A cell truncates
+ * by what it has of the extreme, never by its average, and each truncation used to cost four
+ * calls — so the tail is what governs the cost (D30 rule 3).
+ *
+ * The 1.16 this replaces came from D16's forecast, and the 0.78 quoted for a while divided
+ * an INCOMPLETE harvest by a COMPLETE population: it described how far the sweep had got,
+ * not what a cell yields.
+ *
+ * Shared between `plan:cells`, which PREDICTS truncation, and `sweep:google`, which DETECTS
+ * it — two diverging values would forecast a cost the sweep never spends, with nothing
+ * signalling the gap. It also sets the bar of the sweep's SECOND truncation signal, the one
+ * that decides when the distance of the last result says nothing: raising the ratio lowers
+ * that bar from 18 SIRENE to 13 and makes the detector more sensitive, which is the safe
+ * direction. Calibrating on the mean instead would have raised it to 26.
  */
-export const GOOGLE_TO_SIRENE_RATIO = 1.16
+export const GOOGLE_TO_SIRENE_RATIO = 1.57
 
 /**
  * Sweep guard rails.
@@ -143,6 +157,39 @@ export const SWEEP = {
    */
   daysBetweenSweeps: 25,
 } as const
+
+/**
+ * Share of cells at the density ceiling that truncate anyway.
+ *
+ * Measured on the 900 calls of the first sweep, by SIRENE density band: 16% between 10 and
+ * 14 establishments, against 55% between 15 and 19 — the band the old calibration of the
+ * target authorised. It forecasts what the recovery cells will cost, which is half of the
+ * figure rule 4 arbitrates on.
+ */
+export const EXPECTED_TRUNCATION_RATE = 0.16
+
+/**
+ * Cells one truncation adds to the plan, replanned on density.
+ *
+ * Measured by replaying the 212 real truncations through `planRecovery`: 3.5 cells each,
+ * against four every time under the split it replaces, and they stay in the plan — a
+ * recovery cell owes a call every period like any other (D30 rule 1).
+ */
+export const CELLS_PER_TRUNCATION = 3.5
+
+/**
+ * Where the cost of a converged sweep stops being a matter of calibration (D30 rule 4).
+ *
+ * The number of cells a dry plan announces IS what full coverage costs every month, since
+ * every cell owes one call per quota period. Under `SWEEP.maxCallsPerPeriod` there is
+ * nothing to arbitrate. Between that and this figure, the perimeter is reduced at measured
+ * yield. Above it, "zero euro" does not hold at the current perimeter, and it reopens
+ * explicitly with its price rather than by discovering the bill.
+ */
+export const PERIMETER_REVIEW_ABOVE = 1500
+
+/** Past the free quota: `Nearby Search` Enterprise, in dollars per 1,000 calls. */
+export const PAID_PRICE_PER_1000_CALLS = 35
 
 /** Places content retention period imposed by the Google terms of service (D7). */
 export const HOURS_TTL_DAYS = 30

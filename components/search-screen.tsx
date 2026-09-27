@@ -241,19 +241,27 @@ export function SearchScreen({
               the silent subset this project refuses everywhere else. The closed ones are
               stated and stay out; the hours-less ones are stated and come back in a click.
             */}
-            {(excluded.closed > 0 || excluded.unknownHours > 0) && (
+            {(excluded.closed > 0 || excluded.unknownHours > 0 || excluded.expiredHours > 0) && (
               <p className="text-xs text-stone-400">
                 {excluded.closed > 0 && (
                   <span>{excluded.closed} fermé{excluded.closed > 1 ? 's' : ''}, écarté{excluded.closed > 1 ? 's' : ''}</span>
                 )}
-                {excluded.closed > 0 && excluded.unknownHours > 0 && ' · '}
-                {excluded.unknownHours > 0 && (
-                  <span>
-                    {excluded.unknownHours} sans horaires connus,{' '}
+                {excluded.closed > 0 && (excluded.unknownHours > 0 || excluded.expiredHours > 0) && ' · '}
+                {excluded.unknownHours > 0 && <span>{excluded.unknownHours} sans horaires connus</span>}
+                {excluded.unknownHours > 0 && excluded.expiredHours > 0 && ' · '}
+                {/* Counted apart from the ones with no hours at all: this is information we
+                    had and are no longer allowed to keep, not information Google never
+                    published. Same click brings both back. */}
+                {excluded.expiredHours > 0 && (
+                  <span>{excluded.expiredHours} aux horaires périmés</span>
+                )}
+                {(excluded.unknownHours > 0 || excluded.expiredHours > 0) && (
+                  <>
+                    {', '}
                     <button type="button" onClick={toggleUnknownHours} className="underline">
                       {unknownHoursIncluded ? 'les masquer' : 'les afficher'}
                     </button>
-                  </span>
+                  </>
                 )}
               </p>
             )}

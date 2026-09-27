@@ -22,6 +22,11 @@ export interface Point {
   lng: number
 }
 
+/** A cell's footprint: what one `Nearby Search` call covers. */
+export interface Circle extends Point {
+  radius: number
+}
+
 export interface GridOptions {
   /** Maximum number of points per cell. */
   target: number
@@ -196,4 +201,107 @@ export function planCells(points: Point[], options: GridOptions): Cell[] {
   cells.push(closeCell(current, minRadius))
 
   return cells
+}
+
+// --- Resolving a truncation -----------------------------------------------------------
+
+const RAD = Math.PI / 180
+
+/**
+ * The points inside a circle. Bounding box first, exact distance after — there is no
+ * PostGIS (D12), and the box discards most candidates for the price of four comparisons.
+ */
+export function pointsInCircle<T extends Point>(
+  points: T[], lat: number, lng: number, radius: number,
+): T[] {
+  const dLat = radius / METERS_PER_DEGREE_LAT
+  const dLng = dLat / Math.max(0.01, Math.cos(lat * RAD))
+  return points.filter(
+    (p) =>
+      Math.abs(p.lat - lat) <= dLat &&
+      Math.abs(p.lng - lng) <= dLng &&
+      distanceInMeters({ lat, lng }, p) <= radius,
+  )
+}
+
+/**
+ * Four circles covering the parent circle WITH NO GAP — the fallback, no longer the rule.
+ *
+ * We cover the square circumscribing the parent: each of its four quadrants, of side R, fits
+ * inside a circle of radius R·√2/2 centred on that quadrant. A tighter split (four circles of
+ * radius R/2) would leave four areas that are never queried — exactly the kind of defect that
+ * never shows up in the UI.
+ *
+ * What it does not reduce is the DENSITY, which is what causes a truncation: measured over
+ * 212 truncations and their 848 children, four circles of 0.72 R laid over a disc of radius R
+ * total 2.07 times its area, the dense core falls inside all four, and a cell of 17.3 SIRENE
+ * became four of 15.3 — straight back into the band that truncates 55% of the time. Four
+ * calls to remove 12% of the density; resolving a cell of 30 that way takes four levels, 256
+ * calls, a quarter of a month's quota for one cell (D30 rule 2).
+ *
+ * So it survives only for the case `planRecovery` cannot resolve: a cell the registry sees as
+ * sparse and Google does not, where reducing the radius is the one handle left.
+ */
+export function subdivide(parent: Circle, minRadius: number): Circle[] {
+  const radius = Math.max(minRadius, parent.radius * Math.SQRT1_2)
+  const half = parent.radius / 2
+  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.max(0.01, Math.cos(parent.lat * RAD))
+
+  return [
+    [-half, -half], [half, -half], [-half, half], [half, half],
+  ].map(([dx, dy]) => ({
+    lat: parent.lat + dy / METERS_PER_DEGREE_LAT,
+    lng: parent.lng + dx / metersPerDegreeLng,
+    radius,
+  }))
+}
+
+export interface Recovery {
+  cells: Circle[]
+  /** False when the density could not split the cell and the quarters took over. */
+  fromDensity: boolean
+}
+
+/**
+ * The cells that recover what a truncated cell hid, planned from the density inside it.
+ *
+ * A truncation is a density problem, so it is resolved on density: the parent's footprint is
+ * replanned from the points it contains, in as many cells as it takes for each to sit under
+ * the ceiling. A cell of 30 becomes three cells of 10, not four cells of 26. That is the
+ * principle that makes this sweep cheap at depth 0 (D6) and had stopped being applied below
+ * it — never four cells by principle (D30 rule 2).
+ *
+ * It covers the parent's POINTS rather than its AREA. The same promise the depth-0 plan
+ * makes, and no weaker: a Google place with no SIRENE point near it is already outside the
+ * plan, at every level.
+ *
+ * No child is wider than its parent, or it would query the very places that truncated it.
+ * And when the density yields a single cell — the parent again — the quarters take over,
+ * because the registry has nothing left to say about a place where Google holds more than it
+ * knows, and the radius is then the only handle.
+ *
+ * The ceiling is read on the planner's ASSIGNMENT, which is the scale the ratio was measured
+ * against: `plan:cells` writes assignments, and 12 x 1.57 = 18.8 < 20 is a statement about
+ * one. What a circle CONTAINS is a different and much larger number — mean 16.4 for an
+ * assignment of 12, up to 82 — because BAN geocodes co-located establishments onto the same
+ * coordinate and no radius separates points that share one. Requiring the contained count to
+ * sit under the ceiling is therefore unsatisfiable in central Lyon, and asking for it drove
+ * the split to 7.5 cells per truncation for nothing.
+ */
+export function planRecovery(
+  parent: Circle, points: Point[], options: { target: number; minRadius: number },
+): Recovery {
+  const inside = pointsInCircle(points, parent.lat, parent.lng, parent.radius)
+  const byDensity = planCells(inside, {
+    target: options.target,
+    maxRadius: parent.radius,
+    minRadius: Math.min(options.minRadius, parent.radius),
+  })
+  if (byDensity.length > 1) {
+    return {
+      cells: byDensity.map((c) => ({ lat: c.lat, lng: c.lng, radius: c.radius })),
+      fromDensity: true,
+    }
+  }
+  return { cells: subdivide(parent, options.minRadius), fromDensity: false }
 }
