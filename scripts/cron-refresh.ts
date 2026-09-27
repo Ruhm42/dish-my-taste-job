@@ -24,7 +24,7 @@
  * retention the terms of service impose — and fails when a CONVERGED sweep has left any
  * expired at all (spec technique/10 §2).
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { desc, eq, inArray } from 'drizzle-orm'
@@ -60,9 +60,10 @@ interface PlanState {
  *
  * Scoped to the run the sweep would pick — the most recent one with cells — and not to the
  * whole table. A recalibration leaves the previous plan's rows in place, on purpose: their
- * `queried_at` is the period's spend ledger and deleting them re-opens a ceiling already
- * paid for. Counting them here would have the cycle announce a figure the sweep does not
- * walk, which is the kind of disagreement that ends in a wrong cost forecast.
+ * `queried_at` is the spend ledger, and deleting rows queried this period either stops the
+ * sweep for the rest of it or, where the logbook cannot prove the loss, re-opens a ceiling
+ * already paid for. Counting them here would have the cycle announce a figure the sweep
+ * does not walk, which is the kind of disagreement that ends in a wrong cost forecast.
  *
  * Read whole rather than counted in SQL: coverage is recursive, it is the same rule the
  * sweep reports its own truncations with, and the table is a few thousand rows.
@@ -156,29 +157,57 @@ const STEPS: Step[] = [
   { name: 'compute:profiles', file: 'compute-profiles.ts', args: [], dryRunArgs: ['--check'], offline: true },
 ]
 
+/** The step running right now, so a stop signal can be handed on to it. */
+let current: ChildProcess | null = null
+let stoppedBy: NodeJS.Signals | null = null
+
+/**
+ * A stop signal is forwarded to the step instead of killing this process on the spot.
+ *
+ * Killing only the parent orphans the step, and when that step is the sweep it goes on
+ * spending with nobody watching, and dies later without releasing its advisory lock — which
+ * then refuses every sweep after it. The sweep's own handler records its calls and releases
+ * the lock; it only runs if the signal reaches it. The cycle then stops: the offline steps
+ * that normally survive a failure do not survive a cancel.
+ */
+function onStopSignal(signal: NodeJS.Signals): void {
+  stoppedBy ??= signal
+  if (current && current.exitCode === null && current.signalCode === null) {
+    current.kill(signal)
+  } else {
+    process.exit(1)
+  }
+}
+
 /**
  * Each step runs in its own process: that is what guarantees it applies its own guard
  * rails and its own exit code, instead of being short-circuited by a function call from
  * here. `--import tsx` rather than `npm run`: the package.json scripts carry
  * `--env-file=.env.local`, which does not exist in CI.
+ *
+ * Asynchronous rather than `spawnSync`: a parent blocked in `spawnSync` cannot run a signal
+ * handler, so it could never forward one.
  */
-function run(step: Step, args: string[]): void {
+async function run(step: Step, args: string[]): Promise<void> {
   const path = join(SCRIPTS_DIR, step.file)
   console.log(`\n=== ${step.name} ${args.join(' ')} ===\n`)
 
-  const result = spawnSync(process.execPath, ['--import', 'tsx', path, ...args], {
+  const child = spawn(process.execPath, ['--import', 'tsx', path, ...args], {
     stdio: 'inherit',
     env: process.env,
   })
-
-  if (result.error) {
-    throw new Error(`${step.name} could not start: ${result.error.message}`)
-  }
-  if (result.signal) {
-    throw new Error(`${step.name} was interrupted by signal ${result.signal}`)
-  }
-  if (result.status !== 0) {
-    throw new Error(`${step.name} failed (exit code ${result.status})`)
+  current = child
+  try {
+    const { code, signal } = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        child.once('error', (error) => reject(new Error(`${step.name} could not start: ${error.message}`)))
+        child.once('close', (code, signal) => resolve({ code, signal }))
+      },
+    )
+    if (signal) throw new Error(`${step.name} was interrupted by signal ${signal}`)
+    if (code !== 0) throw new Error(`${step.name} failed (exit code ${code})`)
+  } finally {
+    current = null
   }
 }
 
@@ -202,6 +231,9 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  process.on('SIGINT', onStopSignal)
+  process.on('SIGTERM', onStopSignal)
+
   console.log(go
     ? 'MONTHLY REFRESH — LIVE MODE, the sweep is going to spend Google quota'
     : 'MONTHLY REFRESH — DRY RUN, no call made, nothing written (add --go to spend)')
@@ -210,12 +242,14 @@ async function main(): Promise<void> {
 
   // An existing plan is WALKED, never replanned.
   //
-  // `plan:cells --write` opens a brand-new run with its own cells. Doing that on top of the
-  // plan in place would strand its pending subdivisions, re-query cells this period has
-  // already paid for, and spend a whole monthly quota without ever reaching the end — the
-  // base would stay incomplete while the bill says otherwise. And under D30 rule 1 there is
-  // nothing to replan for: one single plan is walked once per period, in the order its
-  // content expires. Recalibrating it is a deliberate act, run by hand.
+  // Under D30 rule 1 there is nothing to replan for: one single plan is walked once per
+  // period, in the order its content expires, and every period pays for every cell anyway.
+  // What `plan:cells --write` would cost is what the plan in place knows: it opens a
+  // brand-new run whose cells have never been queried, so the period walks them in plan
+  // order instead of oldest content first, strands the old plan's pending subdivisions, and
+  // pays again to rediscover the truncations the old plan had already resolved. Replanned
+  // mid-period, it also re-buys ground this period already paid for. Recalibrating is a
+  // deliberate act, run by hand, at the start of a period.
   const plan = await planState()
   const skipPlanning = plan.total > 0
 
@@ -263,8 +297,9 @@ async function main(): Promise<void> {
       continue
     }
     try {
-      run(step, stepArgs)
+      await run(step, stepArgs)
     } catch (error) {
+      if (stoppedBy) throw new Error(`stopped by ${stoppedBy} during ${step.name}: ${(error as Error).message}`)
       // The FIRST failure is the one that gets reported: a later step erroring because of it
       // would bury the cause.
       failure ??= error as Error
