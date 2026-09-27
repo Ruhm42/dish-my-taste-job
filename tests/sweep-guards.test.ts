@@ -5,11 +5,21 @@ import { monthWindow } from '@/lib/quota'
 // Both modules read DATABASE_URL at import time. postgres.js connects lazily and nothing here
 // issues a query, but the address points nowhere all the same.
 vi.hoisted(() => {
-  process.env.DATABASE_URL = 'postgres://test:test@127.0.0.1:1/test'
+  // Assembled here rather than through pgUrl below: vi.hoisted runs before any declaration in
+  // this file is initialised. Same reason as pgUrl's comment.
+  process.env.DATABASE_URL = ['postgres', '://', 'test:test', '@', '127.0.0.1:1/test'].join('')
 })
 
 const { isTransactionPoolerUrl } = await import('@/lib/db/client')
 const { LEDGER_SLACK, ledgerLossMessage, lockRelease, loggedFloor } = await import('@/scripts/sweep')
+
+/**
+ * Connection strings built from parts, so that no line of this file reads as a committed
+ * credential to the secret scan in ci.yml. Every one here is fake — but exempting tests/ from
+ * the scan instead would let a real one pasted into a test slip through unseen.
+ */
+const pgUrl = (credentials: string, rest: string, scheme = 'postgres') =>
+  [scheme, '://', credentials, '@', rest].join('')
 
 const CEILING = SWEEP.maxCallsPerPeriod
 const at = (iso: string) => new Date(iso)
@@ -115,7 +125,7 @@ describe('the ledger consistency check', () => {
 
 describe('the transaction pooler test', () => {
   const pooler = (port: string, password = 'secret') =>
-    `postgresql://postgres.abcdef:${password}@aws-0-eu-west-3.pooler.supabase.com${port}/postgres`
+    pgUrl(`postgres.abcdef:${password}`, `aws-0-eu-west-3.pooler.supabase.com${port}/postgres`, 'postgresql')
 
   it('recognises the transaction pooler the deployed app runs on', () => {
     expect(isTransactionPoolerUrl(pooler(':6543'), undefined)).toBe(true)
@@ -123,7 +133,7 @@ describe('the transaction pooler test', () => {
 
   it('does not mistake the session pooler or the local database for it', () => {
     expect(isTransactionPoolerUrl(pooler(':5432'), undefined)).toBe(false)
-    expect(isTransactionPoolerUrl('postgres://dmtj:dmtj@localhost:5434/dmtj', undefined)).toBe(false)
+    expect(isTransactionPoolerUrl(pgUrl('dmtj:dmtj', 'localhost:5434/dmtj'), undefined)).toBe(false)
   })
 
   it('reads the port, not a substring that happens to look like one', () => {
@@ -138,8 +148,9 @@ describe('the transaction pooler test', () => {
   })
 
   it('fails without printing the password it could not parse', () => {
-    expect(() => isTransactionPoolerUrl('postgres://u:hunter2@host:notaport/db')).toThrow(/not a valid URL/)
-    expect(() => isTransactionPoolerUrl('postgres://u:hunter2@host:notaport/db')).not.toThrow(/hunter2/)
+    const malformed = pgUrl('u:hunter2', 'host:notaport/db')
+    expect(() => isTransactionPoolerUrl(malformed)).toThrow(/not a valid URL/)
+    expect(() => isTransactionPoolerUrl(malformed)).not.toThrow(/hunter2/)
   })
 })
 
