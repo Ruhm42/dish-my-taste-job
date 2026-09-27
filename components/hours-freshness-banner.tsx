@@ -2,8 +2,17 @@ import type { HoursFreshness } from '@/lib/results'
 
 const fr = (n: number) => n.toLocaleString('fr-FR')
 
+// Pinned to Paris because the server renders in UTC: an instant late in a Paris evening
+// would otherwise print the previous day. `new Date()` because a raw `sql<Date>` column
+// comes back from the driver as a string, whatever the type annotation says.
 const date = (d: Date | null) =>
-  d ? new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) : null
+  d
+    ? new Date(d).toLocaleDateString('fr-FR', {
+        day: 'numeric',
+        month: 'long',
+        timeZone: 'Europe/Paris',
+      })
+    : null
 
 /**
  * Says how many records have stopped showing their hours, and since when.
@@ -26,8 +35,9 @@ const date = (d: Date | null) =>
  * and a banner that says all is well is a banner readers learn to skip.
  */
 export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness }) {
-  const { withHours, expired, oldestFetchedAt } = freshness
+  const { withHours, expired, oldestFetchedAt, nextExpiryAt } = freshness
   const since = date(oldestFetchedAt)
+  const next = date(nextExpiryAt)
 
   return (
     <details className="mt-2 inline-block rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">
@@ -53,6 +63,13 @@ export function HoursFreshnessBanner({ freshness }: { freshness: HoursFreshness 
           résultats par défaut — comme un établissement dont Google ne publie pas les
           horaires. Un clic sur <em>les afficher</em> les ramène.
         </p>
+
+        {next && (
+          <p>
+            D’autres fiches, aujourd’hui encore affichées, perdront leurs horaires à partir
+            du <strong>{next}</strong> si elles n’ont pas été relevées d’ici là.
+          </p>
+        )}
 
         <p>
           Le relevé mensuel rachète d’abord les plus anciennes, avant d’aller en chercher de
