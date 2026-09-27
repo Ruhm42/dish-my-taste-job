@@ -22,7 +22,27 @@ if (!url) throw new Error('DATABASE_URL is missing — copy .env.example to .env
  * diagnose. And `max: 1` because each serverless instance owns its pool: connections per
  * instance multiply by the number of instances.
  */
-export const isTransactionPooler = url.includes(':6543')
+const TRANSACTION_POOLER_PORT = '6543'
+
+/**
+ * Read the port the way postgres.js does — the URL's, else `PGPORT` — so the two cannot
+ * disagree about where the connection goes. A substring test on ':6543' could: it matched a
+ * password or a database name containing it, and missed a URL with no port and `PGPORT`
+ * set, which is the one that hangs the sweep.
+ *
+ * Throws without echoing the URL: it carries the database password.
+ */
+export function isTransactionPoolerUrl(databaseUrl: string, pgPort = process.env.PGPORT): boolean {
+  let port: string
+  try {
+    port = new URL(databaseUrl).port
+  } catch {
+    throw new Error('DATABASE_URL is not a valid URL (its value is not printed: it holds the password)')
+  }
+  return (port || pgPort) === TRANSACTION_POOLER_PORT
+}
+
+export const isTransactionPooler = isTransactionPoolerUrl(url)
 
 /**
  * Timeouts are not optional on serverless.

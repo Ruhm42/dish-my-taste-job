@@ -169,13 +169,21 @@ export const SWEEP = {
 export const EXPECTED_TRUNCATION_RATE = 0.16
 
 /**
- * Cells one truncation adds to the plan, replanned on density.
+ * Cells one truncation adds to the plan.
  *
- * Measured by replaying the 212 real truncations through `planRecovery`: 3.5 cells each,
- * against four every time under the split it replaces, and they stay in the plan — a
- * recovery cell owes a call every period like any other (D30 rule 1).
+ * Measured by replaying the 432 real truncations through `planRecovery`: 3.995 cells each,
+ * which rounds to four. The 3.5 once measured here came from density plans that left part of
+ * the parent's disk uncovered — 17% on average, up to 77% — and the parent queried all of it.
+ * With the whole disk required, 430 of the 432 recoveries fall back to the quarters, which
+ * cover it by construction. Recovery cells stay in the plan and owe a call every period like
+ * any other (D30 rule 1).
+ *
+ * One level only. plan:cells multiplies the expected truncations by this, so its converged
+ * figure counts the cells a truncation adds and not the truncations THOSE cells hit in turn —
+ * and quarters go back into the band that truncates. The figure is a floor, not the monthly
+ * cost; do not arbitrate D30 rule 4 on it alone.
  */
-export const CELLS_PER_TRUNCATION = 3.5
+export const CELLS_PER_TRUNCATION = 4
 
 /**
  * Where the cost of a converged sweep stops being a matter of calibration (D30 rule 4).

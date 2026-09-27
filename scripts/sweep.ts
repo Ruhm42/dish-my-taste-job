@@ -22,7 +22,7 @@
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --go --force
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-09-01T03:00:00Z
  */
-import { and, count, desc, eq, gte, inArray, isNotNull, lt, sum } from 'drizzle-orm'
+import { and, count, desc, eq, gte, inArray, isNotNull, lt } from 'drizzle-orm'
 import { db, isTransactionPooler, sql as rawSql } from '../lib/db/client'
 import { cell, restaurant, sireneEstablishment, sweepRun } from '../lib/db/schema'
 import {
@@ -58,9 +58,16 @@ type ReservedConnection = Awaited<ReturnType<typeof rawSql.reserve>>
 
 /**
  * The reserved connection holding the advisory lock, at module scope so that every way out
- * of this script can give it back — the top-level `catch` included.
+ * of this script can give it back — the top-level `catch` and the signal handlers included.
  */
 let heldLock: ReservedConnection | null = null
+let releasing: Promise<void> | null = null
+/** Whether pg_try_advisory_lock has answered, and whether it granted the lock. */
+let lockAnswered = false
+let lockGranted = false
+
+const LOCK_HOLDER_QUERY =
+  `select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}`
 
 /**
  * Hands the advisory lock back, explicitly.
@@ -78,27 +85,157 @@ let heldLock: ReservedConnection | null = null
  *    `pg_terminate_backend` on the holder.
  *
  * Called before each `process.exit` rather than from a `finally`, because `process.exit`
- * does not run one. Idempotent, so no call site has to know whether another already did it.
+ * does not run one. Every caller gets the same promise: a signal can land while the normal
+ * path is halfway through the release, and postgres.js's `release()` is not safe to call
+ * twice — it would hand the same connection to the pool twice over.
  */
-async function releaseLock(): Promise<void> {
-  const lock = heldLock
-  if (!lock) return
-  heldLock = null
+function releaseLock(): Promise<void> {
+  if (!releasing && heldLock) {
+    const lock = heldLock
+    heldLock = null
+    releasing = giveBack(lock)
+  }
+  return releasing ?? Promise.resolve()
+}
+
+/**
+ * What to do with the reserved connection on the way out, from what the try-lock has said.
+ * Exported for the tests: the lock's safety turns on these states.
+ *
+ *  - not answered yet — a signal landed while the try-lock was in flight: send the unlock. A
+ *    reserved connection runs its statements in order, so it executes after that try-lock:
+ *    it frees the lock if it was granted and is a no-op if not. Measured on a throwaway key.
+ *  - refused: skip it. Postgres answers an unlock of a lock you do not own with a "you don't
+ *    own a lock" WARNING, printed right under the refusal an operator is reading.
+ *  - granted: send it, and a false answer is news.
+ */
+export function lockRelease(answered: boolean, granted: boolean) {
+  return {
+    sendUnlock: !(answered && !granted),
+    warnIfUnlockFails: granted,
+  }
+}
+
+async function giveBack(lock: ReservedConnection): Promise<void> {
   try {
-    await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY})`
+    if (lockRelease(lockAnswered, lockGranted).sendUnlock) {
+      const [{ unlocked }] = await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY}) AS unlocked`
+      // Read again after the await: a try-lock still in flight when this began may have answered
+      // since. A refusal that lands after the unlock was sent still draws Postgres's WARNING —
+      // the price of not knowing yet, paid on the safe side.
+      if (!unlocked && lockRelease(lockAnswered, lockGranted).warnIfUnlockFails) {
+        console.error(
+          '! pg_advisory_unlock returned false: this connection did not hold the sweep lock.\n' +
+          '  If another backend still holds it, every later sweep will be refused. Check with\n' +
+          `  ${LOCK_HOLDER_QUERY}\n` +
+          '  and terminate that backend if no sweep is running.',
+        )
+      }
+    }
   } catch (error) {
     console.error(
       `! the sweep lock could not be released: ${(error as Error).message}\n` +
       '  Every later sweep will be refused until it is cleared. Find the holder with\n' +
-      `  select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}\n` +
+      `  ${LOCK_HOLDER_QUERY}\n` +
       '  and terminate that backend.',
     )
   }
-  await lock.release()
+  // The one place this connection goes back to the pool, on every path above.
+  lock.release()
 }
 
 const SWEEP_SUCCEEDED = 'succeeded'
 const SWEEP_FAILED = 'failed'
+
+/**
+ * The run this execution has opened and not yet written its summary to.
+ *
+ * `calls_made` is only written at the end of an execution, and the spend guard reads it as
+ * the one record a cleanup of the cell table cannot erase (`loggedFloor`). An execution that
+ * dies without writing it leaves that record short by everything it spent.
+ */
+let openRun: {
+  id: string
+  previousCalls: number
+  previousCellsQueried: number
+  state: State
+} | null = null
+
+async function recordInterruption(reason: string): Promise<void> {
+  const run = openRun
+  if (!run) return
+  openRun = null
+  try {
+    await db.update(sweepRun).set({
+      finishedAt: new Date(),
+      callsMade: run.previousCalls + run.state.calls,
+      cellsQueried: run.previousCellsQueried + run.state.cellsQueried,
+      status: SWEEP_FAILED,
+      error: reason,
+    }).where(eq(sweepRun.id, run.id))
+  } catch (error) {
+    console.error(
+      `! the run could not record the ${run.state.calls} call(s) this execution spent: ` +
+      `${(error as Error).message}\n` +
+      `  sweep_run.calls_made for ${run.id} is short by that much.`,
+    )
+  }
+}
+
+/**
+ * Set once a stop signal has arrived. `spendOne` reads it, so no call is booked after it:
+ * the main loop keeps running while the handler winds down, and would otherwise spend.
+ */
+let stopping = false
+
+/**
+ * Short enough to finish before a GitHub Actions cancel escalates: SIGINT, then SIGTERM
+ * 7.5 s later, then SIGKILL 2.5 s after that.
+ */
+const SHUTDOWN_GRACE_MS = 5_000
+/** How long the interrupted run's summary may take before the unlock goes anyway. */
+const RECORD_GRACE_MS = 2_500
+
+const EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } as const
+
+/**
+ * A signal skips every `finally` and every `process.exit` call site below, so without this a
+ * cancelled run leaks the lock through the pooler — which is how the one of 2026-09-04 did.
+ *
+ * Repeated signals are ignored rather than treated as "exit now": a Ctrl-C reaches the whole
+ * process group, so the sweep gets it once from the terminal and once more forwarded by
+ * cron:refresh, and bailing on the second would leak the lock this exists to release. The
+ * timer is what bounds a shutdown that hangs.
+ */
+function onStopSignal(signal: keyof typeof EXIT_CODE): void {
+  if (stopping) return
+  stopping = true
+  console.error(`\nSWEEP STOPPED BY ${signal} — recording the calls spent and releasing the lock.`)
+  setTimeout(() => {
+    console.error(
+      `! shutdown did not finish within ${SHUTDOWN_GRACE_MS / 1000} s. The lock may still be ` +
+      `held: check with\n  ${LOCK_HOLDER_QUERY}`,
+    )
+    process.exit(1)
+  }, SHUTDOWN_GRACE_MS).unref()
+
+  void (async () => {
+    try {
+      // Bounded, so the unlock always gets its share of the grace period. Recording first is
+      // deliberate — a successor that takes the lock then reads an up-to-date calls_made — but a
+      // write stuck on a slow pooler must not let the grace timer exit with the lock still held,
+      // which through Supavisor is the 4 September leak again. A failed write must not either.
+      await Promise.race([
+        recordInterruption(`interrupted by ${signal}`).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, RECORD_GRACE_MS).unref()),
+      ])
+      await releaseLock()
+      await rawSql.end({ timeout: 2 })
+    } finally {
+      process.exit(EXIT_CODE[signal])
+    }
+  })()
+}
 
 type CellRow = typeof cell.$inferSelect
 
@@ -138,10 +275,11 @@ interface State {
   withoutCommune: Set<string>
   sirenePoints: SirenePoint[]
   /**
-   * Truncations the SIRENE density could not split, resolved by quarters instead.
+   * Truncations resolved by quarters rather than by a density plan.
    *
-   * Worth counting rather than only logging: each one is a place where Google holds more
-   * than the registry knows about, which is where a hole in the coverage would hide.
+   * The normal case since recovery must cover the parent's whole disk: a density plan wins
+   * only when it covers the disk in strictly fewer cells, which on real data happens about
+   * twice in 432. A high count is expected and says nothing about a hole in coverage.
    */
   quarterFallbacks: number
 }
@@ -340,6 +478,8 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
  * else can have queried a cell in a period we have only just entered.
  */
 function spendOne(state: State, now: Date): void {
+  if (stopping) throw new Error('stop signal received: no further call is booked')
+
   const period = monthKey(now)
   if (period !== state.period) {
     state.period = period
@@ -352,7 +492,8 @@ function spendOne(state: State, now: Date): void {
       `(SWEEP.maxCallsPerPeriod, under the ${FREE_MONTHLY_QUOTA} free ones) — ` +
       `${state.periodSpent} spent in that period, ${state.calls} of them by this ` +
       'execution. Stopping before any further spending. Resume once the period rolls ' +
-      'over: the cells already queried are not replayed, and there is nothing to replan.',
+      'over: the new period owes every cell again, oldest content first, and there is ' +
+      'nothing to replan.',
     )
   }
 
@@ -445,36 +586,123 @@ async function processCell(c: CellRow, state: State): Promise<void> {
     `${Math.max(...radii)} m, ` +
     (recovery.fromDensity
       ? 'replanned on the SIRENE density inside it'
-      : 'BY QUARTERS: the registry sees no density to split here, Google does'),
+      : 'BY QUARTERS: no density plan covers the whole disk in fewer calls'),
   )
 }
 
 // --- What the quota period has already paid for -----------------------------------------
 
+export interface LoggedRun {
+  startedAt: Date | null
+  finishedAt: Date | null
+  callsMade: number
+}
+
+function periodIndex(d: Date): number {
+  const [year, month] = monthKey(d).split('-').map(Number)
+  return year * 12 + month
+}
+
 /**
- * Calls booked inside one window, all runs taken together.
+ * Calls the `sweep_run` logbook proves were made inside `w`, whatever the cell table holds.
  *
- * One queried cell is one call, and every call writes `queried_at` — the success branch
- * through `measurement`, the error branch through the `failed` update — so the count needs
- * no ledger kept in step with reality.
+ * `calls_made` is a run total, and under D30 rule 1 one run is walked period after period
+ * for as long as the plan stands — so it cannot be attributed to a window as it is. What can
+ * be: no period ever books more than `ceiling`, so whatever a run's total holds beyond
+ * `ceiling` for each OTHER period it was active in was booked in this one.
  *
- * It under-reports in four ways, all of them losing a call that WAS billed: a throw in
- * `writePlaces`, in the measurement update or in the truncation transaction never reaches
- * the write; a kill between Google's response and that write does the same; a cell
- * requeried in a later execution overwrites its earlier `queried_at`; and deleting cell
- * rows erases their calls outright.
+ * Exact while the run spent the whole ceiling in each of those periods, which is the regime
+ * D30 predicts for as long as the plan costs more than the quota. Looser by whatever they
+ * left unspent — down to nothing once enough of them have — and never above the truth, as
+ * long as every one of those periods stayed under the ceiling. One that did not is charged
+ * to this one: that errs towards refusing a call, never towards billing one.
  *
- * Hence the floor below. `sweep_run` survives a cleanup of the cell table, so the calls of
- * runs opened inside the window cannot be erased by one. A floor only: a run opened in an
- * earlier period keeps adding to `calls_made` inside this one, and that part is not
- * attributable to the window from the logbook alone.
+ * A run with no `finished_at` is running or was killed: it may have been active up to
+ * `clock`, the real time, which is what bounds it. `clock` and not the window, so a
+ * simulated past period does not credit itself with calls made after it.
  */
-async function spentIn(w: Window): Promise<number> {
+export function loggedFloor(runs: LoggedRun[], w: Window, ceiling: number, clock: Date): number {
+  const target = periodIndex(w.start)
+  let floor = 0
+  for (const r of runs) {
+    if (!r.startedAt) continue
+    const first = periodIndex(r.startedAt)
+    const last = Math.max(first, periodIndex(r.finishedAt ?? clock))
+    if (target < first || target > last) continue
+    floor += Math.max(0, r.callsMade - (last - first) * ceiling)
+  }
+  return floor
+}
+
+/**
+ * How far the cell ledger may fall short of the logbook before the sweep refuses to spend.
+ *
+ * An execution stops at its first error, so each one can widen the gap by at most one call,
+ * in either of two ways:
+ *
+ *  - the call in flight is booked but its `queried_at` never lands (a throw in `writePlaces`,
+ *    in the measurement write, or in the truncation transaction);
+ *  - the failed branch does stamp `queried_at`, but a resume in the same period flips failed
+ *    cells back to pending and queries them again, overwriting that stamp — two calls, one
+ *    stamp.
+ *
+ * Production carries exactly one — 1,800 calls logged, 1,799 cells stamped. Five covers a
+ * period in which the monthly cycle and a handful of resumes each ended one of those ways.
+ *
+ * The slack decides nothing about spending: the larger of the two readings is what the
+ * ceiling is charged with either way. It only decides whether the gap is noise or rows
+ * that went missing — and a gap beyond it is a LOWER bound on what went missing, since the
+ * logbook floor itself can read short. That is why it refuses instead of carrying on.
+ */
+export const LEDGER_SLACK = 5
+
+export interface PeriodSpend {
+  /** Cells whose `queried_at` falls in the window: the cell ledger. */
+  stamped: number
+  /** What the logbook proves, see `loggedFloor`. */
+  logged: number
+  /** What the ceiling is charged with. */
+  charged: number
+}
+
+/**
+ * Calls booked inside one window, all runs taken together — read twice, because neither
+ * record is complete on its own.
+ *
+ * The cell ledger: one call writes one `queried_at`, the success branch through
+ * `measurement` and the error branch through the `failed` update. It loses a billed call
+ * when a throw in `writePlaces`, in the measurement update or in the truncation transaction,
+ * or a kill, lands between Google's response and that write. It loses every call of a row
+ * that is deleted — the reason for the second reading. A cell requeried in a later period
+ * moves its entry out of the EARLIER period: that can under-count a period already closed,
+ * never the one being spent.
+ *
+ * The logbook survives a cleanup of the cell table, and is what a same-month `--go` after
+ * one would otherwise have spent past the free quota.
+ */
+async function spentIn(w: Window): Promise<PeriodSpend> {
   const [cells] = await db.select({ n: count() }).from(cell)
     .where(and(gte(cell.queriedAt, w.start), lt(cell.queriedAt, w.end)))
-  const [runs] = await db.select({ n: sum(sweepRun.callsMade) }).from(sweepRun)
-    .where(and(gte(sweepRun.startedAt, w.start), lt(sweepRun.startedAt, w.end)))
-  return Math.max(cells?.n ?? 0, Number(runs?.n ?? 0))
+  const runs = await db.select({
+    startedAt: sweepRun.startedAt, finishedAt: sweepRun.finishedAt, callsMade: sweepRun.callsMade,
+  }).from(sweepRun)
+  const stamped = cells?.n ?? 0
+  const logged = loggedFloor(runs, w, SWEEP.maxCallsPerPeriod, new Date())
+  return { stamped, logged, charged: Math.max(stamped, logged) }
+}
+
+export function ledgerLossMessage(spend: PeriodSpend, period: string): string | null {
+  const missing = spend.logged - spend.stamped
+  if (missing <= LEDGER_SLACK) return null
+  return (
+    `the cell ledger is missing at least ${missing} call(s) for ${period}: sweep_run proves ` +
+    `${spend.logged}, only ${spend.stamped} cell(s) carry a queried_at in the period.\n` +
+    'Cell rows queried in this period have been deleted, or a run\'s calls_made was edited. ' +
+    'The logbook is only a floor, so the real loss can be larger, and spending on top of an ' +
+    'unknown loss is how the free quota gets overrun.\n' +
+    'Restore the deleted rows, or establish from the billing console what was really spent ' +
+    `this period, before sweeping again. Allowed noise: ${LEDGER_SLACK} (LEDGER_SLACK).`
+  )
 }
 
 // --- Summary --------------------------------------------------------------------------
@@ -559,8 +787,9 @@ async function main() {
     console.error(
       `${ids.length} pending sweep plans, none of them has a row in sweep_run: ` +
       'impossible to choose. Attach the stray cells to a run, or delete ONLY the ones ' +
-      'whose queried_at is null — the queried ones are this period\'s spend ledger, and ' +
-      'deleting them re-opens a ceiling that has already been paid for.',
+      'whose queried_at is null — the queried ones are the spend ledger, and with no ' +
+      'sweep_run row to vouch for their calls, deleting those queried this period re-opens ' +
+      'a ceiling that has already been paid for.',
     )
     process.exit(1)
   }
@@ -595,8 +824,10 @@ async function main() {
   // opened. Judging the refusal on the run total deadlocked the resume: the total only
   // ever rises, so a run that reached the ceiling could never spend again (D28).
   const period = monthKey(now)
-  const periodSpent = await spentIn(periodWindow)
+  const spend = await spentIn(periodWindow)
+  const periodSpent = spend.charged
   const headroom = callsLeft(periodSpent, SWEEP.maxCallsPerPeriod)
+  const ledgerLoss = ledgerLossMessage(spend, period)
   // Still on screen because it is the logbook figure D22 was written from. It decides nothing.
   const runTotalToDate = knownRuns[0]?.callsMade ?? 0
 
@@ -608,6 +839,8 @@ async function main() {
   console.log(`  never queried         : ${toDiscover}`)
   console.log('  + the cells a truncation adds, until convergence')
   console.log(`spent this period       : ${periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${period})`)
+  console.log(`  cells stamped         : ${spend.stamped}`)
+  console.log(`  logbook floor         : ${spend.logged}  (sweep_run, survives deleted cells)`)
   console.log(`THIS RUN CAN SPEND      : ${headroom}  before the ceiling stops it`)
   console.log(`run total to date       : ${runTotalToDate}  (logbook only, no longer the refusal)`)
 
@@ -635,6 +868,7 @@ async function main() {
       `less than the ${SWEEP.daysBetweenSweeps} days required.`,
     )
   }
+  if (ledgerLoss) console.warn(`! ${ledgerLoss}`)
 
   if (!go) {
     console.log('\nDRY RUN — no call made, nothing written. Add --go to actually spend.')
@@ -655,6 +889,10 @@ async function main() {
   // Before the writes below, not after. Opening the run clears its recorded error and flips
   // its failed cells back to pending; doing that only to refuse the first call would erase
   // why the previous execution stopped.
+  if (ledgerLoss) {
+    console.error(`\nREFUSING TO START: ${ledgerLoss}`)
+    process.exit(1)
+  }
   if (headroom === 0) {
     console.error(
       `\nREFUSING TO START: ${periodSpent} of ${SWEEP.maxCallsPerPeriod} calls already spent ` +
@@ -669,7 +907,20 @@ async function main() {
   // remainder. The workflow's concurrency group guards CI against CI, and nothing guards
   // this. It is released explicitly on the way out — see `releaseLock`.
   const lock = await rawSql.reserve()
+  // Held before the lock is even asked for. Assigned in the same tick the reservation
+  // resolves, so no signal can fall between the two; from here on every way out gives the
+  // connection back, and `giveBack` explains why the unlock is safe to send regardless.
+  heldLock = lock
   const [{ acquired }] = await lock`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`
+  lockAnswered = true
+  lockGranted = acquired
+  // A signal landed while the try-lock was in flight. The handler has already sent the unlock
+  // and owns the exit; carrying on would reopen the run as 'running' and erase the previous
+  // error before the exit lands.
+  if (stopping) {
+    await releaseLock()
+    return
+  }
   if (!acquired) {
     console.error(
       '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
@@ -681,15 +932,23 @@ async function main() {
       'transaction pooler the question can land on the holding backend and be granted ' +
       're-entrantly, which reads as free when it is not.',
     )
-    await lock.release()
+    // Through releaseLock, not lock.release(): a signal may already have started giving this
+    // connection back, and releasing a postgres.js connection twice hands it to the pool twice.
+    await releaseLock()
     process.exit(1)
   }
-  heldLock = lock
 
   // Re-read UNDER the lock. The figure printed above was read before it, and closing the
   // read-then-spend race is the only reason the lock exists: a sweep that finished in that
   // interval would otherwise have its calls counted twice over.
-  const lockedPeriodSpent = await spentIn(monthWindow(now))
+  const lockedSpend = await spentIn(monthWindow(now))
+  const lockedLedgerLoss = ledgerLossMessage(lockedSpend, period)
+  if (lockedLedgerLoss) {
+    console.error(`\nREFUSING TO START: ${lockedLedgerLoss}`)
+    await releaseLock()
+    process.exit(1)
+  }
+  const lockedPeriodSpent = lockedSpend.charged
   if (callsLeft(lockedPeriodSpent, SWEEP.maxCallsPerPeriod) <= 0) {
     console.error(
       `\nREFUSING TO START: ${lockedPeriodSpent} of ${SWEEP.maxCallsPerPeriod} calls were ` +
@@ -755,6 +1014,7 @@ async function main() {
     sirenePoints: points as SirenePoint[],
     quarterFallbacks: 0,
   }
+  openRun = { id: runId, previousCalls, previousCellsQueried, state }
 
   console.log('\n--- Sweep running ---')
   let interruption: Error | null = null
@@ -784,7 +1044,7 @@ async function main() {
     }
   } catch (error) {
     // Any error stops the sweep: keeping on calling an API that answers badly is spending
-    // without collecting. The cells already done will not be replayed.
+    // without collecting. What this period already bought is not bought twice on resume.
     interruption = error as Error
     console.error(`\nSWEEP HALTED IMMEDIATELY — ${interruption.message}`)
   }
@@ -825,7 +1085,7 @@ async function main() {
   console.log(`truncations resolved     : ${resolved}`)
   console.log(`truncations UNRESOLVED   : ${unresolved}`)
   console.log(`irreducible cells        : ${irreducible}`)
-  console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no SIRENE density to replan on)`)
+  console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no density plan covered the disk in fewer calls)`)
   console.log(`failed cells             : ${failed}`)
   console.log(`cells STILL OWED         : ${stillOwed}  (${period})`)
   console.log(`  of them never queried  : ${neverQueried}`)
@@ -846,6 +1106,9 @@ async function main() {
   }
 
   const succeeded = reasons.length === 0
+  // Cleared before the write rather than after: a signal landing during it must not
+  // overwrite the summary with a bare "interrupted".
+  openRun = null
   await db.update(sweepRun).set({
     finishedAt: new Date(),
     cellsPlanned: planned,
@@ -863,7 +1126,8 @@ async function main() {
   if (!succeeded) {
     console.error(`\nSWEEP FAILED — ${reasons.join(' ; ')}`)
     console.error('A silently incomplete database is worse than a script in error: ' +
-      'resume this run (cells already done are not replayed) once the cause is handled.')
+      'resume this run once the cause is handled. Cells already queried in this period are ' +
+      'not replayed before the next one.')
     process.exit(1)
   }
 
@@ -871,10 +1135,26 @@ async function main() {
   process.exit(0)
 }
 
-main().catch(async (e) => {
-  console.error(e)
-  // The lock outlives the process through a pooler, so an unexpected throw has to give it
-  // back too — otherwise one crash refuses every sweep that follows.
-  await releaseLock()
-  process.exit(1)
-})
+// Gated on the test runner rather than on "am I the entry point": a check that misread the
+// entry point would exit 0 having done nothing, and the monthly cycle would go green on a
+// sweep that never ran. The tests import this file for its pure guards.
+//
+// Any of the script's own flags overrides the gate. VITEST is set by tooling, not by this
+// project, and cron-refresh hands its environment straight through: a stray VITEST would
+// otherwise make a live run exit 0 having spent nothing — reported as a success — and a dry
+// cycle rehearse nothing. No test passes these flags.
+const invokedAsScript = process.argv.slice(2)
+  .some((a) => a === '--go' || a === '--dry-run' || a === '--force' || a.startsWith(AS_OF))
+if (!process.env.VITEST || invokedAsScript) {
+  process.on('SIGINT', () => onStopSignal('SIGINT'))
+  process.on('SIGTERM', () => onStopSignal('SIGTERM'))
+
+  main().catch(async (e) => {
+    console.error(e)
+    await recordInterruption(`crashed: ${e instanceof Error ? e.message : e}`)
+    // The lock outlives the process through a pooler, so an unexpected throw has to give it
+    // back too — otherwise one crash refuses every sweep that follows.
+    await releaseLock()
+    process.exit(1)
+  })
+}

@@ -140,7 +140,9 @@ function printCost(cells: Cell[]) {
   row('cells in the plan', num(calls))
   row(`truncations expected (${Math.round(100 * EXPECTED_TRUNCATION_RATE)}%)`, num(truncations))
   row('cells they will add', num(converged - calls), `x${CELLS_PER_TRUNCATION} each, measured`)
-  row('CONVERGED PLAN', num(converged), 'calls per month')
+  // A floor: one level of recovery. Quarter children can truncate again, and the arbitration
+  // below reads this number — it must not pass for the monthly cost.
+  row('CONVERGED PLAN', num(converged), 'calls per month, AT LEAST (one recovery level)')
   row('ceiling per quota period', num(SWEEP.maxCallsPerPeriod))
   row('free monthly quota', num(FREE_MONTHLY_QUOTA))
 
@@ -170,6 +172,13 @@ function printCost(cells: Cell[]) {
       '  options: the guard rail has one purpose, and removing it while keeping it is not it.',
     )
   }
+  // In every band, "nothing to arbitrate" included: a floor under the ceiling can still be a
+  // cost above it. The verdict above reads a number that counts one level of recovery only.
+  console.log(
+    '\n  ! A FLOOR, NOT THE COST. The converged figure counts one level of recovery, and\n' +
+    '    quarter children can truncate again — nothing here measures how often. Measure that\n' +
+    '    rate before acting on the verdict above: it can move this into a higher band.',
+  )
   return { calls, converged }
 }
 

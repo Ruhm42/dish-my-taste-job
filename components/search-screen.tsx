@@ -21,6 +21,8 @@ interface Props {
   /** What this search left out — closed places, and hours-less ones unless asked for. */
   excluded: Excluded
   unknownHoursIncluded: boolean
+  /** A rhythm criterion is set: records without usable hours stay out whatever the toggle says. */
+  hoursRequired: boolean
 }
 
 type MobileView = 'liste' | 'carte'
@@ -65,7 +67,7 @@ function revealElement(id: string): void {
  */
 export function SearchScreen({
   initialRows, initialCursor, total, points, query, activeFilterCount,
-  excluded, unknownHoursIncluded,
+  excluded, unknownHoursIncluded, hoursRequired,
 }: Props) {
   const router = useRouter()
   const pathname = usePathname()
@@ -216,7 +218,7 @@ export function SearchScreen({
           never a reason for the page to build this one.
         */}
         <Suspense fallback={<p className="text-sm text-stone-400">Chargement des filtres…</p>}>
-          <FiltersPanel activeCount={activeFilterCount} />
+          <FiltersPanel activeCount={activeFilterCount} hoursRequired={hoursRequired} />
         </Suspense>
       </aside>
 
@@ -255,14 +257,22 @@ export function SearchScreen({
                 {excluded.expiredHours > 0 && (
                   <span>{excluded.expiredHours} aux horaires périmés</span>
                 )}
-                {(excluded.unknownHours > 0 || excluded.expiredHours > 0) && (
+                {/* Under a rhythm criterion the toggle would do nothing: these records have
+                    no hours that could back the claim, so they stay out either way. Offering
+                    "les masquer" would tell the reader they are on the page when they are not. */}
+                {(excluded.unknownHours > 0 || excluded.expiredHours > 0) && (hoursRequired ? (
+                  <span>
+                    , écarté{excluded.unknownHours + excluded.expiredHours > 1 ? 's' : ''} tant qu’un
+                    critère de rythme est actif
+                  </span>
+                ) : (
                   <>
                     {', '}
                     <button type="button" onClick={toggleUnknownHours} className="underline">
                       {unknownHoursIncluded ? 'les masquer' : 'les afficher'}
                     </button>
                   </>
-                )}
+                ))}
               </p>
             )}
           </div>

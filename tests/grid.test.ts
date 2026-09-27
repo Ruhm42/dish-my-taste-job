@@ -248,11 +248,14 @@ describe('edge cases', () => {
 // ─────────────────────────────────────────────────────────────
 // Resolving a truncation — D30 rule 2
 //
-// The four-way split bought four calls to remove 12% of the
-// density: four circles of 0.72 R over a disc of R overlap to
-// 2.07 times its area, and the dense core falls in all four.
-// A truncation is a density problem, so it is resolved on
-// density — and never on four cells by principle.
+// The parent queried its WHOLE disk and was cut off at 20, so
+// its children must cover the whole disk: a density plan laid
+// only around SIRENE clusters left 17.4% of it unqueried on the
+// real truncations, and the sweep reported nothing unresolved.
+//
+// Covered, the density plan is almost never cheaper than the
+// quarters — the saving rule 2 measured was the uncovered ground.
+// It is kept only where it covers the disk in fewer calls.
 //
 // The ceiling is read on the planner's ASSIGNMENT, the scale the
 // 1.57 ratio was measured against. What a circle CONTAINS is a
@@ -263,22 +266,130 @@ describe('edge cases', () => {
 describe('resolving a truncation', () => {
   const RECOVERY = { target: GRID.target, minRadius: GRID.minRadius }
 
+  /**
+   * Points of the parent's disk that no child covers. Sampled independently of the planner's
+   * own lattice — an odd step, plus the boundary — so the test does not share its blind spots.
+   * The centimetre of tolerance is the equirectangular approximation: the quarters touch the
+   * parent's edge at four points, and `distanceInMeters` projects each pair at its own mean
+   * latitude, which moves those contacts by a millimetre.
+   */
+  function uncovered(parent: Circle, cells: Circle[]): Point[] {
+    const missed: Point[] = []
+    const probe = (dx: number, dy: number) => {
+      const p = offset(parent, dx, dy)
+      if (!cells.some((c) => distanceInMeters(c, p) <= c.radius + 0.01)) missed.push(p)
+    }
+    const steps = 53
+    for (let i = -steps; i <= steps; i++) {
+      for (let j = -steps; j <= steps; j++) {
+        if (i * i + j * j <= steps * steps) probe((i * parent.radius) / steps, (j * parent.radius) / steps)
+      }
+    }
+    for (let k = 0; k < 720; k++) {
+      const a = (k * Math.PI) / 360
+      probe(parent.radius * Math.cos(a), parent.radius * Math.sin(a))
+    }
+    return missed
+  }
+
+  function duplicatePairs(cells: Circle[]): number {
+    let pairs = 0
+    cells.forEach((a, i) => cells.slice(0, i).forEach((b) => {
+      if (Math.abs(a.radius - b.radius) <= 1 && distanceInMeters(a, b) <= 1) pairs++
+    }))
+    return pairs
+  }
+
   /** A truncated cell: 30 establishments around a 260 m square, ~22 of them inside it. */
   const dense = cloud(30, 260, 41)
   const parent: Circle = { lat: BASE.lat, lng: BASE.lng, radius: 150 }
   const inside = pointsInCircle(dense, parent.lat, parent.lng, parent.radius)
 
-  it('resolves on the density, and not into four cells by principle', () => {
-    const { cells, fromDensity } = planRecovery(parent, dense, RECOVERY)
-    expect(fromDensity).toBe(true)
-    expect(cells.length).toBeGreaterThan(1)
-    expect(cells.length).not.toBe(4)
+  /** Tight clump of `n` establishments around one point, the way a street corner geocodes. */
+  const clump = (n: number, center: Point, seed: number) => cloud(n, 6, seed, center)
+
+  /**
+   * A parent already at the radius floor, which is where the density survives on real data:
+   * two clusters of 12 low in the disk, and nothing in its upper part.
+   */
+  const floorParent: Circle = { ...BASE, radius: GRID.minRadius }
+  const twoClusters = [
+    ...clump(12, offset(BASE, -20, -10), 51),
+    ...clump(12, offset(BASE, 20, -10), 52),
+  ]
+
+  it('covers the whole disk when every point sits in one quadrant', () => {
+    const quadrant = cloud(30, 60, 45, offset(BASE, 75, 75))
+    const { cells } = planRecovery(parent, quadrant, RECOVERY)
+    expect(uncovered(parent, cells)).toEqual([])
   })
 
-  it('costs fewer calls than the four-way split it replaces', () => {
-    // Measured over the 212 real truncations: 3.5 cells each, against four every time.
-    const { cells } = planRecovery(parent, dense, RECOVERY)
-    expect(cells.length).toBeLessThan(subdivide(parent, GRID.minRadius).length)
+  it('covers the whole disk under a stack of establishments on one coordinate', () => {
+    const stack: Point[] = Array(35).fill(offset(BASE, 30, 20))
+    const { cells } = planRecovery(parent, stack, RECOVERY)
+    expect(uncovered(parent, cells)).toEqual([])
+    expect(duplicatePairs(cells)).toBe(0)
+  })
+
+  it('covers the whole disk of a cell the registry knows nothing about', () => {
+    const { cells, fromDensity } = planRecovery(parent, [], RECOVERY)
+    expect(fromDensity).toBe(false)
+    expect(cells).toHaveLength(4)
+    expect(uncovered(parent, cells)).toEqual([])
+  })
+
+  it('covers the whole disk when it keeps the density plan, filling the ground it leaves bare', () => {
+    const { cells, fromDensity } = planRecovery(floorParent, twoClusters, RECOVERY)
+    expect(fromDensity).toBe(true)
+    // Two cells around the clusters, one over the empty top: the clusters alone leave it bare.
+    expect(cells).toHaveLength(3)
+    expect(uncovered(floorParent, cells.slice(0, 2)).length).toBeGreaterThan(0)
+    expect(uncovered(floorParent, cells)).toEqual([])
+  })
+
+  it('pays for a co-located stack once, not once per batch of the planner', () => {
+    // 36 on one coordinate: the planner returns the same circle three times.
+    const stacked = [...Array(36).fill(offset(BASE, -20, -10)), ...clump(12, offset(BASE, 20, -10), 53)]
+    const { cells, fromDensity } = planRecovery(floorParent, stacked, RECOVERY)
+    expect(fromDensity).toBe(true)
+    expect(duplicatePairs(cells)).toBe(0)
+    expect(uncovered(floorParent, cells)).toEqual([])
+  })
+
+  it('never lays down the parent again', () => {
+    // Everything on the parent's own centre, at the floor: the density plan is the parent.
+    const { cells } = planRecovery(floorParent, Array(30).fill(BASE), RECOVERY)
+    expect(cells.some((c) => distanceInMeters(c, floorParent) <= 1 && c.radius === floorParent.radius))
+      .toBe(false)
+  })
+
+  it('keeps the density plan only where it covers the disk in fewer calls than the quarters', () => {
+    const { cells } = planRecovery(floorParent, twoClusters, RECOVERY)
+    expect(cells.length).toBeLessThan(subdivide(floorParent, GRID.minRadius).length)
+  })
+
+  it('takes the quarters when covering the disk from the density would cost more', () => {
+    // Circles drawn around clusters cover a disk badly: this cell's density plan leaves
+    // ground bare, and filling it takes more calls than the four quarters.
+    const { cells, fromDensity } = planRecovery(parent, dense, RECOVERY)
+    expect(fromDensity).toBe(false)
+    expect(cells).toEqual(subdivide(parent, GRID.minRadius))
+  })
+
+  it('holds its invariants on any cloud: whole disk, no duplicate, never dearer than the quarters', () => {
+    const rnd = random(61)
+    for (let k = 0; k < 40; k++) {
+      const p: Circle = { ...offset(BASE, (rnd() - 0.5) * 400, (rnd() - 0.5) * 400), radius: 40 + rnd() * 160 }
+      const points = [
+        ...cloud(Math.floor(rnd() * 60), 2 * p.radius, 100 + k, p),
+        ...clump(Math.floor(rnd() * 40), offset(p, (rnd() - 0.5) * p.radius, (rnd() - 0.5) * p.radius), 200 + k),
+      ]
+      const { cells } = planRecovery(p, points, RECOVERY)
+      expect(uncovered(p, cells)).toEqual([])
+      expect(duplicatePairs(cells)).toBe(0)
+      expect(cells.length).toBeLessThanOrEqual(4)
+      expect(cells.every((c) => c.radius <= p.radius)).toBe(true)
+    }
   })
 
   it('splits the cell into at least as many cells as the ceiling requires', () => {
@@ -289,8 +400,10 @@ describe('resolving a truncation', () => {
 
   it('never lays down a cell wider than the one that truncated', () => {
     // A wider child would query the very places that truncated its parent.
-    const { cells } = planRecovery(parent, dense, RECOVERY)
-    expect(cells.every((c) => c.radius <= parent.radius)).toBe(true)
+    for (const [p, points] of [[parent, dense], [floorParent, twoClusters]] as const) {
+      const { cells } = planRecovery(p, points, RECOVERY)
+      expect(cells.every((c) => c.radius <= p.radius)).toBe(true)
+    }
   })
 
   it('loses no point of the cell it replans', () => {
@@ -309,16 +422,11 @@ describe('resolving a truncation', () => {
     expect(cells.every((c) => c.radius < parent.radius)).toBe(true)
   })
 
-  it('falls back on the quarters for a cell the registry knows nothing about', () => {
-    const { cells, fromDensity } = planRecovery(parent, [], RECOVERY)
-    expect(fromDensity).toBe(false)
-    expect(cells).toHaveLength(4)
-  })
-
   it('keeps the quarters covering their parent with no gap', () => {
     // The reason they survive at all: a tighter split would leave four areas never queried.
     for (const q of subdivide(parent, GRID.minRadius)) {
       expect(distanceInMeters(parent, q) + q.radius).toBeGreaterThanOrEqual(parent.radius)
     }
+    expect(uncovered(parent, subdivide(parent, GRID.minRadius))).toEqual([])
   })
 })

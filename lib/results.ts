@@ -1,7 +1,9 @@
 import { and, asc, count, desc, eq, gt, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { db } from './db/client'
 import { cell, restaurant, sireneEstablishment, sweepRun } from './db/schema'
-import { buildConditions, buildUserConditions, HOURS_USABLE, type Filters } from './filters'
+import {
+  buildConditions, buildUserConditions, EXCLUDED_BECAUSE, HOURS_EXPIRED, HOURS_USABLE, type Filters,
+} from './filters'
 
 import { PAGE_SIZE } from './config'
 export { PAGE_SIZE }
@@ -52,11 +54,16 @@ const COLUMNS = {
   maxConsecutiveDaysOff: whileUsable('maxConsecutiveDaysOff', sql`0`),
   explanation: whileUsable('explanation', sql`${EXPIRED_EXPLANATION}`),
   schedule: whileUsable('schedule', sql`NULL`),
+  // An empty week means two different things — Google never published hours, or we had
+  // them and may no longer show them — and the sheet must not say the first when it is the
+  // second. Nothing else in the projection tells them apart: both fall back to the same
+  // values, on purpose.
+  hoursExpired: sql<boolean>`${HOURS_EXPIRED}`,
 }
 
 export type ResultRow = {
-  [K in keyof typeof COLUMNS]: (typeof restaurant.$inferSelect)[K]
-}
+  [K in Exclude<keyof typeof COLUMNS, 'hoursExpired'>]: Stored[K]
+} & { hoursExpired: boolean }
 
 /** Where the previous page stopped. Null on the first page. */
 export interface Cursor {
@@ -171,7 +178,10 @@ export interface Excluded {
   closed: number
   /** Establishments still trading, whose hours Google does not publish. */
   unknownHours: number
-  /** Establishments whose hours were collected more than 30 days ago (D30 rule 6). */
+  /**
+   * Establishments whose hours are past the 30 days, or undated (D30 rule 6). Under a rhythm
+   * criterion they stay set aside even with `inconnus`: see `exclusions` in lib/filters.
+   */
   expiredHours: number
 }
 
@@ -184,17 +194,15 @@ export interface Excluded {
  * underneath says by how much and for which reason.
  */
 export async function countExcluded(filters: Filters): Promise<Excluded> {
-  const open = sql`(${restaurant.businessStatus} IS NULL OR ${restaurant.businessStatus} = 'OPERATIONAL')`
   // The two silences are counted apart because they are not the same admission: one is
   // information Google never published, the other is information we had and are no longer
-  // allowed to keep. Read against NOT the usable expression rather than a second date
-  // comparison, so a row can never fall outside both buckets and vanish from the count.
+  // allowed to keep. The buckets are the very expressions the exclusions are built from, so
+  // a row can never fall outside all of them and vanish from the count.
   const [row] = await db
     .select({
-      closed: sql<number>`count(*) FILTER (WHERE NOT ${open})::int`,
-      unknownHours: sql<number>`count(*) FILTER (WHERE ${open} AND NOT ${restaurant.hasHours})::int`,
-      expiredHours: sql<number>`
-        count(*) FILTER (WHERE ${open} AND ${restaurant.hasHours} AND NOT (${HOURS_USABLE}))::int`,
+      closed: sql<number>`count(*) FILTER (WHERE ${EXCLUDED_BECAUSE.closed})::int`,
+      unknownHours: sql<number>`count(*) FILTER (WHERE ${EXCLUDED_BECAUSE.unknownHours})::int`,
+      expiredHours: sql<number>`count(*) FILTER (WHERE ${EXCLUDED_BECAUSE.expiredHours})::int`,
     })
     .from(restaurant)
     .where(buildUserConditions(filters))
@@ -267,7 +275,7 @@ export async function fetchSweepProgress(): Promise<SweepProgress> {
 export interface HoursFreshness {
   /** Records carrying opening hours at all — the denominator expiry is measured against. */
   withHours: number
-  /** Records whose hours have passed the 30-day retention the terms of service impose. */
+  /** Records whose hours may no longer be shown: past the 30-day retention, or undated. */
   expired: number
   /** When the oldest hours still on screen were collected. Null when nothing has expired. */
   oldestFetchedAt: Date | null
@@ -288,14 +296,21 @@ export interface HoursFreshness {
  *
  * Counted against the database clock rather than the caller's: an expiry read on one clock
  * and displayed against another would be off by whatever the two disagree on.
+ *
+ * On the same expressions as the page, not on a date comparison of its own. The banner says
+ * how many records "no longer show their hours", and the only definition of that is the one
+ * the projection applies. A private predicate disagreed with it on two kinds of row: hours
+ * Google sent with no usable period, which carry an expiry date but never showed a week —
+ * counted as expired, though nothing stopped showing — and hours with no expiry date, which
+ * the page sets aside and the banner did not count.
  */
 export async function fetchHoursFreshness(): Promise<HoursFreshness> {
   const [totals] = await db
     .select({
-      withHours: sql<number>`count(*) FILTER (WHERE ${restaurant.hoursExpiresAt} IS NOT NULL)::int`,
-      expired: sql<number>`count(*) FILTER (WHERE ${restaurant.hoursExpiresAt} <= now())::int`,
-      oldestFetchedAt: sql<Date | null>`min(${restaurant.hoursFetchedAt}) FILTER (WHERE ${restaurant.hoursExpiresAt} <= now())`,
-      nextExpiryAt: sql<Date | null>`min(${restaurant.hoursExpiresAt}) FILTER (WHERE ${restaurant.hoursExpiresAt} > now())`,
+      withHours: sql<number>`count(*) FILTER (WHERE ${restaurant.hasHours})::int`,
+      expired: sql<number>`count(*) FILTER (WHERE ${HOURS_EXPIRED})::int`,
+      oldestFetchedAt: sql<Date | null>`min(${restaurant.hoursFetchedAt}) FILTER (WHERE ${HOURS_EXPIRED})`,
+      nextExpiryAt: sql<Date | null>`min(${restaurant.hoursExpiresAt}) FILTER (WHERE ${HOURS_USABLE})`,
     })
     .from(restaurant)
 
@@ -305,7 +320,7 @@ export async function fetchHoursFreshness(): Promise<HoursFreshness> {
       expired: sql<number>`count(*)::int`,
     })
     .from(restaurant)
-    .where(sql`${restaurant.hoursExpiresAt} <= now()`)
+    .where(HOURS_EXPIRED)
     .groupBy(restaurant.district)
     .orderBy(sql`count(*) DESC`)
 

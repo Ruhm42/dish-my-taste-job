@@ -77,6 +77,13 @@ yarn-error.log*
 Thumbs.db
 
 # ─────────────────────────────────────────────────────────────
+# Agent worktrees
+# Isolated worktrees an orchestration run creates inside the repository.
+# Untracked, so a broad `git add` would otherwise commit whole checkouts.
+# ─────────────────────────────────────────────────────────────
+/.claude/worktrees/
+
+# ─────────────────────────────────────────────────────────────
 # Ce qui reste versionné, volontairement
 # ─────────────────────────────────────────────────────────────
 # .specs/          — la référence du projet, jamais ignorée

@@ -12,9 +12,18 @@ const SCALE_SPAN_MIN = SCALE_END_MIN - SCALE_START_MIN
  * The week as bars. This is the centrepiece of the card: a split shift shows up as a
  * HOLE in the middle of the day, without the reader parsing a single time.
  */
-export function WeekGrid({ windows }: { windows: ServiceWindow[] }) {
+export function WeekGrid({ windows, expired }: { windows: ServiceWindow[]; expired: boolean }) {
+  // An expired week is empty because we may no longer show it, not because Google never
+  // published one: saying "no hours known" under "hours to recheck" contradicts the line
+  // just above it.
   if (!windows.length) {
-    return <p className="text-sm text-stone-500">Aucun horaire connu pour cet établissement.</p>
+    return (
+      <p className="text-sm text-stone-500">
+        {expired
+          ? 'Horaires masqués : nous n’avons pas le droit de les afficher au-delà de 30 jours.'
+          : 'Aucun horaire connu pour cet établissement.'}
+      </p>
+    )
   }
 
   return (

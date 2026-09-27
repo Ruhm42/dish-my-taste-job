@@ -67,4 +67,10 @@ jobs:
         env:
           GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: node --import tsx scripts/cron-refresh.ts --go
+        # `exec`, so that node REPLACES the step's shell. On a cancel or a timeout the runner
+        # signals that shell's pid only — SIGINT, then SIGTERM. A non-interactive bash waiting
+        # on a child forwards neither, SIGTERM then kills bash alone, and node is orphaned: the
+        # sweep's signal handlers never run and its advisory lock stays held, which is how the
+        # 4 September lock leaked. With exec, cron-refresh receives the signal and forwards it
+        # to the sweep, which records its spend and releases the lock before exiting.
+        run: exec node --import tsx scripts/cron-refresh.ts --go
