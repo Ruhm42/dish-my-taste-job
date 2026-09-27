@@ -62,6 +62,9 @@ type ReservedConnection = Awaited<ReturnType<typeof rawSql.reserve>>
  */
 let heldLock: ReservedConnection | null = null
 let releasing: Promise<void> | null = null
+/** Whether pg_try_advisory_lock has answered, and whether it granted the lock. */
+let lockAnswered = false
+let lockGranted = false
 
 const LOCK_HOLDER_QUERY =
   `select pid from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}`
@@ -97,17 +100,26 @@ function releaseLock(): Promise<void> {
 
 async function giveBack(lock: ReservedConnection): Promise<void> {
   try {
-    const [{ unlocked }] = await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY}) AS unlocked`
-    // False means this backend did not hold the lock. Either it was already gone, or — the
-    // case that matters — the statement reached another backend than the one that took it,
-    // and that one still holds it for a process that is about to exit.
-    if (!unlocked) {
-      console.error(
-        '! pg_advisory_unlock returned false: this connection did not hold the sweep lock.\n' +
-        '  If another backend still holds it, every later sweep will be refused. Check with\n' +
-        `  ${LOCK_HOLDER_QUERY}\n` +
-        '  and terminate that backend if no sweep is running.',
-      )
+    // Sent unless the lock is KNOWN not to be ours. The connection is held from its reservation
+    // on, so a signal can land while pg_try_advisory_lock is still in flight — and then nobody
+    // knows yet. A reserved connection runs its statements in order, so an unlock sent then
+    // executes after that try-lock: it frees the lock if it was granted and is a no-op if not.
+    // Measured on a throwaway key, both ways. Once the answer is a refusal, the unlock is
+    // skipped: Postgres would answer it with a "you don't own a lock" WARNING, printed right
+    // under the refusal an operator is trying to read.
+    const knownRefused = lockAnswered && !lockGranted
+    if (!knownRefused) {
+      const [{ unlocked }] = await lock`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY}) AS unlocked`
+      // False is only news when the lock WAS granted: this backend should have held it, and the
+      // statement reaching another one means that one still holds it for a process about to exit.
+      if (!unlocked && lockGranted) {
+        console.error(
+          '! pg_advisory_unlock returned false: this connection did not hold the sweep lock.\n' +
+          '  If another backend still holds it, every later sweep will be refused. Check with\n' +
+          `  ${LOCK_HOLDER_QUERY}\n` +
+          '  and terminate that backend if no sweep is running.',
+        )
+      }
     }
   } catch (error) {
     console.error(
@@ -117,6 +129,7 @@ async function giveBack(lock: ReservedConnection): Promise<void> {
       '  and terminate that backend.',
     )
   }
+  // The one place this connection goes back to the pool, on every path above.
   lock.release()
 }
 
@@ -552,7 +565,7 @@ async function processCell(c: CellRow, state: State): Promise<void> {
     `${Math.max(...radii)} m, ` +
     (recovery.fromDensity
       ? 'replanned on the SIRENE density inside it'
-      : 'BY QUARTERS: the registry sees no density to split here, Google does'),
+      : 'BY QUARTERS: no density plan covers the whole disk in fewer calls'),
   )
 }
 
@@ -603,10 +616,17 @@ export function loggedFloor(runs: LoggedRun[], w: Window, ceiling: number, clock
 /**
  * How far the cell ledger may fall short of the logbook before the sweep refuses to spend.
  *
- * An execution stops at its first error, so it can leave at most one booked call without a
- * `queried_at`: the one in flight (a throw in `writePlaces` or in the measurement write).
- * Production carries exactly that — 1,800 calls logged, 1,799 cells stamped. Five covers a
- * period in which the monthly cycle and a handful of resumes each ended that way.
+ * An execution stops at its first error, so each one can widen the gap by at most one call,
+ * in either of two ways:
+ *
+ *  - the call in flight is booked but its `queried_at` never lands (a throw in `writePlaces`,
+ *    in the measurement write, or in the truncation transaction);
+ *  - the failed branch does stamp `queried_at`, but a resume in the same period flips failed
+ *    cells back to pending and queries them again, overwriting that stamp — two calls, one
+ *    stamp.
+ *
+ * Production carries exactly one — 1,800 calls logged, 1,799 cells stamped. Five covers a
+ * period in which the monthly cycle and a handful of resumes each ended one of those ways.
  *
  * The slack decides nothing about spending: the larger of the two readings is what the
  * ceiling is charged with either way. It only decides whether the gap is noise or rows
@@ -866,7 +886,13 @@ async function main() {
   // remainder. The workflow's concurrency group guards CI against CI, and nothing guards
   // this. It is released explicitly on the way out — see `releaseLock`.
   const lock = await rawSql.reserve()
+  // Held before the lock is even asked for. Assigned in the same tick the reservation
+  // resolves, so no signal can fall between the two; from here on every way out gives the
+  // connection back, and `giveBack` explains why the unlock is safe to send regardless.
+  heldLock = lock
   const [{ acquired }] = await lock`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`
+  lockAnswered = true
+  lockGranted = acquired
   if (!acquired) {
     console.error(
       '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
@@ -878,10 +904,11 @@ async function main() {
       'transaction pooler the question can land on the holding backend and be granted ' +
       're-entrantly, which reads as free when it is not.',
     )
-    await lock.release()
+    // Through releaseLock, not lock.release(): a signal may already have started giving this
+    // connection back, and releasing a postgres.js connection twice hands it to the pool twice.
+    await releaseLock()
     process.exit(1)
   }
-  heldLock = lock
 
   // Re-read UNDER the lock. The figure printed above was read before it, and closing the
   // read-then-spend race is the only reason the lock exists: a sweep that finished in that
@@ -1030,7 +1057,7 @@ async function main() {
   console.log(`truncations resolved     : ${resolved}`)
   console.log(`truncations UNRESOLVED   : ${unresolved}`)
   console.log(`irreducible cells        : ${irreducible}`)
-  console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no SIRENE density to replan on)`)
+  console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no density plan covered the disk in fewer calls)`)
   console.log(`failed cells             : ${failed}`)
   console.log(`cells STILL OWED         : ${stillOwed}  (${period})`)
   console.log(`  of them never queried  : ${neverQueried}`)
@@ -1083,7 +1110,12 @@ async function main() {
 // Gated on the test runner rather than on "am I the entry point": a check that misread the
 // entry point would exit 0 having done nothing, and the monthly cycle would go green on a
 // sweep that never ran. The tests import this file for its pure guards.
-if (!process.env.VITEST) {
+//
+// `--go` overrides the gate. VITEST is set by tooling, not by this project, and cron-refresh
+// hands its environment straight through: a stray VITEST in a live run would otherwise make
+// the sweep exit 0 having spent nothing, and the cycle would report it as a success. No test
+// passes --go.
+if (!process.env.VITEST || process.argv.includes('--go')) {
   process.on('SIGINT', () => onStopSignal('SIGINT'))
   process.on('SIGTERM', () => onStopSignal('SIGTERM'))
 

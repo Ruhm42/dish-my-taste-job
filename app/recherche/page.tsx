@@ -2,7 +2,7 @@ import { count, like } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
-import { countActive, parseFilters } from '@/lib/filters'
+import { countActive, parseFilters, requiresUsableHours } from '@/lib/filters'
 import {
   countExcluded, countResults, fetchHoursFreshness, fetchPage, fetchPoints, fetchSweepProgress,
 } from '@/lib/results'
@@ -99,6 +99,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
         activeFilterCount={countActive(filters)}
         excluded={excluded}
         unknownHoursIncluded={filters.includeUnknownHours}
+        hoursRequired={requiresUsableHours(filters)}
       />
     </div>
   )

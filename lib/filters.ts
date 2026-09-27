@@ -187,8 +187,19 @@ function userConditions(f: Filters): SQL[] {
  */
 function exclusions(f: Filters): SQL[] {
   const out: SQL[] = [STILL_TRADING]
-  if (!f.includeUnknownHours || rhythmConditions(f).length > 0) out.push(HOURS_USABLE)
+  if (!f.includeUnknownHours || requiresUsableHours(f)) out.push(HOURS_USABLE)
   return out
+}
+
+/**
+ * Whether the search asks a question only usable hours can answer.
+ *
+ * Under a rhythm criterion, records without usable hours are set aside whatever `inconnus`
+ * says — they cannot back a rhythm claim. The page reads this to stop offering a toggle that
+ * would do nothing. One predicate for both, so the offer and the exclusion cannot drift apart.
+ */
+export function requiresUsableHours(f: Filters): boolean {
+  return rhythmConditions(f).length > 0
 }
 
 export function buildConditions(f: Filters): SQL | undefined {
