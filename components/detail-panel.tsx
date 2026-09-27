@@ -182,7 +182,7 @@ export function DetailPanel({ id, initial, onClose }: Props) {
 
               {/* The centrepiece: a split shift reads as a hole in the middle of the day,
                   without parsing a single time. */}
-              <WeekGrid windows={(row.schedule ?? []) as ServiceWindow[]} />
+              <WeekGrid windows={(row.schedule ?? []) as ServiceWindow[]} expired={row.hoursExpired} />
 
               <div className="space-y-1 border-t border-stone-100 pt-3 text-sm">
                 {row.formattedAddress && <p className="text-stone-600">{row.formattedAddress}</p>}
