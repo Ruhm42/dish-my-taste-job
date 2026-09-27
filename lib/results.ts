@@ -1,6 +1,6 @@
-import { and, asc, count, eq, gt, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { db } from './db/client'
-import { cell, restaurant, sireneEstablishment } from './db/schema'
+import { cell, restaurant, sireneEstablishment, sweepRun } from './db/schema'
 import { buildConditions, buildUserConditions, HOURS_USABLE, type Filters } from './filters'
 
 import { PAGE_SIZE } from './config'
@@ -226,11 +226,29 @@ export interface SweepProgress {
  * Google/SIRENE ratio understates it precisely where it matters — a cell truncates
  * *because* its density exceeds that ratio.
  *
- * `known` is not a finish line either: resolving a truncation creates four new cells, so
- * the denominator rises as the sweep advances. Saying "900 of 1,501" would promise a
- * fixed target that does not exist.
+ * `known` is not a finish line either: resolving a truncation adds cells to the plan, so the
+ * denominator rises as the sweep advances. Saying "900 of 1,501" would promise a fixed
+ * target that does not exist.
+ *
+ * The cell counts are scoped to the run the sweep walks — the most recent one — while
+ * `found` and `sirene` stay global, because they count what is in the database rather than
+ * what a plan owes. A recalibration opens a new run and leaves the previous plan's rows in
+ * place on purpose (their `queried_at` is the spend ledger), so counting every row would
+ * add the abandoned plan's pending cells to the banner and promise zones nobody will ever
+ * explore.
  */
 export async function fetchSweepProgress(): Promise<SweepProgress> {
+  const empty = { found: 0, queried: 0, pending: 0, truncated: 0, known: 0, sirene: 0 }
+
+  const runs = await db.selectDistinct({ runId: cell.sweepRunId }).from(cell)
+  if (runs.length === 0) return empty
+
+  const [latest] = await db.select({ id: sweepRun.id }).from(sweepRun)
+    .where(inArray(sweepRun.id, runs.map((r) => r.runId)))
+    .orderBy(desc(sweepRun.startedAt))
+    .limit(1)
+  const runId = latest?.id ?? runs[0].runId
+
   const [row] = await db
     .select({
       found: sql<number>`(SELECT count(*) FROM ${restaurant})::int`,
@@ -241,8 +259,9 @@ export async function fetchSweepProgress(): Promise<SweepProgress> {
       sirene: sql<number>`(SELECT count(*) FROM ${sireneEstablishment})::int`,
     })
     .from(cell)
+    .where(eq(cell.sweepRunId, runId))
 
-  return row ?? { found: 0, queried: 0, pending: 0, truncated: 0, known: 0, sirene: 0 }
+  return row ?? empty
 }
 
 export interface HoursFreshness {
