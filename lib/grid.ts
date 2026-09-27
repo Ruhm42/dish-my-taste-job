@@ -225,7 +225,7 @@ export function pointsInCircle<T extends Point>(
 }
 
 /**
- * Four circles covering the parent circle WITH NO GAP — the fallback, no longer the rule.
+ * Four circles covering the parent circle WITH NO GAP.
  *
  * We cover the square circumscribing the parent: each of its four quadrants, of side R, fits
  * inside a circle of radius R·√2/2 centred on that quadrant. A tighter split (four circles of
@@ -239,8 +239,8 @@ export function pointsInCircle<T extends Point>(
  * calls to remove 12% of the density; resolving a cell of 30 that way takes four levels, 256
  * calls, a quarter of a month's quota for one cell (D30 rule 2).
  *
- * So it survives only for the case `planRecovery` cannot resolve: a cell the registry sees as
- * sparse and Google does not, where reducing the radius is the one handle left.
+ * It is nonetheless what `planRecovery` returns for almost every truncation: a density plan
+ * made to cover the whole disk comes out dearer than these four — see `planRecovery`.
  */
 export function subdivide(parent: Circle, minRadius: number): Circle[] {
   const radius = Math.max(minRadius, parent.radius * Math.SQRT1_2)
@@ -258,50 +258,138 @@ export function subdivide(parent: Circle, minRadius: number): Circle[] {
 
 export interface Recovery {
   cells: Circle[]
-  /** False when the density could not split the cell and the quarters took over. */
+  /**
+   * False when the quarters took over: the density could not split the cell, or covering the
+   * whole disk from it would have cost as many calls as the quarters.
+   */
   fromDensity: boolean
 }
 
+/** Closer than this in centre and in radius, two circles are the same Google call. */
+const SAME_CIRCLE_METERS = 1
+
+function sameCircle(a: Circle, b: Circle): boolean {
+  return Math.abs(a.radius - b.radius) <= SAME_CIRCLE_METERS &&
+    distanceInMeters(a, b) <= SAME_CIRCLE_METERS
+}
+
+/** Lattice points per parent radius, for the coverage check. */
+const LATTICE_STEPS = 20
+
 /**
- * The cells that recover what a truncated cell hid, planned from the density inside it.
+ * The cells to add so that `circles` cover the whole of `parent`'s disk, each of `fillRadius`.
  *
- * A truncation is a density problem, so it is resolved on density: the parent's footprint is
- * replanned from the points it contains, in as many cells as it takes for each to sit under
- * the ceiling. A cell of 30 becomes three cells of 10, not four cells of 26. That is the
- * principle that makes this sweep cheap at depth 0 (D6) and had stopped being applied below
- * it — never four cells by principle (D30 rule 2).
+ * Checked on a square lattice, and the check is a proof rather than an estimate: every point
+ * of the disk lies within half a lattice diagonal of a lattice point, so a lattice point
+ * counts as covered only when it sits that far INSIDE a circle. What passes is covered
+ * everywhere, not only at the samples — a sliver between two of them cannot slip through.
  *
- * It covers the parent's POINTS rather than its AREA. The same promise the depth-0 plan
- * makes, and no weaker: a Google place with no SIRENE point near it is already outside the
- * plan, at every level.
+ * Gaps are filled greedily, each new cell centred on the uncovered sample from which it
+ * covers the most others. A cell always covers its own centre, so the loop ends.
+ */
+function fillGaps(parent: Circle, circles: Circle[], fillRadius: number): Circle[] {
+  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.max(0.01, Math.cos(parent.lat * RAD))
+  const step = parent.radius / LATTICE_STEPS
+  // The centimetre absorbs the gap between this flat frame and `distanceInMeters`, which
+  // projects each pair at its own mean latitude.
+  const slack = step * Math.SQRT1_2 + 0.01
+  const reach = parent.radius + step * Math.SQRT1_2
+  const n = Math.ceil(reach / step)
+
+  type Disk = { x: number; y: number; r: number }
+  const covers = (d: Disk, x: number, y: number) => Math.hypot(x - d.x, y - d.y) <= d.r - slack
+
+  const disks: Disk[] = circles.map((c) => ({
+    x: (c.lng - parent.lng) * metersPerDegreeLng,
+    y: (c.lat - parent.lat) * METERS_PER_DEGREE_LAT,
+    r: c.radius,
+  }))
+  let uncovered: { x: number; y: number }[] = []
+  for (let i = -n; i <= n; i++) {
+    for (let j = -n; j <= n; j++) {
+      const x = i * step
+      const y = j * step
+      if (Math.hypot(x, y) <= reach && !disks.some((d) => covers(d, x, y))) uncovered.push({ x, y })
+    }
+  }
+
+  const added: Circle[] = []
+  while (uncovered.length > 0) {
+    let best: Disk = { ...uncovered[0], r: fillRadius }
+    let bestCount = 0
+    for (const s of uncovered) {
+      const candidate = { ...s, r: fillRadius }
+      let count = 0
+      for (const t of uncovered) if (covers(candidate, t.x, t.y)) count++
+      if (count > bestCount) {
+        best = candidate
+        bestCount = count
+      }
+    }
+    uncovered = uncovered.filter((s) => !covers(best, s.x, s.y))
+    added.push({
+      lat: parent.lat + best.y / METERS_PER_DEGREE_LAT,
+      lng: parent.lng + best.x / metersPerDegreeLng,
+      radius: fillRadius,
+    })
+  }
+  return added
+}
+
+/**
+ * The cells that recover what a truncated cell hid: the parent's WHOLE disk, in the fewest
+ * calls. Planned from the SIRENE density inside it when that is cheaper than the quarters,
+ * and the quarters otherwise — which, measured, is almost always.
+ *
+ * The guarantee is the disk, not the points. The parent queried every square metre of it and
+ * was cut off at 20, so the places Google dropped can sit anywhere in it. A density plan lays
+ * circles around SIRENE clusters and nowhere else: replayed over the 432 real truncations, the
+ * circles it returned left 17.4% of the parent's disk out of every child on average and up to
+ * 77%, and 470 known restaurants inside a truncated parent sat in none of its children — while
+ * the sweep reported nothing unresolved. So the density plan is completed with cells over the
+ * ground it leaves bare, none wider than a quarter, until the whole disk is covered.
+ *
+ * And then it stops being cheap. Covered, the density plan costs 7.3 cells per truncation
+ * against the quarters' 4: it takes at least three circles to cover a disk when none may be
+ * wider than it nor be it, and circles drawn around clusters cover it badly. What rule 2 of D30 had measured as
+ * a saving — 3.2 cells instead of 4 on the same replay — was the uncovered ground. So the
+ * density plan is kept only when it covers the disk in FEWER cells than the quarters, which
+ * cover it by construction; on the replay that is 2 truncations out of 432, both parents
+ * already at the radius floor.
  *
  * No child is wider than its parent, or it would query the very places that truncated it.
- * And when the density yields a single cell — the parent again — the quarters take over,
- * because the registry has nothing left to say about a place where Google holds more than it
- * knows, and the radius is then the only handle.
+ * Two children that are the same circle are one call paid twice — BAN geocodes co-located
+ * establishments onto one coordinate, and the planner returns the same circle for every batch
+ * of the stack — so they are merged, and a child that is the parent again is dropped: it
+ * would only truncate again. When fewer than two distinct cells are left, the registry has
+ * nothing to say about a place where Google holds more than it knows, and the radius is the
+ * only handle left.
  *
  * The ceiling is read on the planner's ASSIGNMENT, which is the scale the ratio was measured
  * against: `plan:cells` writes assignments, and 12 x 1.57 = 18.8 < 20 is a statement about
  * one. What a circle CONTAINS is a different and much larger number — mean 16.4 for an
- * assignment of 12, up to 82 — because BAN geocodes co-located establishments onto the same
- * coordinate and no radius separates points that share one. Requiring the contained count to
- * sit under the ceiling is therefore unsatisfiable in central Lyon, and asking for it drove
- * the split to 7.5 cells per truncation for nothing.
+ * assignment of 12, up to 82 — because of those co-located stacks, and no radius separates
+ * points that share a coordinate. Requiring the contained count to sit under the ceiling is
+ * therefore unsatisfiable in central Lyon, and asking for it drove the split to 7.5 cells per
+ * truncation for nothing.
  */
 export function planRecovery(
   parent: Circle, points: Point[], options: { target: number; minRadius: number },
 ): Recovery {
+  const quarters = { cells: subdivide(parent, options.minRadius), fromDensity: false }
   const inside = pointsInCircle(points, parent.lat, parent.lng, parent.radius)
-  const byDensity = planCells(inside, {
-    target: options.target,
-    maxRadius: parent.radius,
-    minRadius: Math.min(options.minRadius, parent.radius),
-  })
-  if (byDensity.length > 1) {
-    return {
-      cells: byDensity.map((c) => ({ lat: c.lat, lng: c.lng, radius: c.radius })),
-      fromDensity: true,
-    }
+  const floor = Math.min(options.minRadius, parent.radius)
+  const planned = planCells(inside, { target: options.target, maxRadius: parent.radius, minRadius: floor })
+
+  const byDensity: Circle[] = []
+  for (const c of planned) {
+    const circle = { lat: c.lat, lng: c.lng, radius: c.radius }
+    if (sameCircle(circle, parent) || byDensity.some((kept) => sameCircle(kept, circle))) continue
+    byDensity.push(circle)
   }
-  return { cells: subdivide(parent, options.minRadius), fromDensity: false }
+  if (byDensity.length < 2 || byDensity.length >= quarters.cells.length) return quarters
+
+  const fillRadius = Math.max(floor, parent.radius * Math.SQRT1_2)
+  const cells = [...byDensity, ...fillGaps(parent, byDensity, fillRadius)]
+  return cells.length < quarters.cells.length ? { cells, fromDensity: true } : quarters
 }
