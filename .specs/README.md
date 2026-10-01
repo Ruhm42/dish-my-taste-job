@@ -25,6 +25,7 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 - [`02-recherche-carte-liste.md`](fonctionnel/02-recherche-carte-liste.md) — l'écran principal
 - [`03-pipeline-candidatures.md`](fonctionnel/03-pipeline-candidatures.md) — suivi des démarches
 - [`04-carte.md`](fonctionnel/04-carte.md) — **ce que la carte montre**, et ce qu'elle ne montre jamais
+- [`05-position-de-l-utilisateur.md`](fonctionnel/05-position-de-l-utilisateur.md) — le point bleu, et **ce qui s'affiche quand il n'y en a pas**
 
 ### Technique
 - [`00-architecture.md`](technique/00-architecture.md) — vue d'ensemble

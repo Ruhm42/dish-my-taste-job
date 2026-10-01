@@ -1,6 +1,6 @@
 # La carte
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-09-04
 
 La carte avait jusqu'ici quelques paragraphes dans
 [`02-recherche-carte-liste.md`](02-recherche-carte-liste.md). Elle prend une spec à elle,
@@ -51,6 +51,9 @@ filtre actif, c'est toute la base.
   (D29). Ceux que Google déclare fermés n'y reviennent jamais.
 - **La carte se recentre sur la zone filtrée.** Elle a désormais tous les points pour le faire
   juste ; avec un échantillon, le cadrage était faux lui aussi.
+- **La position du lecteur s'y affiche, en bleu**, s'il la demande — jamais sans. Elle
+  n'appartient à aucun verdict de coupure, ne modifie pas l'ensemble affiché, et fait l'objet
+  d'une spec à elle : [`05-position-de-l-utilisateur.md`](05-position-de-l-utilisateur.md).
 
 **Si un plafond technique devait un jour s'appliquer, il se dit à l'écran.** Une carte qui
 montre un sous-ensemble sans le dire est pire qu'une carte vide : la seconde se voit, la
@@ -177,6 +180,9 @@ Ce que ça pèse, mesuré : **688 Ko bruts, 209 Ko compressés** pour la recherc
 filtre, qui est le pire cas. Une recherche réelle est bien plus légère — 51 Ko bruts pour
 « sans coupure et week-end libre ». C'est le prix d'une carte qui ne ment pas sur ce qu'elle
 montre, et il se paie une fois par recherche, pas une fois par page.
+
+La position du lecteur ne change rien à ce calcul : elle vient de son navigateur, pas de
+Google, et ne consomme donc ni notre clé ni notre quota (D34).
 
 C'est la conséquence directe du choix d'architecture : le coût est adossé au nombre de
 balayages, jamais au nombre de visites ni à ce qu'on affiche.
