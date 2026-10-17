@@ -1,0 +1,61 @@
+# Daily purge of expired opening hours (D45).
+#
+# The Google terms limit how long Places content is KEPT, not only how long it is shown
+# (D7). The page stops showing hours the instant `hours_expires_at` passes; this job stops
+# storing them. It makes no Google call and spends no quota.
+#
+# Its own workflow rather than a step of the keepalive: D35 decoupled the keepalive's two
+# jobs after one failure stopped both. A purge that fails must not stop the database
+# wake-up, and a paused database must not pass for a purge bug.
+# See .specs/technique/09-deploiement.md and lib/purge.ts.
+
+name: Purge expired hours
+
+on:
+  schedule:
+    # Hours expire 30 days after the sweep fetched them, and the sweep starts at 09:00 UTC
+    # and has 60 minutes to finish. Running just after that window clears most of a batch
+    # within the hour it expires, instead of keeping it most of a day. Off the round hour,
+    # because schedules on a round hour queue up on GitHub's side.
+    - cron: '23 10 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Count what would be cleared, and write nothing
+        type: boolean
+        default: false
+
+concurrency:
+  group: purge
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  purge:
+    # On a fork, the secret is not this project's.
+    if: github.repository == 'Ruhm42/dish-my-taste-job'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A scheduled run has no inputs, so it writes. No `continue-on-error`: a purge that
+      # fails has left expired content stored, and that is what the alert is for.
+      - name: Clear the hours past their expiry
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MODE: ${{ inputs.dry_run && '--dry-run' || '--write' }}
+        run: node --import tsx scripts/purge-expired.ts "$MODE"

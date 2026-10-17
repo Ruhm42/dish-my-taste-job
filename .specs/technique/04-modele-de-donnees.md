@@ -52,7 +52,9 @@ réajuster les règles de déduction et de tout recalculer sans redépenser un a
 > **Jusqu'à leur échéance, et pas au-delà** ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)).
 > Une purge quotidienne efface horaires bruts, grille et colonnes de profil qui en dérivent dès
 > `hours_expires_at` passée ; `hours_fetched_at` et `hours_expires_at` restent, pour qu'une
-> fiche se compte *expirée* et non *inconnue*.
+> fiche se compte *expirée* et non *inconnue*. `has_hours` reste aussi : c'est la colonne que
+> les compteurs lisent, et `compute:profiles` comme `match:sirene` laissent une fiche purgée
+> telle que la purge l'a écrite, faute d'horaires à partir desquels recalculer.
 
 ### Profil de rythme — les colonnes qu'on filtre
 

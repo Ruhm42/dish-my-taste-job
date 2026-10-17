@@ -25,6 +25,7 @@ import { assign } from '../lib/sirene-match'
 import type { Candidate } from '../lib/sirene-match'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
+import { hoursPurged } from '../lib/purge'
 
 /** Matching radius, in meters. Beyond it, two establishments are neighbours, not the same. */
 const MAX_DISTANCE = 75
@@ -158,6 +159,7 @@ interface RestaurantRow {
   headcountCode: string | null
   category: Category
   rawOpeningHours: unknown
+  hoursFetchedAt: Date | null
 }
 
 /**
@@ -286,6 +288,7 @@ async function main(): Promise<void> {
     headcountCode: restaurant.headcountCode,
     category: restaurant.category,
     rawOpeningHours: restaurant.rawOpeningHours,
+    hoursFetchedAt: restaurant.hoursFetchedAt,
   }).from(restaurant)
 
   const registry = (await db.execute(sql`
@@ -322,7 +325,9 @@ async function main(): Promise<void> {
   const headcountsAfter = new Map(
     restaurants.map((r) => [r.id, kept.get(r.id)?.headcount_code ?? null]),
   )
-  const changed = restaurants.filter((r) => headcountsBefore.get(r.id) !== headcountsAfter.get(r.id))
+  // The headcount of a purged record is still applied; only its profile is left alone (D45).
+  const changed = restaurants.filter((r) =>
+    headcountsBefore.get(r.id) !== headcountsAfter.get(r.id) && !hoursPurged(r))
 
   if (!dryRun) await apply(kept)
 

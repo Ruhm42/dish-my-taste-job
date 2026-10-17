@@ -37,9 +37,10 @@ const OPERATIONAL = 'OPERATIONAL'
  * (D7), and D30 rule 6 makes that the displayed behaviour rather than a silent drift — the
  * record stays and stops claiming a rhythm it can no longer prove.
  *
- * Read at query time and never written by a script, because nothing writes to a row on the
- * day it expires: the clock moves, the row does not. `hours_expires_at` had been written by
- * every sweep since the first one and read by nobody.
+ * Read at query time rather than left to a script: the daily purge (D45) clears expired hours
+ * up to a day after their expiry, or not at all on a day it fails, and the page has to stop
+ * showing them on the instant. `hours_expires_at` had been written by every sweep since the
+ * first one and read by nobody.
  *
  * Hours with no expiry date count as NOT usable. `has_hours` is NOT NULL but
  * `hours_expires_at` is nullable, and a bare comparison against a NULL date is NULL, not
@@ -112,9 +113,13 @@ export function parseFilters(params: Record<string, string | string[] | undefine
  * The working-rhythm criteria — the ones that read columns inferred from the hours.
  *
  * On the STORED columns, not on what the screen shows. An expired record keeps the profile
- * computed from its last hours, so it still matches here: that is how `countExcluded` can
- * say it was set aside for expiry rather than let it fall out of the reader's criteria
- * without a trace. Keeping it off the page is the job of `exclusions`, below.
+ * computed from its last hours until the daily purge clears it, so it still matches here in
+ * between: that is how `countExcluded` can say it was set aside for expiry rather than let it
+ * fall out of the reader's criteria without a trace. Keeping it off the page is the job of
+ * `exclusions`, below.
+ *
+ * Once purged it matches no rhythm criterion: whether it had a free weekend is exactly what
+ * we may no longer keep (D45). It is still counted as expired under every other criterion.
  */
 function rhythmConditions(f: Filters): SQL[] {
   const c: SQL[] = []
@@ -177,7 +182,8 @@ function userConditions(f: Filters): SQL[] {
  *      exactly what the screen shows: fresh hours, or nothing;
  *  (b) the line under the total still says how many expired records were set aside — the
  *      criteria stay ungated in `buildUserConditions`, so an expired record still matches
- *      there and lands in `EXCLUDED_BECAUSE.expiredHours`, with or without `inconnus`;
+ *      there and lands in `EXCLUDED_BECAUSE.expiredHours`, with or without `inconnus`, until
+ *      the purge clears the columns it matched on (see `rhythmConditions`);
  *  (c) the total never drops silently — kept + closed + no hours + expired is every record
  *      matching the reader's criteria, because the buckets are disjoint and never NULL.
  *
