@@ -21,6 +21,7 @@ import type {
   Category, Confidence, GoogleOpeningHours, RhythmProfile, ServiceWindow, SplitShiftRisk,
 } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
+import { hoursPurged } from '../lib/purge'
 import { db } from '../lib/db/client'
 import { restaurant } from '../lib/db/schema'
 
@@ -254,11 +255,16 @@ async function main() {
     process.exit(1)
   }
 
+  const purged = rows.filter(hoursPurged)
+  if (purged.length > 0) {
+    console.log(`${purged.length} of them skipped: their expired hours were purged, nothing to recompute from (D45)`)
+  }
+
   // We compute EVERYTHING before writing anything: one malformed raw opening-hours payload
   // must fail the whole script, not leave the database half recomputed.
   const recomputed: Recomputed[] = []
   const failures: string[] = []
-  for (const row of rows) {
+  for (const row of rows.filter((r) => !hoursPurged(r))) {
     try {
       recomputed.push(recompute(row))
     } catch (e) {

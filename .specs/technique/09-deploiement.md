@@ -39,7 +39,7 @@ flowchart LR
 | CI puis déploiement | GitHub Actions | À chaque poussée | Poussée + manuel |
 | Base + authentification | Supabase, région Europe | En continu | — |
 | Balayage | GitHub Actions | Le 1er et le 16 du mois, 09:00 UTC ([D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16)) | Planification + manuel |
-| Purge du contenu expiré | GitHub Actions | Chaque jour, job distinct du réveil ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)) | Planification + manuel |
+| Purge du contenu expiré | GitHub Actions | Chaque jour à 10:23 UTC, job distinct du réveil ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)) | Planification + manuel |
 | Maintien en vie | GitHub Actions | Chaque jour (base), chaque lundi (commit) | Planification + manuel |
 | Ingestion SIRENE et géocodage | Poste local | Trimestriel | À la main |
 

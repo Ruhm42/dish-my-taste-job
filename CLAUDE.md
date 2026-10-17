@@ -86,6 +86,12 @@ npm run match:sirene     # link Google places to SIRENE headcount
 npm run compute:profiles # recompute rhythm profiles offline, no network
 ```
 
+Outside the cycle, every day from `.github/workflows/purge.yml`:
+
+```bash
+npm run purge:expired    # dry-run by default; --write clears hours past their expiry (D45)
+```
+
 Scripts need env vars, so they run through `node --env-file=.env.local --import tsx`.
 
 ## CI and deploying
