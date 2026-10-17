@@ -229,7 +229,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v5
         with:
-          # The schema guard diffs against the previous tip of the branch.
+          # The schema guard diffs from the commit production runs, any ancestor of this one.
           fetch-depth: 0
 
       - name: Install Node
@@ -246,20 +246,39 @@ jobs:
       # drizzle/ is not a record of production and `db:push` against production would
       # ALTER and DROP, so there is nothing to run here — only a stop.
       # Skipped on workflow_dispatch, which is how you proceed once the column exists.
+      #
+      # The diff starts from the commit production RUNS — the deployment the alias serves —
+      # never from the previous tip of main. The tip let two pushes through: one whose run
+      # was cancelled (`check` is cancel-in-progress, so a push minutes later supersedes it)
+      # never reached this step, and one this step stopped is still the tip when the next
+      # push lands, which then diffs only itself. When production's commit cannot be
+      # established, stop: a guard that skips itself when unsure is the hole it closes.
+      #
+      # `inspect --json` names the deployment but carries no commit; `ls --json` carries the
+      # commit (`-m commit=` below) but no deployment id, so the two meet on the URL.
       - name: Refuse to ship a schema change
         if: github.event_name == 'push'
-        env:
-          BEFORE: ${{ github.event.before }}
         run: |
-          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            echo "previous tip $BEFORE is unavailable (new branch or force-push) — guard skipped"
-            exit 0
-          fi
-          if git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -q '^lib/db/schema\.ts$'; then
-            echo "::error::lib/db/schema.ts changed. Apply the column or enum to the production database by hand FIRST, then re-run this workflow from the Actions tab (workflow_dispatch skips this guard). Never point db:push at production."
+          live=$(npx --yes "$VERCEL_CLI" inspect "$ALIAS" --json \
+            | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).url ?? "")')
+          prod=$(npx --yes "$VERCEL_CLI" ls --environment production --limit 100 --json \
+            | LIVE="$live" node -e '
+                const row = JSON.parse(require("fs").readFileSync(0)).deployments
+                  .find(r => r.url === process.env.LIVE)
+                process.stdout.write(row?.meta?.githubCommitSha || row?.meta?.commit || "")')
+          if [ -z "$prod" ]; then
+            echo "::error::cannot tell which commit production runs ($ALIAS -> ${live:-nothing}, no commit in its metadata). Check by hand that lib/db/schema.ts is not ahead of the production database, then re-run this workflow from the Actions tab."
             exit 1
           fi
-          echo "schema untouched"
+          if ! git merge-base --is-ancestor "$prod" "$GITHUB_SHA" 2>/dev/null; then
+            echo "::error::production runs $prod, which is not in the history of $GITHUB_SHA — it was deployed from outside main. Check by hand that lib/db/schema.ts is not ahead of the production database, then re-run this workflow from the Actions tab."
+            exit 1
+          fi
+          if git diff --name-only "$prod" "$GITHUB_SHA" | grep -q '^lib/db/schema\.ts$'; then
+            echo "::error::lib/db/schema.ts changed since $prod, the commit production runs. Apply the column or enum to the production database by hand FIRST, then re-run this workflow from the Actions tab (workflow_dispatch skips this guard). Never point db:push at production."
+            exit 1
+          fi
+          echo "schema untouched since $prod, the commit production runs"
 
       - name: Link the project, and prove it is the right one
         run: |

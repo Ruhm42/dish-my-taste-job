@@ -67,8 +67,9 @@ it. `rm -rf .next` first if the 500s persist.
 migration predates the `cuisine` column production already has — and `db:push` pointed at
 production will ALTER and DROP.
 
-The workflow enforces this too: the `production` job refuses a push whose diff touches that
-file. Applying the column by hand and then re-running is section 5.
+The workflow enforces this too: the `production` job refuses a push when that file changed
+anywhere between the commit production runs and the pushed one. Applying the column by hand and
+then re-running is section 5.
 
 ### Running the checks locally is optional now
 
@@ -118,11 +119,11 @@ production inside `b275b28`'s run. Three consequences:
 - **Never press *Re-run* on a cancelled or older `main` run.** A re-run keeps the original
   event's `GITHUB_SHA`, so its `production` job would deploy that older commit over the newer one
   already live. To redeploy, use *Run workflow* (section 5), which takes the branch tip.
-- **The schema guard did not see those commits.** It diffs the pushed commit against the previous
-  tip of `main`, not against what production runs. A `lib/db/schema.ts` change reaches
-  production unstopped when its own run was cancelled, or when its run failed on the guard and
-  someone pushes on top before the column exists. When the range you are shipping touches that
-  file, section 1 still applies: check by hand that the column exists in production first.
+- **The schema guard still sees those commits.** It diffs from the commit production runs — the
+  deployment the alias serves — not from the previous tip of `main`. It used to diff from the
+  tip, and that let a `lib/db/schema.ts` change through whenever its own run was cancelled, or
+  its run failed on the guard and someone pushed on top before the column existed. If the guard
+  cannot say which commit production runs, it stops the deploy rather than guess.
 
 ---
 
@@ -344,7 +345,10 @@ A `workflow_dispatch` on `main` runs `check` and then `production`, exactly like
 **Ship a schema change**, once the column or enum exists in production:
 
 1. Apply it to the production database by hand. Never `db:push`.
-2. Push the code. The `production` job fails on the schema guard — expected.
+2. Push the code. The `production` job fails on the schema guard — expected. **So does every
+   push on top of it, by anyone, until step 3**: production has not moved, so their range still
+   holds the schema change. Expect other sessions' deploys to go red in between, and tell them
+   why.
 3. Re-run via *Run workflow* on `main`. The guard is skipped on `workflow_dispatch`, because
    dispatching it is the deliberate statement that step 1 happened.
 
