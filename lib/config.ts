@@ -39,10 +39,15 @@ export const NAF_CODES = [
   '56.30Z', // drinking places
 ] as const
 
-/** SIRENE stock file, downloadable without an account or a key (D13). */
-export const SIRENE_PARQUET =
-  'https://static.data.gouv.fr/resources/base-sirene-des-entreprises-et-de-leurs-etablissements' +
-  '-siren-siret/20260801-074451/stock-stocketablissement-parquet.parquet'
+/**
+ * SIRENE stock file, downloadable without an account or a key (D13).
+ *
+ * The data.gouv permalink of the resource, not the file: the file URL carries its upload
+ * date, and data.gouv keeps only the latest month — the August 2026 URL pinned here
+ * returned 404 by October. The resource is updated in place each month, so its permalink
+ * redirects to whichever stock is current.
+ */
+export const SIRENE_PARQUET = 'https://www.data.gouv.fr/api/1/datasets/r/a29c1297-1f92-4e2a-8f6b-8c902ce96c5f'
 
 export const BAN_CSV = 'https://api-adresse.data.gouv.fr/search/csv/'
 

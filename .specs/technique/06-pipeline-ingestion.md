@@ -35,6 +35,10 @@ ni clé) et le filtre sur place :
 
 Sortie : ~4 000 établissements avec adresse, code d'activité et tranche d'effectifs.
 
+Le fichier se lit par le **permalien data.gouv de la ressource**, jamais par l'URL datée du
+fichier : data.gouv ne garde que le stock du dernier mois, et l'URL d'août 2026 renvoyait 404
+dès octobre. Le script résout le permalien au départ et affiche le stock effectivement lu.
+
 ## 2. `ingest:geocode`
 
 Envoie les adresses SIRENE à la Base Adresse Nationale au format CSV, en lots. Gratuit, sans
