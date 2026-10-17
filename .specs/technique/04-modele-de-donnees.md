@@ -150,6 +150,19 @@ seconde source de vérité à tenir synchronisée, pour aucun gain (D14). Voir
 Cette table est le journal de bord du seul poste coûteux du projet. Sans elle, une dérive de
 consommation ou une base incomplète passeraient inaperçues.
 
+> **Annoté le 17 octobre 2026.** Ce n'est pas un journal par passe : `sweep_run` porte **une
+> ligne par plan**, réécrite à chaque exécution.
+> - `calls_made` cumule tout le plan.
+> - `status`, `error` et `finished_at` sont ceux de la dernière exécution.
+> - Un refus de démarrer n'y laisse rien.
+> - `truncated_unresolved` n'a plus à valoir zéro : c'est un arriéré, rapporté (D39).
+> - `status` vaut `running` pendant une exécution, puis `capped`, `succeeded` ou `failed`.
+>
+> Depuis D38, le plancher que le balayage tire de cette ligne ne prouve plus la dépense de la
+> période. Un journal par passe est proposé
+> ([`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 5 ;
+> [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C1).
+
 ---
 
 ## Colonnes à ajouter — décidées le 17 octobre 2026
@@ -175,6 +188,16 @@ anglais.
 > migration. Mais le commentaire du schéma qui énumère ses valeurs déclenche le garde-fou de D32
 > quand on le modifie — à pousser par un déclenchement manuel, en sachant qu'aucune colonne ne
 > change.
+
+> **Proposé le 17 octobre 2026, non décidé.** Deux ajouts possibles à la même migration :
+> - une table de journal par passe ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C1, à
+>   construire avant le 16 novembre) ;
+> - une marque de radiation sur `sirene_establishment` (C4).
+>
+> Et deux contraintes pour l'axe 0 :
+> - une purge de l'identité par suppression emporterait les candidatures, que la clé étrangère
+>   supprime en cascade ;
+> - par mise à jour, elle demande de rendre nullables `name`, `lat` et `lng`.
 
 ---
 

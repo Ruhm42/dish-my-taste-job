@@ -40,6 +40,13 @@ Lu en production.
 | Rendement de la découverte | ~0,13 lieu nouveau par appel |
 | Retard de GitHub sur la planification du 1er | jusqu'à 7 h |
 
+> **Annoté le 17 octobre 2026, au soir.** Le retard de GitHub est allé jusqu'à **7 h 52**,
+> mesuré sur le réveil le 12 octobre ; la valeur retenue passe à 8 h
+> ([D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour)). Et le code
+> construit (commit `05058b4`) calcule, en passe à sec au 1er novembre, une couverture de **622**
+> cellules en robuste et **560** en fiches connues. Ce sont les chiffres du jour ; les tables
+> ci-dessous gardent ceux de la décision.
+
 Le correctif minimal du 17 octobre trie les cellules dues par profondeur, la profondeur 0
 d'abord. À sec au 1er novembre, ses 900 appels vont aux 653 cellules de profondeur 0 et à 247 de
 profondeur 1, la forme du passage d'octobre. C'est le pont jusqu'à cette spec, pas son
@@ -174,6 +181,15 @@ La première simulation du propriétaire (600 + 300, 86,6 %) n'est pas reproduit
 couverture. Le plafond se recalcule sur la règle de couverture du § 2, plus petite que celle de
 la simulation, et la simulation qui le fixe est consignée.
 
+> **Consignée le 17 octobre 2026, sur la couverture du § 2 telle que construite.**
+> `simulate:passes --from=2026-11-01T09:00:00Z`, graines 1 à 10, sur une copie du jour :
+> - pire heure **91,5 %** à 450, quelle que soit la graine ;
+> - `lowest forecast` 91,5 % ;
+> - au plus 900 appels par période et 450 avant le 16.
+>
+> Relevé à 600, ou à 622 tous les mois : 85,5 % et 83,2 % (graine 1). Le plafond de 450 est
+> confirmé. Voir [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 2.
+
 ### L'ordre de chaque passage
 
 Sous deux passages, **tout le contenu est dû à chaque passage** : ce que le 1er a rafraîchi
@@ -273,6 +289,9 @@ Tout se vérifie à sec, sur une copie locale de la production (`db:pull`), sans
 
 1. Le cycle à sec annonce la couverture du jour selon la règle du § 2 : de l'ordre de **530**
    cellules pour les fiches à horaires valides, **~710** en robuste — ou explique l'écart.
+   *Annoté le 17 octobre 2026 : le code annonce 560 et 622. L'écart avec les relevés de la
+   décision est consigné, pas expliqué ; il ne change pas la conclusion, la couverture tient
+   sous 900.*
 2. Chaque cellule choisie a une portée, et une cellule tronquée n'y compte que jusqu'à son
    20e résultat.
 3. Chaque fiche à horaires est dans la portée d'une cellule de la couverture, à un millimètre
@@ -291,6 +310,10 @@ Tout se vérifie à sec, sur une copie locale de la production (`db:pull`), sans
    une cellule irréductible le font sortir `failed`, chacun avec sa raison. Une prévision sous
    80 % aussi — et elle est rapportée même quand une autre étape a déjà échoué.
 9. Le passage du 16 n'est pas refusé par le passage du 1er, qu'il soit `capped` ou `succeeded`.
+   *Annoté le 17 octobre 2026 : vrai pour sa première exécution. Mais toute relance après lui
+   dans la période — reprise d'une interruption comprise — est refusée par le contrôle de
+   cohérence des dépenses, que les rachats du 16 font mentir. Voir
+   [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 4.*
 10. Sous GitHub Actions, un cycle réel laisse une annotation *notice* ; hors d'Actions, aucune.
 
 Et le critère qu'on ne verra qu'en vrai : **le 31 décembre 2026 à 20:00 UTC, plus de 80 % des

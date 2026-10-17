@@ -143,6 +143,11 @@ transforme d'un coup 3 466 fiches en « Horaires inconnus » : le produit s'éte
 vieillir. On ne prend pas cette décision ici — voir ci-dessous pourquoi elle n'est pas
 séparable de l'arbitrage de coût.
 
+> **Annoté le 17 octobre 2026.** La purge est décidée et construite : chaque jour, sur les seules
+> fiches échues ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)).
+> Le cycle à deux passes rachète avant l'échéance l'essentiel de ce qu'elle viderait (D38). La
+> fiche échue reste comptée *expirée*, et non *inconnue*.
+
 ---
 
 ## 3. Ce que ces deux règles ne résolvent pas
@@ -177,6 +182,12 @@ nombre de cellules qu'elle annonce est le nombre d'appels que la reprise dépens
 Deux constantes à corriger au passage, parce qu'elles faussent précisément cette prévision :
 le ratio Google/SIRENE vaut **1,16** en configuration pour **0,78** mesuré, et le commentaire
 du rayon maximal cite toujours le calibrage sur 8 cellules que D22 a invalidé.
+
+> **Annoté le 17 octobre 2026.** Le 0,78 divisait une récolte incomplète par une population
+> complète. Le ratio retenu par D30 est **0,91 en moyenne et 1,57 au 9ᵉ décile**, mesuré sur les
+> cellules non tronquées ; c'est le décile qui dimensionne. L'arbitrage de ce paragraphe a été
+> rendu par D30, puis D36 à D38. Le cycle consolidé est dans
+> [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md).
 
 ---
 

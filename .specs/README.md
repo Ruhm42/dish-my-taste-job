@@ -41,6 +41,7 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 - [`11-convergence-du-balayage.md`](technique/11-convergence-du-balayage.md) — **pourquoi il ne converge pas**, et ce qui prime quand le quota ne suffit pas
 - [`12-justesse-du-verdict.md`](technique/12-justesse-du-verdict.md) — ce que la mesure dit des règles de repli, et où est l'effectif manquant
 - [`13-rafraichissement-par-couverture.md`](technique/13-rafraichissement-par-couverture.md) — **ce qu'on rafraîchit, quand, et ce qui fait échouer le cycle**
+- [`14-cycle-d-import-mensuel.md`](technique/14-cycle-d-import-mensuel.md) — **le cycle d'import de bout en bout** : pièces, calendrier, garde-fou de dépense, quoi faire quand il échoue
 
 ## Conventions d'écriture
 

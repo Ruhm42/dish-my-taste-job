@@ -1,6 +1,6 @@
 # Stack et vérification
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 ---
 
@@ -58,6 +58,18 @@ Les trois cas en gras sont ceux qui cassent silencieusement. Ils passent d'abord
 - Répartition des risques de coupure et des niveaux de fiabilité
 - Part d'effectifs `NN` : mesure directe de la solidité de l'inférence
 
+> **Annoté le 17 octobre 2026.** « Cellules tronquées non résolues = 0 » ne tient plus : c'est
+> un arriéré de découverte, rapporté et jamais bloquant (D39).
+>
+> Et ce que les tests ne couvrent pas :
+> - aucune passe ni aucun cycle joué de bout en bout — PGlite sert déjà à `purge` et
+>   `name-match`, et deux passes avec rachats auraient montré le défaut de comptage de
+>   [`14`](14-cycle-d-import-mensuel.md) § 4 ;
+> - rien ne fige le masque de champs ;
+> - rien ne vérifie l'accord entre le cron et `CYCLE`.
+>
+> Voir [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C10.
+
 ---
 
 ## Vérification terrain
@@ -91,7 +103,8 @@ signal d'alarme.
 
 Après chaque balayage, en console de facturation :
 
-- Consommation Nearby Search Enterprise ≈ 400
+- Consommation Nearby Search Enterprise ≈ 400 — *≈ le nombre d'appels des passes du mois, au
+  plus 900 (annoté le 17 octobre 2026)*
 - **Aucune consommation sur le palier Atmosphere** — le moindre appel y signale un field mask
   élargi par mégarde
 - Chargements de carte cohérents avec le nombre de visites, et non avec le nombre de clics

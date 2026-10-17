@@ -1,6 +1,6 @@
 # Sources de données
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Trois sources, chacune avec un rôle précis et non substituable.
 
@@ -113,6 +113,19 @@ limite de 30 requêtes par minute. Le fichier stock évite tout cela (D13).
 
 **Coût** : gratuit, données ouvertes, redistribuables.
 
+> **Annoté le 17 octobre 2026.** Le stock est publié chaque mois, le 1er.
+>
+> Celui du 1er octobre, comparé à la table ingérée le 28 août :
+> - 120 lignes radiées depuis ;
+> - 116 établissements actifs absents ;
+> - 1 259 tranches d'effectif changées.
+>
+> L'activité est codée en NAF rév. 2. Elle passe à la **NAF 2025** à partir de début janvier
+> 2027, et le filtre par code d'activité ci-dessus ne ramènera plus rien sur un stock recodé. Le
+> stock actuel donne déjà le futur code de chaque établissement.
+>
+> Voir [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 10.
+
 ---
 
 ## Base Adresse Nationale — le géocodage
@@ -133,6 +146,13 @@ payant sans aucun gain.
 et fraîcheur incertaine. **Conservé explicitement comme plan B** : son format `opening_hours`
 est normalisé, bien outillé, et sa licence permet la redistribution. Si les conditions Google
 deviennent intenables, c'est là qu'on se replie — d'où l'isolation de la couche source.
+
+> **Mesuré le 17 octobre 2026**, par un comptage Overpass. Lyon et Villeurbanne comptent 3 347
+> lieux `amenity` de restauration et de boisson (restaurant, fast_food, cafe, bar, pub), dont
+> **2 148 avec `opening_hours`, soit 64 %**. Les fiches Google en ont 80 %.
+>
+> Le comptage ne dit rien de la fraîcheur des horaires OSM. C'est l'option 3 de l'axe 0
+> ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md)).
 
 **Google Geocoding, Google Place Details, Google Text Search** — payants et sans bénéfice par
 rapport aux choix ci-dessus.

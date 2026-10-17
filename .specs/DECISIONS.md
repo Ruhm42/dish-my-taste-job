@@ -166,6 +166,10 @@ obtenue par construction**, pas par vigilance. Le sweep est calé au 1er du mois
 > 30 heures — voir [D38](#d38--deux-passages-par-mois-le-1er-et-le-16). Et les conditions ne
 > limitent pas « le contenu Places » à 30 jours : elles n'autorisent ce délai que pour la
 > latitude et la longitude — voir [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), axe 0, ouvert.
+>
+> **Annoté le 17 octobre 2026.** Le cycle qui met en œuvre cette entrée est consolidé dans
+> [`technique/14`](technique/14-cycle-d-import-mensuel.md). Ce qui y dépend de la rétention est
+> isolé et rendu conditionnel à l'axe 0.
 
 ---
 
@@ -296,6 +300,19 @@ commune.
 débit à gérer. Le format Parquet permet de filtrer sans décompression préalable. En
 contrepartie, la donnée est mensuelle et non temps réel — sans importance ici : le registre
 des entreprises évolue lentement, une réextraction trimestrielle suffit.
+
+> **Annoté le 17 octobre 2026.** La réextraction n'a jamais été rejouée depuis le 28 août, et
+> [D41](#d41--nn-veut-dire--sans-salarié-déclaré--pas--effectif-inconnu-) la rend due.
+>
+> Le stock du 1er octobre, comparé à la table :
+> - 120 lignes radiées depuis, dont 10 appariées à une fiche ;
+> - 116 établissements actifs absents ;
+> - 1 259 tranches d'effectif changées.
+>
+> Le registre bouge donc plus que « lentement » ne le laissait entendre. Le passage à la NAF
+> 2025, attendu vers janvier 2027, videra le filtre par code d'activité. Le rythme est à rouvrir :
+> [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), C4, et
+> [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 10.
 
 ---
 
@@ -445,6 +462,12 @@ constitue l'« upload » du résultat.
 Google : elle lit une table. La donnée ne dépasse jamais 30 jours puisqu'elle est remplacée
 mensuellement. En contrepartie, la clé Places doit vivre dans les secrets du dépôt — ce qui
 reste préférable à un balayage manuel qu'on oublie de lancer.
+
+> **Annoté le 17 octobre 2026.** Le contenu n'est plus « remplacé chaque mois » en bloc. Deux
+> passes par mois rachètent une couverture ([D36](#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt),
+> [D38](#d38--deux-passages-par-mois-le-1er-et-le-16)). Une fiche que plus aucune passe ne renvoie
+> reste en base, faute de D45 r2-3. Et la prémisse — « la donnée ne dépasse jamais 30 jours » —
+> dépend de l'axe 0. Voir [`technique/14`](technique/14-cycle-d-import-mensuel.md).
 
 ---
 
@@ -929,6 +952,24 @@ période : il reste de l'ordre de 1 200 appels à dépenser pour 1 000 gratuits 
 question du périmètre, du dépassement assumé et du sort des horaires périmés au-delà de 30
 jours reste entière — et c'est un seul arbitrage, pas trois. Il ouvrira sa propre entrée.
 
+> **Annoté le 17 octobre 2026.** Deux compléments.
+>
+> « Le mois calendaire » est celui du **Pacifique**. Le choix a été fait et construit le 29 août,
+> sans entrée à ce journal : c'est
+> [D47](#d47--la-période-du-quota-est-le-mois-du-pacifique).
+>
+> Et depuis [D38](#d38--deux-passages-par-mois-le-1er-et-le-16), le refus ne se prononce plus sur
+> la dépense réelle. La passe du 16 rachète des cellules que celle du 1er a déjà achetées dans la
+> même période, et chaque cellule ne garde qu'un tampon. Mesuré sur une copie : 234 rachats en
+> novembre.
+>
+> Après le 16, tout lancement est refusé, reprise comprise. Une période restée sous 900 relâche
+> pour toujours le plancher tiré de `sweep_run`, et un `--go` manuel peut alors dépasser 1 000
+> appels réels.
+>
+> L'invariant à rétablir est au propriétaire : [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), C1,
+> et [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4.
+
 ---
 
 ## D29 — Fermés jamais listés, horaires inconnus écartés par défaut
@@ -1146,6 +1187,9 @@ Le détail vit dans [`technique/12-justesse-du-verdict.md`](technique/12-justess
 > au moins 29 % d'erreurs. Le numéro de rue devient un critère de corroboration, jamais
 > suffisant seul — voir [D40](#d40--le-numéro-de-rue-corrobore-il-ne-suffit-jamais). Les règles
 > 2 et 3 tiennent, et ne sont pas construites non plus.
+>
+> **Annoté le 17 octobre 2026, plus tard.** Les règles 2 et 3 sont construites : PR #14, mergée le
+> 17 octobre à 10:32 UTC. La règle 1, sous sa forme de D40, ne l'est pas.
 
 ---
 
@@ -1469,6 +1513,19 @@ pas : il se lit toujours dans `queried_at` ([D28](#d28--le-plafond-dappels-porte
 
 Le détail vit dans [`technique/13-rafraichissement-par-couverture.md`](technique/13-rafraichissement-par-couverture.md).
 
+> **Annoté le 17 octobre 2026, après la construction (commit `05058b4`).** Le code calcule une
+> couverture plus petite en robuste et plus grande en fiches connues que les chiffres ci-dessus.
+> Sur la copie du 17 octobre, en passe à sec au 1er novembre :
+>
+> | Couverture | Ce journal | Le code |
+> |---|---|---|
+> | Robuste | ~708 (~710 dans D37) | **622** |
+> | Fiches connues | 528 (~530) | **560** |
+>
+> Deux fiches restent hors de toute portée, comme annoncé. Les chiffres de ce journal sont ceux
+> du jour de la décision ; le code et [`technique/14`](technique/14-cycle-d-import-mensuel.md)
+> portent ceux du jour.
+
 ---
 
 ## D37 — La prévision compte l'arbre entier, et le périmètre devient un budget de découverte
@@ -1531,6 +1588,10 @@ dira.
 
 Les constantes de prévision deviennent des taux par profondeur, mesurés, et leur commentaire
 dit lesquels.
+
+> **Annoté le 17 octobre 2026.** La règle 1 est construite en partie : `plan:cells` arbitre sur
+> la seule couverture robuste, 622 aujourd'hui, sans y ajouter le coût du second passage. La
+> règle 3, la découverte au rendement par commune, n'est pas construite.
 
 ---
 
@@ -1629,6 +1690,27 @@ passage du **16 décembre 2026** doit exister.
 > D7 reste vrai sur l'essentiel — un horaire ne s'affiche jamais au-delà de 30 jours. Il cesse
 > d'affirmer que la planification suffit à l'obtenir.
 
+> **Annoté le 17 octobre 2026, après la construction (commit `05058b4`).** Trois points.
+>
+> **La simulation de la règle 1, consignée.** Elle a été rejouée sur la couverture que le code
+> applique.
+> - Commande : `simulate:passes --from=2026-11-01T09:00:00Z --seed=N`, N de 1 à 10, sur une
+>   copie du 17 octobre.
+> - Résultat : pire heure **91,5 %** pour chaque graine, `lowest forecast` 91,5 %, au plus 900
+>   appels par période et 450 avant le 16.
+> - Le 85,9 % de la table ci-dessus a été simulé sur une autre couverture (cellules complètes,
+>   marge de 10 m). Le plafond de 450 tient.
+>
+> **Le retard de GitHub va au-delà de sept heures** : 7 h 52 mesurés sur le réveil le
+> 12 octobre. Rejouée avec 8 heures, la simulation garde 91,5 %. Voir
+> [D50](#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour).
+>
+> **La règle 4 se trompe sur un point.** « Le plafond de la période borne déjà ce qu'un mois peut
+> dépenser, relances manuelles comprises » : c'est faux depuis que la passe du 16 rachète des
+> cellules que le 1er a déjà tamponnées. Le compteur sous-compte la période. Voir
+> [D28](#d28--le-plafond-dappels-porte-sur-la-période-du-quota-pas-sur-le-balayage), son
+> annotation, et [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4.
+
 ---
 
 ## D39 — Ce qui fait échouer le cycle
@@ -1712,6 +1794,25 @@ serait vrai, mais inactionnable : c'est le défaut que D38 corrige, pas un incid
 Une cellule irréductible fera échouer chaque cycle qui l'atteint, jusqu'à ce qu'on en décide.
 C'est voulu, et il n'y a pas de mécanisme d'acquittement tant qu'il n'a pas servi une fois.
 
+> **Annoté le 17 octobre 2026, après la construction (commit `05058b4`).** Deux écarts entre la
+> règle et le code, et deux trous.
+>
+> **Les écarts.**
+> - Les cellules irréductibles sont comptées sur **tout le plan**, pas sur le cycle « qui
+>   l'atteint ».
+> - Le canari de la règle 6 s'enregistre quand chaque point SIRENE est dans la portée d'une
+>   cellule interrogée depuis moins de 30 jours. Ce n'est pas la condition écrite : une
+>   couverture robuste servie en entier par la passe.
+>
+> **Les trous.**
+> - La prévision de la règle 3 vaut 100 % quand plus aucune fiche n'est datée. Une perte totale
+>   des horaires passerait une fois au rouge, attribuée à tort à la prévision, puis au vert pour
+>   toujours. Voir [D48](#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche).
+> - Le refus « ledger missing » de la règle 2 frappe désormais toute relance faite après le 16.
+>   Ce n'est pas une perte de lignes, c'est le défaut de comptage relevé sous D28.
+>
+> Voir [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4 et § 6.
+
 ---
 
 ## D40 — Le numéro de rue corrobore, il ne suffit jamais
@@ -1766,6 +1867,10 @@ d'un effectif juste. Il se mesure avant d'appliquer, critère par critère, et l
 La leçon est celle de [D22](#d22--le-calibrage-sur-échantillon-nétait-pas-représentatif),
 transposée : **une précision se mesure sur la population où la règle va s'appliquer**, pas sur
 celle où elle est déjà vraie.
+
+> **Annoté le 17 octobre 2026, plus tard.** Le constat « rien de D31 n'est construit » est
+> dépassé pour la règle 3 de cette entrée : les règles 2 et 3 de D31 sont construites (PR #14,
+> mergée le 17 octobre). Les règles 1 et 2 de D40 ne le sont pas.
 
 ---
 
@@ -2016,6 +2121,21 @@ est la conséquence logique de D7 ; mais la relecture des conditions faite pour 
 question est plus large que trente jours. Elle reste ouverte, avec elle, dans
 [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), axe 0.
 
+> **Annoté le 17 octobre 2026, après la construction de la règle 1 (commit `0fee11c`).**
+>
+> **Où en est la règle 1.**
+> - La purge tourne chaque jour à 10:23 UTC.
+> - Elle n'a encore jamais écrit : le lancement manuel du 17 octobre était à sec, 122 fiches. La
+>   première écriture est planifiée le 18 octobre.
+> - « Dès son échéance » veut dire en pratique jusqu'à un jour, plus le retard de GitHub.
+> - Lancée à la main, elle **écrit par défaut**.
+>
+> **Les règles 2 et 3** ne sont pas construites ; aucune colonne n'existe.
+>
+> **Un trou relevé depuis.** Une étape hors ligne qui lit une fiche avant la purge et l'écrit
+> après remet un horaire échu que la purge ne reprend plus. Voir
+> [D49](#d49--la-purge-rattrape-ce-quune-étape-hors-ligne-réécrit).
+
 ---
 
 ## D46 — Une seule instruction à la fois sur la connexion poolée, pour toute l'instance
@@ -2092,3 +2212,182 @@ pas en production.
 et ce n'était pas assez : la panne demande des requêtes qui atteignent la même lecture sans
 paramètre au même instant, sur la même instance. Une reproduction qui échoue à coup sûr, contre
 le vrai pooler, prouve davantage qu'un essai en production qui passe.
+
+---
+
+## D47 — La période du quota est le mois du Pacifique
+
+**Contexte.** [D28](#d28--le-plafond-dappels-porte-sur-la-période-du-quota-pas-sur-le-balayage)
+indexe le plafond sur « la période du quota — le mois calendaire », sans dire lequel. Le code a
+choisi le mois du Pacifique le 29 août (commit `31b18cc`), mais aucune entrée de ce journal ne
+porte ce choix. Il n'est écrit que :
+- dans une annotation de [`technique/10`](technique/10-reprise-du-balayage.md) ;
+- dans les commentaires de `lib/quota.ts` et de `sweep.yml`.
+
+D38 en dépend pourtant : ses deux passes partent à 09:00 UTC pour cette raison, et le plafond de
+la seconde s'ouvre le 16 en Californie.
+
+Le projet s'appuie sur ce fait : Cloud Billing renouvelle son cycle, et avec lui le quota
+gratuit mensuel, à minuit heure du Pacifique.
+
+**Options écartées**
+- *Le mois UTC.* Il se renouvelle sept à huit heures avant celui de Google. Le cycle partait
+  alors à 03:00 UTC le 1er : notre compteur serait reparti de zéro pendant que Google comptait
+  encore le mois précédent, déjà dépensé à 900. Un balayage entier aurait été facturé dans le
+  même mois.
+- *Le mois de Paris.* Le même défaut, avec neuf heures d'avance.
+- *Un décalage fixe de huit heures.* Faux la moitié de l'année : le Pacifique est à UTC−7 en
+  été.
+- *Compter par balayage.* C'est ce que D28 a retiré.
+
+**Décision.**
+1. La période du quota est le mois calendaire du fuseau `America/Los_Angeles`, lu par son nom
+   IANA, jamais par un décalage.
+2. Le plafond d'une passe se lit sur le même calendrier : celui du 1er jusqu'au 15 inclus, heure
+   du Pacifique, celui de la période entière ensuite.
+3. Les passes planifiées partent à 09:00 UTC, heure qui a franchi minuit Pacifique en toute
+   saison sans quitter le jour.
+
+**Conséquences.**
+- Chaque 1er, une à deux heures de quota neuf restent inemployées entre minuit Pacifique (07:00
+  ou 08:00 UTC) et 09:00 UTC, auxquelles s'ajoutent les retards de GitHub.
+- La documentation de GitHub, lue le 17 octobre 2026, permet un fuseau IANA dans `on.schedule`.
+  Planifier à minuit Pacifique fermerait cet écart, sans le retard. Ce n'est pas tranché ici :
+  c'est l'un des choix de la coupure du 31 octobre ([`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md),
+  C3).
+- Le 1er novembre 2026 est le jour du changement d'heure en Californie : la période 2026-11 ouvre
+  à 07:00 UTC.
+
+> Consignée le 17 octobre 2026 : décidée et construite le 29 août. D28 n'en dépend pas sur le
+> fond — il tient sur n'importe quel mois — mais sa garantie de ne pas facturer, si.
+
+---
+
+## D48 — Une base sans échéance ne passe pas pour fraîche
+
+**Contexte.** La prévision de [D39](#d39--ce-qui-fait-échouer-le-cycle) règle 3 se lit sur les
+échéances stockées : la part des fiches **datées** encore utilisables à la pire heure avant la
+passe suivante. Quand plus aucune fiche n'est datée, elle vaut 1.
+
+Et le balayage met l'échéance à nul quand un appel renvoie un lieu sans horaires. Si Google cesse
+de renvoyer les horaires — masque de champs cassé, réponse qui change —, chaque passe efface les
+échéances de ce qu'elle sert :
+- la première passe sort rouge, sur la prévision, avec un motif qui accuse la fraîcheur et non la
+  source ;
+- dès qu'aucune fiche n'est plus datée, la prévision lit 100 % et le cycle reste vert, sur une
+  liste vide.
+
+Repère mesuré : la part des lieux renvoyés avec horaires valait **80 %** le 1er septembre
+(2 309 sur 2 894) et **81 %** le 1er octobre (3 608 sur 4 472).
+
+**Options écartées**
+- *Garder 100 % quand rien n'est daté.* C'est le vert sur une base éteinte.
+- *Mettre toutes les fiches au dénominateur.* Les 923 fiches que Google n'a jamais datées
+  compteraient comme échues. La prévision perdrait une vingtaine de points à chaque passe, et le
+  rouge mensuel redeviendrait le bruit que D39 a retiré.
+- *Comparer à la passe précédente.* Plus fin, mais une base qui s'éteint en deux passes
+  franchirait la première comparaison. Et il faut un historique que la base n'a pas encore
+  ([`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), C1).
+
+**Décision.**
+1. Une base sans aucune fiche datée prévoit **0 %**, pas 100 %.
+2. Est un défaut au sens de D39 : une passe dont **moins de la moitié des lieux renvoyés** portent
+   des horaires. Le seuil se lit sur les 80 et 81 % mesurés ; un masque cassé donne zéro.
+
+**Conséquences.**
+- Un défaut de plus, qui ne s'est jamais produit, et qui dit la vraie cause.
+- Une passe qui n'a renvoyé aucun lieu n'est pas jugée par la règle 2.
+- Le seuil se relit si la part mesurée bouge de plus de dix points. Le journal par passe la
+  consignera, s'il est construit.
+
+---
+
+## D49 — La purge rattrape ce qu'une étape hors ligne réécrit
+
+**Contexte.** [D45](#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)
+règle 1 purge chaque jour les horaires échus et ce qui en dérive. Elle ne vise que les fiches
+dont l'échéance est passée **et** qui portent encore leurs horaires bruts.
+
+`compute:profiles` lit toutes les fiches, calcule, puis réécrit la grille horaire et le profil.
+`match:sirene` fait de même pour les fiches dont l'effectif change. Si la purge passe entre la
+lecture et l'écriture :
+- l'étape hors ligne remet la grille et le profil d'un horaire échu ;
+- la purge ne voit plus cette fiche, qui n'a plus d'horaires bruts ;
+- les recalculs la sautent, comme « purgée ».
+
+Le contenu reste alors stocké jusqu'à ce qu'une passe renvoie le lieu, et peut-être jamais pour
+une fiche que Google ne renvoie plus.
+
+**La fenêtre.**
+- `compute:profiles` a duré 2 min 20 s le 1er octobre.
+- Les passes ont démarré à 13:51 et 15:54 UTC.
+- La purge est planifiée à 10:23 UTC, avec les mêmes retards possibles : jusqu'à 7 h 52 mesurés
+  sur le réveil.
+
+C'est rare, pas impossible, et le dommage ne se répare pas seul.
+
+**Options écartées**
+- *Un groupe de concurrence commun à `purge.yml` et `sweep.yml`.* GitHub ne garde qu'une
+  exécution en attente par groupe, et **annule la précédente** quand une nouvelle arrive. Une
+  purge mise en file pourrait annuler une passe en attente. Et le groupe ne couvre pas un
+  lancement local.
+- *Un verrou consultatif partagé.* Il faudrait le tenir sur toute la chaîne hors ligne, à travers
+  plusieurs processus et par le pooler, là où le verrou du balayage a déjà fui le 4 septembre.
+- *Déplacer l'heure de la purge.* Les retards de GitHub rendent toute heure incertaine.
+- *Ne rien faire.* La fenêtre est étroite, mais l'effet viole D45 sans fin et en silence.
+
+**Décision.**
+1. **La purge vise tout ce qui dérive d'un horaire échu**, et pas seulement les fiches qui portent
+   encore leurs horaires bruts. Une fiche échue dont la grille ou le profil a été réécrit est
+   vidée au passage suivant, quel que soit l'auteur de l'écriture.
+2. **Les étapes hors ligne n'écrivent une fiche que si ses horaires n'ont pas changé depuis leur
+   lecture** — ni vidés par la purge, ni rafraîchis par un balayage. Sinon elles la laissent, et
+   le comptent dans leur rapport.
+
+**Conséquences.**
+- Aucun verrou, et aucune dépendance entre workflows.
+- Au pire, du contenu échu reste stocké jusqu'à la purge du lendemain, ce que D45 accepte déjà.
+- Les tests de la purge gagnent le cas « réécrite après la purge ».
+
+Le détail vit dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 8.
+
+---
+
+## D50 — L'âge de la dernière passe se vérifie chaque jour
+
+**Contexte.** Rien ne vérifie qu'une passe a eu lieu. Le réveil quotidien affiche la fin de la
+dernière exécution du balayage, sans aucun seuil. Or :
+- GitHub retarde les planifications : 4 h 51 et 6 h 54 sur le balayage, jusqu'à **7 h 52** sur
+  le réveil le 12 octobre. C'est au-delà des sept heures que supposent D38 et la prévision.
+- Sa documentation, lue le 17 octobre 2026, dit qu'une exécution planifiée peut être
+  **abandonnée** sous forte charge. Le jeudi 24 septembre, le réveil n'a eu aucune exécution
+  planifiée.
+- Une passe qui n'a pas lieu ne produit aucun rouge : il n'y a pas d'exécution pour échouer.
+
+Le premier signe serait la liste vide, jusqu'à quinze jours plus tard.
+
+**Options écartées**
+- *S'en remettre à la prévision de D39.* Elle se calcule dans la passe : sans passe, pas de
+  prévision.
+- *Ajouter un seuil à la requête du réveil.* Le réveil virerait au rouge pour une raison qui
+  n'est pas la pause de la base, et D35 a mesuré ce que coûte un couplage.
+- *Un témoin extérieur, seul.* C'est un compte de plus, donc un choix du propriétaire
+  ([`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), C5). La vérification dans le dépôt coûte peu, et
+  se fait en attendant.
+
+**Décision.**
+1. **Chaque jour, une vérification échoue si aucune passe n'a fini depuis la dernière date
+   planifiée augmentée de neuf heures** — huit de retard, une de job. Elle lit `sweep_run` tant
+   que le journal par passe n'existe pas, et vit dans un job à elle.
+2. **Le retard maximal de GitHub se lit sur les mesures** : 8 heures au lieu de 7, dans la
+   prévision comme dans la simulation. Rejouée à 8 heures sur cinq graines, la simulation garde
+   91,5 % : le plafond du 1er ne bouge pas.
+
+**Conséquences.**
+- Une passe abandonnée, un workflow désactivé à la main, un secret qui casse au démarrage
+  deviennent un rouge le lendemain au plus tard.
+- Un refus de démarrer, déjà rouge, ne date pas `sweep_run` : la vérification le confirme.
+- Reste invisible : la désactivation de **toutes** les planifications après 60 jours sans commit,
+  qui emporte la vérification avec elle. Seul un témoin extérieur la verrait (C5).
+
+Le détail vit dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 7.

@@ -107,6 +107,13 @@ décision consciente, vérifiée en console de facturation avant et après.
 > `places.userRatingCount`, `places.websiteUri`. Tous trois déclenchent *Nearby Search
 > Enterprise*, comme `places.regularOpeningHours` : zéro dollar de plus par appel. Contrôle au
 > passage suivant : Enterprise égal au nombre d'appels, **rien sur Atmosphere**.
+>
+> **Annoté le 17 octobre 2026, au soir.** Le paragraphe précédent décrit D43 comme fait ; elle
+> ne l'est pas.
+> - Le masque compte toujours ses neuf champs, sans les trois de D43.
+> - D43 attend l'axe 0, et aucun de ces trois champs n'est demandé.
+> - Aucun test ne fige le masque.
+> - Le commentaire du code sur `places.rating` reprend l'erreur corrigée ci-dessus.
 
 ---
 
@@ -152,6 +159,16 @@ Trois propriétés découlent de cet ordre :
 Un plafond journalier ne protège pas du cumul mensuel — ce rôle revient au verrou de 25
 jours entre deux balayages et à l'alerte budget.
 
+> **Annoté le 17 octobre 2026.** Le verrou de 25 jours est retiré (D38 r4). Le cumul mensuel est
+> borné par le plafond de la **période** (D28), le mois du Pacifique (D47).
+>
+> Ce plafond ne garantit plus la dépense réelle depuis D38. La passe du 16 rachète des cellules
+> que le 1er a tamponnées, et le compteur sous-compte la période. La propriété 2 ci-dessus tient
+> pour une exécution, plus pour un mois.
+>
+> Voir [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 4 et
+> [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C1.
+
 **Les quatre métriques à zéro rendent la décision D5 structurelle** : un `Place Details`
 appelé par erreur ne coûte rien, il échoue. Ce n'est plus une convention à respecter, c'est
 une contrainte appliquée par Google.
@@ -188,6 +205,16 @@ sont la seule chose qui sépare le projet d'une facture.
 
 C'est ce qui justifie leur sévérité : 800 appels par jour là où le défaut en autorise 75 000,
 et zéro sur tout ce que l'architecture n'utilise pas.
+
+> **Annoté le 17 octobre 2026.** La valeur posée est **1 000** par jour, d'après la table
+> *posés et vérifiés* ci-dessus ; le 800 est celui de D15.
+>
+> À ce plafond, une clé qui fuit coûterait jusqu'à environ 1 015 à 1 050 $ par mois : le
+> plafond borne la méthode, pas le palier, et l'alerte budget ne bloque rien.
+>
+> Google agrège par ailleurs l'usage de tous les projets liés au compte de facturation. Les
+> plafonds n'ont pas été relus en console depuis le 29 août
+> ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C9).
 
 ---
 
