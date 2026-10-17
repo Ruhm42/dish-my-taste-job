@@ -49,7 +49,26 @@ function cleanText(value: unknown): string | null {
   return trimmed === '' || trimmed === '[ND]' ? null : trimmed
 }
 
-async function extractFromSirene(): Promise<Record<string, unknown>[]> {
+/**
+ * The permalink in SIRENE_PARQUET says nothing about which month it serves, so it is
+ * resolved once, up front: the run then names the stock it loaded, and DuckDB reads one
+ * fixed file — its range requests would otherwise each go through the redirect, and could
+ * straddle two months if data.gouv published the next stock mid-read.
+ */
+async function resolveStock(): Promise<string> {
+  const response = await fetch(SIRENE_PARQUET, { method: 'HEAD' })
+  if (!response.ok) {
+    throw new Error(
+      `SIRENE stock unreachable: HTTP ${response.status} on ${SIRENE_PARQUET}\n` +
+      '  data.gouv may have replaced the resource. Find "Fichier StockEtablissement (format ' +
+      'parquet)" in https://www.data.gouv.fr/api/1/datasets/base-sirene-des-entreprises-et-de-' +
+      'leurs-etablissements-siren-siret/ and put its permalink in SIRENE_PARQUET (lib/config.ts).',
+    )
+  }
+  return response.url
+}
+
+async function extractFromSirene(stock: string): Promise<Record<string, unknown>[]> {
   const instance = await DuckDBInstance.create(':memory:')
   const connection = await instance.connect()
   try {
@@ -63,7 +82,7 @@ async function extractFromSirene(): Promise<Record<string, unknown>[]> {
              enseigne1Etablissement, denominationUsuelleEtablissement,
              numeroVoieEtablissement, typeVoieEtablissement, libelleVoieEtablissement,
              codePostalEtablissement
-      FROM read_parquet('${SIRENE_PARQUET}')
+      FROM read_parquet('${stock}')
       WHERE codeCommuneEtablissement IN (${COMMUNE_CODES.map(() => '?').join(', ')})
         AND etatAdministratifEtablissement = 'A'
         AND activitePrincipaleEtablissement IN (${NAF_CODES.map(() => '?').join(', ')})
@@ -112,7 +131,9 @@ async function main() {
   console.log(`SIRENE extraction: ${COMMUNE_CODES.length} communes, ${NAF_CODES.length} activity codes`)
   const startedAt = Date.now()
 
-  const rawRows = await extractFromSirene()
+  const stock = await resolveStock()
+  console.log(`stock file: ${stock}`)
+  const rawRows = await extractFromSirene(stock)
   console.log(`${rawRows.length} rows extracted in ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
 
   if (rawRows.length < MINIMUM_EXPECTED_ROWS) {
