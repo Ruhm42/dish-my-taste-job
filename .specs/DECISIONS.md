@@ -2015,3 +2015,80 @@ Places, sauf l'identifiant, est limité à 30 jours — nom, adresse, téléphon
 est la conséquence logique de D7 ; mais la relecture des conditions faite pour D38 montre que la
 question est plus large que trente jours. Elle reste ouverte, avec elle, dans
 [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), axe 0.
+
+---
+
+## D46 — Une seule instruction à la fois sur la connexion poolée, pour toute l'instance
+
+**Contexte.** Le 17 octobre à 11:18:43 UTC, trois `GET /recherche` partis du même navigateur en
+deux millisecondes ont tous échoué au bout de **300 secondes** — 504, `Task timed out after 300
+seconds`, aucun autre message. Le chargement précédent, trois secondes plus tôt, avait répondu
+en 200. Déploiement `dpl_GHzo3Pzv…`, commit `b796cad`.
+
+D23 avait rendu séquentielles les requêtes **d'une page**. Mais Fluid compute — actif sur le
+projet (`resourceConfig.fluid: true`), réglage par défaut des projets créés depuis le 23 avril
+2025, et celui-ci a été créé dans la nuit du 28 au 29 août 2026 — sert plusieurs requêtes HTTP
+dans **une même instance**, et toutes partagent l'unique connexion du client (`max: 1`).
+postgres.js écrit une requête **sans paramètre** sur une connexion occupée sans attendre la
+réponse précédente : c'est le pipelining de D23, mais d'une requête HTTP à l'autre. Supavisor, en
+mode transaction, n'a renvoyé que la réponse de la première ; les suivantes n'arrivent jamais, et
+tout ce qui attend derrière elles sur l'instance attend jusqu'au délai de 300 secondes.
+
+La page fait trois lectures sans paramètre : la progression du balayage (`selectDistinct`, depuis
+le 27 septembre) et les deux lectures de fraîcheur des horaires. Les requêtes paramétrées, elles,
+ne pipelinent pas : postgres.js marque la connexion pleine tant que leur description n'est pas
+revenue.
+
+Reproduit en local, avec l'image `supabase/supavisor:2.9.13` — celle de l'auto-hébergement Supabase
+— en mode transaction, devant un Postgres 17 :
+
+| Scénario, sur un seul client | Résultat |
+|---|---|
+| Un rendu à la fois, 100 tours | aucun blocage |
+| Deux rendus simultanés | bloqué dès le premier tour |
+| Trois rendus simultanés, drizzle 0.45.2 | bloqué dès le premier tour, à chaque essai (3/3) |
+| Trois rendus simultanés, drizzle 0.36.4 | bloqué dès le premier tour |
+
+La montée de drizzle-orm 0.36.4 → 0.45.2, déployée juste avant, n'y est pour rien : le trafic
+réseau d'un rendu est identique message pour message sous les deux versions, et la reproduction
+bloque de la même façon avec 0.36.4. Les sept chargements réussis sur 0.45.2 avant la panne
+arrivaient un par un, à six dixièmes de seconde d'écart au moins.
+
+D23 était déjà ce mécanisme, dans une seule requête : sans filtre, les deux premières requêtes du
+`Promise.all` n'avaient pas de paramètre, et la troisième partait derrière elles.
+
+**Options écartées**
+- *`max_pipeline: 0` dans les options de postgres.js* — une ligne, et le blocage disparaît. Mais
+  l'option n'est ni documentée ni typée, et elle casse `begin()` : postgres.js ne réserve plus la
+  connexion, et la transaction lève une `TypeError` hors de toute promesse, qui fait tomber le
+  processus. `match:sirene` ouvre deux transactions et ne refuse pas le pooler ; et en local, où
+  rien ne passe par le port 6543, rien ne le montrerait.
+- *Désactiver Fluid compute* — aucune ligne de code, et l'hypothèse d'une requête par instance
+  redevient vraie. Mais c'est un réglage de plateforme, hors du chemin par défaut de Vercel : le
+  jour où il revient, la panne revient avec lui sans que rien dans le code ne l'annonce.
+- *Un client par requête* — une poignée de main TCP, TLS et authentification de plus à chaque
+  page, et le `db` partagé de `lib/results.ts` à défaire.
+- *Le pooler en mode session* — accepte le pipelining, mais tient un backend par instance ; la
+  raison de D23 tient toujours.
+- *Donner un paramètre à chaque requête* — seules les requêtes sans paramètre ouvrent la fenêtre,
+  mais une lecture ajoutée sans `where` la rouvrirait, sans que rien ne le signale.
+
+**Décision.** Sur le pooler transactionnel, le client de l'application ne laisse passer **qu'une
+instruction à la fois**, toutes requêtes HTTP confondues. Une file d'attente dans
+`lib/db/client.ts` enveloppe les trois chemins par lesquels drizzle atteint postgres.js —
+`unsafe()`, `unsafe().values()` et `begin()` ; une transaction garde son tour jusqu'à sa fin. Les
+pages restent séquentielles (D23) : ce n'est plus ce qui protège la connexion, mais les
+paralléliser ne gagnerait rien, la file les sérialiserait de toute façon.
+
+**Conséquences.** Plus aucun blocage dans la reproduction : 2, 3, 8 et 20 rendus simultanés,
+30 tours chacun, et des transactions mêlées aux rendus ; sur le réseau, plus aucun message ne part
+avant la réponse du précédent (0 sur 684). Le prix : deux requêtes servies par la même instance
+s'attendent, quelques millisecondes par instruction — ce qu'elles faisaient déjà en pipelining,
+sans la garantie d'une réponse. Un test sans base fait tourner le vrai drizzle contre la file :
+une version de drizzle qui atteindrait le client par un quatrième chemin le fera échouer en CI,
+pas en production.
+
+**Leçon de méthode.** D23 avait vérifié sous charge — douze requêtes simultanées, toutes en 200 —
+et ce n'était pas assez : la panne demande des requêtes qui atteignent la même lecture sans
+paramètre au même instant, sur la même instance. Une reproduction qui échoue à coup sûr, contre
+le vrai pooler, prouve davantage qu'un essai en production qui passe.
