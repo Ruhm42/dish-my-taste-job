@@ -210,25 +210,49 @@ runtime, and `lib/db/client.ts` keys `prepare: false` off that port. `psql` work
 ### What changed since the previous deploy
 
 ```bash
+DEPLOYED=$(git rev-parse HEAD)
 PREV=$(npx --yes vercel@64 ls dish-my-taste-job --scope hipopo-2684 --environment production \
-  --json 2>/dev/null | python3 -c "
-import json,sys
+  --json 2>/dev/null | DEPLOYED="$DEPLOYED" python3 -c "
+import json,os,sys
 d = json.load(sys.stdin)['deployments']
-print(next((x['meta'].get('githubCommitSha') or x['meta'].get('commit','') for x in d[1:] if x['state']=='READY'), ''))")
+sha = lambda x: x['meta'].get('githubCommitSha') or x['meta'].get('commit','')
+mine = next((i for i, x in enumerate(d) if sha(x) == os.environ['DEPLOYED']), None)
+if mine is None: sys.exit('no production deployment for ' + os.environ['DEPLOYED'][:7])
+print(next((sha(x) for x in d[mine+1:] if x['state']=='READY'), ''))")
 echo "previous production commit: ${PREV:-unknown}"
 ```
 
 ```bash
-files=$(git diff --name-only "$PREV"..HEAD) || echo "BAD REF — cannot say what changed"
-printf '%s\n' "$files" | grep -E '^(app|components|lib|middleware|next\.config|package(-lock)?\.json|drizzle)' || echo "no runtime code changed"
+if [ -z "$PREV" ]; then
+  echo "previous commit unknown — cannot say what changed"
+elif ! files=$(git diff --name-only "$PREV".."$DEPLOYED"); then
+  echo "BAD REF — cannot say what changed"
+else
+  printf '%s\n' "$files" | grep -E '^(app|components|lib|middleware|next\.config|package(-lock)?\.json|drizzle)' || echo "no runtime code changed"
+fi
 ```
 
-`d[1:]` skips the deployment just published; the first `READY` entry after it is the one that
-was live before. Filtering on `READY` matters — `vercel ls` lists `● Error` rows too, and
-those never served anything. If `PREV` comes back empty, say the previously deployed commit is
-unknown and skip the diff rather than guessing a ref. Keep the last two commands split: `|| echo`
-on a single pipeline swallows git's "unknown revision" and prints the reassuring "no runtime code
-changed" instead.
+**Anchor on your own commit, not on a position in the list.** The deployment that was live before
+yours is the first `READY` row *after your row*. "The second row" is only that while nobody else
+deploys, and sessions push to `main` concurrently: on 2026-10-17 another deploy already building
+on top made `d[1:]` return the very deployment being checked.
+
+`DEPLOYED` is the commit whose run you followed. After `git push origin main` that is `HEAD`.
+After `gh pr merge` it is not, and neither is a freshly fetched `origin/main`, which may already
+hold the next push. Replace the snippet's first line with the merge commit:
+
+```bash
+DEPLOYED=$(gh pr view <number> --json mergeCommit --jq .mergeCommit.oid)
+```
+
+Filtering on `READY` matters — `vercel ls` lists `● Error` rows too, and those never served
+anything. If `PREV` comes back empty — the snippet says so when no row carries `DEPLOYED` — say
+the previously deployed commit is unknown rather than guessing a ref.
+
+**Each way the diff can fail prints only its own line, never the reassuring one.** An empty
+`PREV` is not harmless: git reads `..$DEPLOYED` as `HEAD..$DEPLOYED`, empty whenever `HEAD` is
+the deployed commit, and the grep then prints "no runtime code changed" — measured. And `|| echo`
+on a single pipeline swallows git's "unknown revision" the same way.
 
 ### Checking the alias by hand
 
