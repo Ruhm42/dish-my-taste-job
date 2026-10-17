@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { FREE_MONTHLY_QUOTA, SWEEP } from '@/lib/config'
-import { callsLeft, monthKey, monthWindow } from '@/lib/quota'
+import { CYCLE, FREE_MONTHLY_QUOTA, SWEEP } from '@/lib/config'
+import { callsLeft, monthKey, monthWindow, nextScheduledPass, passCeiling } from '@/lib/quota'
 
 const CEILING = SWEEP.maxCallsPerPeriod
 
@@ -71,5 +71,37 @@ describe('the period boundary', () => {
     // 03:00 UTC on the 1st is 20:00 the day before, Pacific. This is the case that makes
     // the timezone load-bearing rather than pedantic.
     expect(monthKey(new Date('2026-09-01T03:00:00Z'))).toBe('2026-08')
+  })
+})
+
+describe('the two passes of a month (D38)', () => {
+  const ceilings = { first: CYCLE.firstPassCeiling, full: CEILING, secondPassDay: CYCLE.secondPassDay }
+  const ceilingAt = (iso: string) => passCeiling(new Date(iso), ceilings)
+
+  it('holds the first half of the period to the first pass\'s ceiling, reruns included', () => {
+    expect(ceilingAt('2026-11-01T09:00:00Z')).toBe(CYCLE.firstPassCeiling)
+    expect(ceilingAt('2026-11-03T14:00:00Z')).toBe(CYCLE.firstPassCeiling)
+  })
+
+  it('opens the rest of the period on the 16th in California, not in London', () => {
+    // 07:30Z on the 16th is still 23:30 on the 15th in winter Pacific time.
+    expect(ceilingAt('2026-11-16T07:30:00Z')).toBe(CYCLE.firstPassCeiling)
+    // The scheduled 09:00Z is past Pacific midnight in both seasons.
+    expect(ceilingAt('2026-11-16T09:00:00Z')).toBe(CEILING)
+    expect(ceilingAt('2026-07-16T09:00:00Z')).toBe(CEILING)
+  })
+
+  it('never lets the first pass spend what the 16th is owed, nor a month more than its period', () => {
+    expect(CYCLE.firstPassCeiling).toBeLessThan(CEILING)
+    expect(CEILING).toBeLessThan(FREE_MONTHLY_QUOTA)
+  })
+
+  it('finds the next scheduled pass strictly after the clock', () => {
+    const next = (iso: string) =>
+      nextScheduledPass(new Date(iso), CYCLE.scheduleDays, CYCLE.scheduleHourUtc).toISOString()
+    expect(next('2026-11-01T15:00:00Z')).toBe('2026-11-16T09:00:00.000Z')
+    expect(next('2026-11-16T09:00:00Z')).toBe('2026-12-01T09:00:00.000Z')
+    expect(next('2026-12-20T00:00:00Z')).toBe('2027-01-01T09:00:00.000Z')
+    expect(next('2026-10-31T23:00:00Z')).toBe('2026-11-01T09:00:00.000Z')
   })
 })

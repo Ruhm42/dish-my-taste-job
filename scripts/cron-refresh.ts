@@ -1,13 +1,16 @@
 /**
- * cron:refresh — pipeline step 7: the monthly refresh.
+ * cron:refresh — pipeline step 7: one pass of the refresh cycle.
  *
  * Chains `plan:cells`, `sweep:google`, `match:sirene` and `compute:profiles`.
  * `ingest:sirene` and `ingest:geocode` are not in it: the company registry moves slowly, a
  * quarterly rerun is enough (spec 06).
  *
- * This is the script .github/workflows/sweep.yml triggers on the 1st of the month. Firing
- * on the 1st guarantees the replacement happens before the 30-day terms-of-service
- * expiry (D7).
+ * This is the script .github/workflows/sweep.yml triggers twice a month, on the 1st and the
+ * 16th (D38). Firing on the 1st was said to guarantee the replacement before the 30-day
+ * expiry; it did not, seven months a year — twelve monthly refreshes cover 360 days, not 365.
+ * What the cycle does instead is spread the expiries over two passes, so that only part of
+ * the base can lapse at once; what lapses anyway is not shown (D30 rule 6) and is counted in
+ * the banner.
  *
  * IT SPENDS QUOTA, through `sweep:google`: `--dry-run` is therefore its default mode, and
  * `--go` the only way to spend. Dry, every step has a write-free mode, so the whole chain is
@@ -17,23 +20,28 @@
  *   node --env-file=.env.local --import tsx scripts/cron-refresh.ts --go   # actually spends
  *
  * Each step keeps its own guard rails: they live in the scripts, not here. In particular,
- * `sweep:google` refuses to replay a sweep that succeeded less than SWEEP.daysBetweenSweeps
- * days ago — a manual trigger mid-month will spend nothing.
+ * the sweep's ceiling is the PASS's, read on the period's total: a manual trigger in the first
+ * half of the month shares the first pass's CYCLE.firstPassCeiling, one after the 16th what
+ * the period has left.
  *
- * It also reports, on every execution, how much of the database is past the 30-day
- * retention the terms of service impose — and fails when a CONVERGED sweep has left any
- * expired at all (spec technique/10 §2).
+ * A cycle fails on D39's conditions and on nothing else. The sweep judges its own; this adds,
+ * once the pass is over, the share of the records with hours still usable at the worst hour
+ * before the next pass, GitHub's delay included, read on what the pass actually wrote. It also
+ * reports how much of the database is past the 30-day retention — reported, never red: under
+ * two passes some of it lapses every month by arithmetic (D38).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../lib/db/client'
-import { cell, sweepRun } from '../lib/db/schema'
-import { buildCoverage, countOwed } from '../lib/coverage'
+import { cell, restaurant, sweepRun } from '../lib/db/schema'
+import { buildCoverIndex, buildResolution, forecastHorizon, freshShare, planPass } from '../lib/coverage'
+import { cycleNotice } from '../lib/cycle-notice'
 import { errorReason } from '../lib/error-reason'
-import { monthWindow } from '../lib/quota'
-import { COMMUNE_NAMES, DISTRICT_BY_COMMUNE, HOURS_TTL_DAYS } from '../lib/config'
+import { loadCoverInputs } from '../lib/db/cover-inputs'
+import { nextScheduledPass } from '../lib/quota'
+import { COMMUNE_NAMES, CYCLE, DISTRICT_BY_COMMUNE, HOURS_TTL_DAYS, SWEEP } from '../lib/config'
 import { fetchHoursFreshness, type HoursFreshness } from '../lib/results'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -41,37 +49,26 @@ const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 interface PlanState {
   /** Cells in the database, all runs taken together. Zero means there is no plan. */
   total: number
-  /** Cells this quota period still has to pay for: content to buy back, and discovery. */
-  owed: number
-  /** Truncations whose recovering cells are not themselves covered. */
+  /** Cells never queried, or whose last call failed: the discovery backlog. */
+  backlog: number
+  /** Truncations whose recovering cells are not themselves resolved. */
   unresolved: number
 }
 
 /**
- * What the plan is, and what this period still owes on it — two questions, both needed.
- *
- * `owed` decides nothing about planning any more; it is the cycle's budget figure. Under
- * D30 rule 1 every cell owes a call once per quota period, since everything it collects
- * expires in 30 days, so this is nonzero at the start of every period by construction.
- *
- * `unresolved` is the other thing a period cannot fix on its own: a truncated cell has been
- * paid for, but the cells that recover what it hid may not have been. It counts as
- * unresolved until they ARE, and not for ever — nothing moves a cell out of `truncated`, so
- * counting every truncated cell would be a rule that can never come true.
+ * What the plan is, and what it still hides — reported, never a reason to fail (D39).
  *
  * Scoped to the run the sweep would pick — the most recent one with cells — and not to the
  * whole table. A recalibration leaves the previous plan's rows in place, on purpose: their
- * `queried_at` is the spend ledger, and deleting rows queried this period either stops the
- * sweep for the rest of it or, where the logbook cannot prove the loss, re-opens a ceiling
- * already paid for. Counting them here would have the cycle announce a figure the sweep
- * does not walk, which is the kind of disagreement that ends in a wrong cost forecast.
+ * `queried_at` is the spend ledger. Counting them here would have the cycle announce a figure
+ * the sweep does not walk.
  *
- * Read whole rather than counted in SQL: coverage is recursive, it is the same rule the
+ * Read whole rather than counted in SQL: resolution is recursive, it is the same rule the
  * sweep reports its own truncations with, and the table is a few thousand rows.
  */
 async function planState(): Promise<PlanState> {
   const runs = await db.selectDistinct({ runId: cell.sweepRunId }).from(cell)
-  if (runs.length === 0) return { total: 0, owed: 0, unresolved: 0 }
+  if (runs.length === 0) return { total: 0, backlog: 0, unresolved: 0 }
 
   const [latest] = await db.select({ id: sweepRun.id }).from(sweepRun)
     .where(inArray(sweepRun.id, runs.map((r) => r.runId)))
@@ -80,17 +77,37 @@ async function planState(): Promise<PlanState> {
   const runId = latest?.id ?? runs[0].runId
 
   const cells = await db
-    .select({
-      id: cell.id, parentId: cell.parentId, status: cell.status, queriedAt: cell.queriedAt,
-    })
+    .select({ id: cell.id, parentId: cell.parentId, status: cell.status })
     .from(cell)
     .where(eq(cell.sweepRunId, runId))
-  const isCovered = buildCoverage(cells)
+  const isResolved = buildResolution(cells)
   return {
     total: cells.length,
-    owed: countOwed(cells, monthWindow(new Date())),
-    unresolved: cells.filter((c) => c.status === 'truncated' && !isCovered(c)).length,
+    backlog: cells.filter((c) => c.status === 'pending' || c.status === 'failed').length,
+    unresolved: cells.filter((c) => c.status === 'truncated' && !isResolved(c)).length,
   }
+}
+
+/**
+ * The share of the records with hours still usable at the worst hour before the next pass,
+ * read on the expiries in the database (D39 rule 3).
+ */
+async function forecastFreshness(now: Date): Promise<{ share: number; nextPass: Date }> {
+  const nextPass = nextScheduledPass(now, CYCLE.scheduleDays, CYCLE.scheduleHourUtc)
+  const rows = await db.select({ expiresAt: restaurant.hoursExpiresAt }).from(restaurant)
+  return { share: freshShare(rows.map((r) => r.expiresAt), forecastHorizon(nextPass)), nextPass }
+}
+
+/** What one refresh of everything costs today, for the run's annotation (D36). */
+async function coverCost(): Promise<{ robust: number; known: number } | null> {
+  const inputs = await loadCoverInputs()
+  if (!inputs) return null
+  const index = buildCoverIndex(inputs.cells, inputs.records, inputs.sirene)
+  const now = new Date()
+  const plan = planPass(index, {
+    now, nextPass: nextScheduledPass(now, CYCLE.scheduleDays, CYCLE.scheduleHourUtc), ceiling: 0,
+  })
+  return { robust: plan.robustCost, known: plan.knownCost }
 }
 
 const DISTRICT_LABEL = new Map(
@@ -140,16 +157,16 @@ interface Step {
 }
 
 const STEPS: Step[] = [
-  // The budget step: the number of cells it announces is what a converged sweep costs every
-  // month, since every cell owes one call per period (D30 rules 1 and 4). Played dry even
-  // when a plan is in place — that figure is the one the arbitration is made on.
+  // The budget step: it announces what a month costs — the cover — beside the one-level floor
+  // and the converged tree, each named for what it is (D37). Played dry even when a plan is in
+  // place, so the figures are read before a call is spent.
   { name: 'plan:cells', file: 'plan-cells.ts', args: ['--write'], dryRunArgs: [] },
   // The dry run of `sweep` reads the plan from the database; in dry run the plan is
   // precisely not written there. Calling it anyway would fail on "no cell to do", a
   // failure that says nothing about the real sweep.
   //
-  // A PLAN ALREADY IN PLACE is the exception: the dry sweep then has something real to read
-  // and is the only thing that reports what the quota period still owes, and in which order.
+  // A PLAN ALREADY IN PLACE is the exception: the dry sweep then has something real to read,
+  // and is the only thing that reports this pass's cover, its forecast and its verdict.
   // Without it a dry cycle on an existing plan played nothing at all.
   { name: 'sweep:google', file: 'sweep.ts', args: ['--go'], dryRunArgs: null, dryRunOnResume: ['--dry-run'] },
   // Both have a write-free mode, so a dry cycle rehearses the whole chain instead of
@@ -236,56 +253,45 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onStopSignal)
 
   console.log(go
-    ? 'MONTHLY REFRESH — LIVE MODE, the sweep is going to spend Google quota'
-    : 'MONTHLY REFRESH — DRY RUN, no call made, nothing written (add --go to spend)')
+    ? 'REFRESH PASS — LIVE MODE, the sweep is going to spend Google quota'
+    : 'REFRESH PASS — DRY RUN, no call made, nothing written (add --go to spend)')
 
   const startedAt = Date.now()
 
   // An existing plan is WALKED, never replanned.
   //
-  // Under D30 rule 1 there is nothing to replan for: one single plan is walked once per
-  // period, in the order its content expires, and every period pays for every cell anyway.
-  // What `plan:cells --write` would cost is what the plan in place knows: it opens a
-  // brand-new run whose cells have never been queried, so the period walks them in plan
-  // order instead of oldest content first, strands the old plan's pending subdivisions, and
-  // pays again to rediscover the truncations the old plan had already resolved. Replanned
-  // mid-period, it also re-buys ground this period already paid for. Recalibrating is a
-  // deliberate act, run by hand, at the start of a period.
+  // The cover is drawn from the plan's complete cells and the positions of what they hold,
+  // recomputed on every pass (D36): there is nothing to replan for. What `plan:cells --write`
+  // would cost is what the plan in place knows: it opens a brand-new run whose cells have
+  // never been queried, so no cell is complete and no cover exists until discovery has walked
+  // it again, and the old plan's resolved truncations are paid for a second time.
+  // Recalibrating is a deliberate act, run by hand, at the start of a period.
   const plan = await planState()
   const skipPlanning = plan.total > 0
 
   if (skipPlanning) {
     console.log(
-      `\nPLAN IN PLACE — ${plan.total} cell(s), of which ${plan.owed} owed for this quota ` +
-      `period and ${plan.unresolved} truncation(s) unresolved.\n` +
-      'Planning is skipped in live mode: the cycle walks the plan it has, oldest content\n' +
-      'first. Cells already queried inside this period are not replayed.',
+      `\nPLAN IN PLACE — ${plan.total} cell(s), ${plan.backlog} of them still to discover and ` +
+      `${plan.unresolved} truncation(s) unresolved — reported, never red (D39).\n` +
+      'Planning is skipped in live mode: the pass draws its cover from the plan it has.',
     )
   }
 
-  // Held rather than thrown, so the expiry below is still reported. A sweep that stops on
-  // its quota ceiling fails the cycle by design (D22), and that is precisely the run whose
-  // freshness matters most: reporting it only when everything else went well would keep it
-  // quiet for exactly as long as the sweep takes to converge.
+  // Held rather than thrown, so the expiry below is still reported: a failing pass is
+  // precisely the one whose freshness matters most.
   let failure: Error | null = null
   /**
-   * A failing step no longer abandons the offline ones.
+   * A failing step does not abandon the offline ones.
    *
-   * The sweep fails on its quota ceiling every month until it converges (D22), and it used to
-   * take `match:sirene` and `compute:profiles` down with it — so establishments that HAD been
-   * imported and paid for sat there with no headcount and a profile computed under older
-   * rules, for as long as convergence took. Neither step spends a call, and neither depends
-   * on the sweep being complete: both work establishment by establishment on rows already in
-   * the database.
-   *
-   * What did depend on completeness was `match:sirene`'s canary, and that is handled where it
-   * belongs — the script now withholds it itself and says why. The cycle still fails: the
-   * first error is kept and rethrown below, so the exit code and the red build are unchanged.
+   * Neither `match:sirene` nor `compute:profiles` spends a call, and neither depends on the
+   * pass having served its whole cover: both work establishment by establishment on rows
+   * already in the database. What did depend on it was `match:sirene`'s canary, and the
+   * script withholds it itself, saying why. The cycle still fails: the first error is kept
+   * and rethrown below.
    */
   for (const step of STEPS) {
-    // Dry, planning is still played: it writes nothing, and the number of cells it announces
-    // is what D30 rule 4 arbitrates on — the cost of a converged sweep, every month, before
-    // a call is spent. Live, it would replace the plan being walked.
+    // Dry, planning is still played: it writes nothing, and it prints what a month costs
+    // before a call is spent (D37). Live, it would replace the plan being walked.
     if (skipPlanning && go && step.name === 'plan:cells') continue
     if (failure && !step.offline) {
       console.log(`\n=== ${step.name} — skipped, an earlier step failed ===`)
@@ -308,40 +314,57 @@ async function main(): Promise<void> {
     }
   }
 
-  // While the sweep still owes cells, expiry is a known consequence of a sweep that
-  // outlived its quota; once it has converged, a single expired record is a defect — the
-  // base would be claiming a freshness it does not have.
+  // Expiry is reported, never red: under two passes some of the base lapses every month by
+  // arithmetic (D38). What fails is the forecast below — and the alarm that used to fire when
+  // a converged sweep left anything expired is gone, since the plan never converges (D39).
   const freshness = await fetchHoursFreshness()
   reportFreshness(freshness)
-  const after = await planState()
-  const converged = after.owed === 0 && after.unresolved === 0
 
-  if (failure) throw failure
+  // Live only: dry, the pass has written nothing, and the stored expiries say what happens
+  // if it never runs. The dry sweep has already judged the forecast of what it would serve.
+  //
+  // Reported beside the first failed step, never instead of it and never hidden by it: it is
+  // not a step downstream of the sweep but its consequence for the product (D39 rule 5).
+  const reasons = failure ? [failure.message] : []
+  if (go) {
+    const { share, nextPass } = await forecastFreshness(new Date())
+    const horizon = forecastHorizon(nextPass)
+    console.log(`forecast             : ${(100 * share).toFixed(1)}% usable at ${horizon.toISOString()}, ` +
+      'the worst hour before the next pass')
+    if (share < CYCLE.freshnessFloor) {
+      reasons.push(
+        `forecast freshness ${(100 * share).toFixed(1)}% at the worst hour before the next pass, ` +
+        `under ${100 * CYCLE.freshnessFloor}% (D39): the list is going dark beyond the structural dip`,
+      )
+    }
+    const after = await planState()
+    const cost = await coverCost()
+    const notice = cycleNotice({
+      backlog: after.backlog,
+      awaiting: after.unresolved,
+      robustCost: cost?.robust ?? 0,
+      knownCost: cost?.known ?? 0,
+      ceiling: SWEEP.maxCallsPerPeriod,
+      forecast: share,
+      horizon,
+    })
+    if (notice) console.log(notice)
+  }
+
+  if (reasons.length > 0) throw new Error(reasons.join(' ; '))
 
   const minutes = ((Date.now() - startedAt) / 60_000).toFixed(1)
   console.log(go
-    ? `\nMonthly cycle finished in ${minutes} min. To check: the billing console ` +
-      '(Enterprise usage ≈ number of cells, NOTHING on the Atmosphere tier), ' +
-      'unresolved truncations, SIRENE unmatched rate.'
+    ? `\nPass finished in ${minutes} min. To check: the billing console ` +
+      '(Enterprise usage ≈ number of calls, NOTHING on the Atmosphere tier), ' +
+      'the forecast above, SIRENE unmatched rate.'
     : `\nDry run finished in ${minutes} min. Nothing was spent nor written.\n` +
-      `This period owes ${plan.owed} call(s) on the plan in place; the cell count the plan ` +
-      'step announces is what a converged sweep would cost each month (D30 rule 4).')
-
-  if (converged && freshness.expired > 0) {
-    const message =
-      `the sweep has converged and ${freshness.expired} record(s) still carry hours older ` +
-      `than ${HOURS_TTL_DAYS} days. A converged sweep replaces every record it covers, so ` +
-      'this is a hole in the coverage, not a leftover of an unfinished run.'
-    // A dry run spends nothing and writes nothing, and comes back clean: it says the same
-    // thing without turning a read-only check into a red build.
-    if (go) throw new Error(message)
-    console.warn(`\n! ${message}`)
-  }
+      'The cost that decides is the cover the plan step and the dry sweep announce (D37).')
 }
 
 main()
   .then(() => process.exit(0))
   .catch((e) => {
-    console.error(`\nMONTHLY CYCLE FAILED — ${errorReason(e)}`)
+    console.error(`\nREFRESH CYCLE FAILED — ${errorReason(e)}`)
     process.exit(1)
   })

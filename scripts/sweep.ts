@@ -3,33 +3,42 @@
  *
  * A full sweep was forecast at ~692 calls; the first real one spent 900 without converging
  * (D22), and the account has no safety credit — any overage goes on the credit card from
- * the very first euro. Hence `--dry-run` by default, the two hard-stop counters, and the
- * refusal to replay a recent sweep.
+ * the very first euro. Hence `--dry-run` by default and the hard-stop counters.
  *
  * The counters are indexed on the QUOTA PERIOD, never on the sweep: a sweep that outlives
- * the month paying for it must still be resumable (D28, spec technique/10).
+ * the month paying for it must still be resumable (D28, spec technique/10). Inside the
+ * period, the first pass may only bring it to CYCLE.firstPassCeiling; the 16th's takes the
+ * rest (D38).
  *
- * And so is the plan itself: everything a cell collects expires 30 days later (D7), so
- * `done` means "done in THIS period" and one single plan is walked in the order its content
- * expires — refresh first, oldest first, discovery on what the quota leaves (D30 rule 1).
+ * Everything a cell collects expires 30 days later (D7), and the cells overlap: what a pass
+ * refreshes is a greedy COVER of the content due first, drawn from the complete cells — not
+ * a list of cells read off their own `queried_at` (D36). Then the empty cells owed their
+ * semestrial replay, then discovery, on what the ceiling leaves.
+ *
+ * A pass fails on D39's defects and on nothing else: content and discovery still owed are a
+ * backlog, reported, never red. It ends `capped` on a planned ceiling, `succeeded` when nothing
+ * is left owed.
  *
  * See .specs/technique/02-budget-google-et-garde-fous.md
- *  and .specs/technique/03-algorithme-de-balayage.md
+ *  and .specs/technique/13-rafraichissement-par-couverture.md
  *
  * Usage:
  *   node --env-file=.env.local --import tsx scripts/sweep.ts            # dry run, 0 calls
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --go       # actually spends
- *   node --env-file=.env.local --import tsx scripts/sweep.ts --go --force
- *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-09-01T03:00:00Z
+ *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-11-16T09:00:00Z
+ *   node --env-file=.env.local --import tsx scripts/sweep.ts --simulate-fault=429   # dry, rehearses D39
  */
 import { and, count, desc, eq, gte, inArray, isNotNull, lt } from 'drizzle-orm'
 import { db, isTransactionPooler, sql as rawSql } from '../lib/db/client'
 import { cell, restaurant, sireneEstablishment, sweepRun } from '../lib/db/schema'
 import {
   DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES, FREE_MONTHLY_QUOTA,
-  GOOGLE_TO_SIRENE_RATIO, MAX_NEARBY_RESULTS, HOURS_TTL_DAYS, GOOGLE_PLACE_TYPES,
+  GOOGLE_TO_SIRENE_RATIO, MAX_NEARBY_RESULTS, HOURS_TTL_DAYS, GOOGLE_PLACE_TYPES, CYCLE,
+  COMMUNE_CODES,
 } from '../lib/config'
-import { callsLeft, monthKey, monthWindow, type Window } from '../lib/quota'
+import {
+  callsLeft, monthKey, monthWindow, nextScheduledPass, passCeiling, type Window,
+} from '../lib/quota'
 import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
@@ -39,9 +48,12 @@ import { profileColumns } from '../lib/profile-columns'
 // circle out of it, and replanning by any other rule than the one that drew the plan is
 // how the four-way split came to cost four calls for 12% of the density (D30 rule 2).
 import { distanceInMeters, planRecovery, pointsInCircle } from '../lib/grid'
-// Shared with cron:refresh: the same rules decide what a period owes and what a
-// truncation still hides, so the sweep and the cycle cannot disagree about either.
-import { buildCoverage, countOwed, owesCall } from '../lib/coverage'
+// Shared with cron:refresh and simulate:passes: the same rules decide what a pass refreshes,
+// what it forecasts and what a truncation still hides, so none of them can disagree.
+import {
+  buildCoverIndex, buildResolution, emptyReplays, forecastHorizon, freshShare, outOfReach,
+  planPass, reachOf, type PassPlan,
+} from '../lib/coverage'
 import { errorReason } from '../lib/error-reason'
 
 const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby'
@@ -51,6 +63,13 @@ const COMMUNE_ATTACHMENT_RADIUS = 300
 
 /** Simulates a quota period so spec 10's acceptance criteria can be played, not argued. */
 const AS_OF = '--as-of='
+
+/** What the period may have spent at a given moment: see `passCeiling`. */
+const PASS_CEILINGS = {
+  first: CYCLE.firstPassCeiling,
+  full: SWEEP.maxCallsPerPeriod,
+  secondPassDay: CYCLE.secondPassDay,
+}
 
 /** Arbitrary but fixed: an advisory lock key is only ever compared with itself. */
 const SWEEP_LOCK_KEY = 828_100_128
@@ -63,6 +82,11 @@ type ReservedConnection = Awaited<ReturnType<typeof rawSql.reserve>>
  */
 let heldLock: ReservedConnection | null = null
 let releasing: Promise<void> | null = null
+/**
+ * Set when the lock could not be handed back. Every later pass would be refused by it, so it
+ * fails this one (D39 rule 2) rather than going out as a line in the log.
+ */
+let lockLeak: string | null = null
 /** Whether pg_try_advisory_lock has answered, and whether it granted the lock. */
 let lockAnswered = false
 let lockGranted = false
@@ -125,6 +149,7 @@ async function giveBack(lock: ReservedConnection): Promise<void> {
       // since. A refusal that lands after the unlock was sent still draws Postgres's WARNING —
       // the price of not knowing yet, paid on the safe side.
       if (!unlocked && lockRelease(lockAnswered, lockGranted).warnIfUnlockFails) {
+        lockLeak = 'pg_advisory_unlock returned false: the sweep lock may still be held'
         console.error(
           '! pg_advisory_unlock returned false: this connection did not hold the sweep lock.\n' +
           '  If another backend still holds it, every later sweep will be refused. Check with\n' +
@@ -134,6 +159,7 @@ async function giveBack(lock: ReservedConnection): Promise<void> {
       }
     }
   } catch (error) {
+    lockLeak = `the sweep lock could not be released: ${(error as Error).message}`
     console.error(
       `! the sweep lock could not be released: ${(error as Error).message}\n` +
       '  Every later sweep will be refused until it is cleared. Find the holder with\n' +
@@ -145,7 +171,10 @@ async function giveBack(lock: ReservedConnection): Promise<void> {
   lock.release()
 }
 
+/** No defect, and nothing left owed: the plan converged within the period (D39). */
 const SWEEP_SUCCEEDED = 'succeeded'
+/** No defect, stopped on a planned ceiling — the period's or the 1st pass's (D39). A success. */
+const SWEEP_CAPPED = 'capped'
 const SWEEP_FAILED = 'failed'
 
 /**
@@ -239,7 +268,7 @@ function onStopSignal(signal: keyof typeof EXIT_CODE): void {
 }
 
 type CellRow = typeof cell.$inferSelect
-type QueuedCell = Pick<CellRow, 'id' | 'depth' | 'queriedAt'>
+type QueuedCell = Pick<CellRow, 'id' | 'depth' | 'queriedAt' | 'status'>
 
 interface GooglePlace {
   id?: string
@@ -293,31 +322,38 @@ function distance(aLat: number, aLng: number, bLat: number, bLng: number): numbe
 }
 
 /**
- * Expiry order (D30 rule 1): the cells whose content dies first are bought back first.
+ * The order a pass walks (spec 13 §4): the empty-cell replays it reserved, then the cover —
+ * content due first —, then discovery: the cells never queried, or whose last call failed,
+ * shallow first, the order the plan was written in.
  *
- * A cell's own `queried_at` does not say which cells those are. The plan's cells overlap —
- * every child lies inside its parent's disk, neighbours share their edges — and whichever cell
- * re-finds a restaurant pushes that restaurant's expiry back without touching the `queried_at`
- * of the other cells covering it. Sorted on `queried_at` alone, the queue for 1 November 2026
- * would have spent the whole ceiling on the children queried in September and left the
- * depth-0 cells, queried in October, for the month after: about a third of the hours would
- * have stayed expired for a month.
- *
- * Depth 0 is the level that re-stamps most of the base — on its own it returns about 95% of
- * the known places — so the shallow come first and `queried_at` only breaks ties inside a
- * depth. Never-queried cells sort LAST, freshness before completeness, and among those the
- * shallow before the deep, the order the plan was written in.
+ * Nothing else. A truncated cell is a candidate for the cover up to its 20th result like any
+ * other; the area past it is its recovery cells', which discovery reaches.
  */
-export function byExpiry(a: QueuedCell, b: QueuedCell): number {
-  if (a.queriedAt && b.queriedAt) {
-    return a.depth - b.depth || a.queriedAt.getTime() - b.queriedAt.getTime()
+export function passQueue<C extends QueuedCell>(
+  replays: C[], cover: { cell: C }[], cells: C[],
+): { queue: C[]; discovery: number } {
+  const discovery = cells.filter(owesDiscovery).sort(byDiscovery)
+  return {
+    queue: [...replays, ...cover.map((p) => p.cell), ...discovery],
+    discovery: discovery.length,
   }
-  if (a.queriedAt) return -1
-  if (b.queriedAt) return 1
+}
+
+function owesDiscovery(c: Pick<CellRow, 'status'>): boolean {
+  return c.status === 'pending' || c.status === 'failed'
+}
+
+function byDiscovery(a: QueuedCell, b: QueuedCell): number {
   return a.depth - b.depth || a.id.localeCompare(b.id)
 }
 
 // --- Google call --------------------------------------------------------------------
+
+/** Google refused on quota. Always a defect (D39 rule 2): our counter had to speak first. */
+export class QuotaRefused extends Error {}
+
+/** The pass reached its ceiling. The normal end of a pass, never a failure. */
+export class CeilingReached extends Error {}
 
 async function queryGoogle(lat: number, lng: number, radius: number): Promise<GooglePlace[]> {
   const response = await fetch(NEARBY_SEARCH_URL, {
@@ -340,7 +376,7 @@ async function queryGoogle(lat: number, lng: number, radius: number): Promise<Go
 
   // Here a 429 does not mean "slow down" but "quota exhausted": we do not retry.
   if (response.status === 429) {
-    throw new Error(
+    throw new QuotaRefused(
       `HTTP 429 — Google refused on quota. Our ceiling of ${SWEEP.maxCallsPerPeriod} sits ` +
       `under both the daily cap and the ${FREE_MONTHLY_QUOTA} free monthly calls, so ` +
       'reaching this means the local count is short of what Google counted, or something ' +
@@ -484,13 +520,16 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
 // --- Processing one cell --------------------------------------------------------------
 
 /**
- * Books one call against the quota period, and refuses when it is out. Called BEFORE the
- * request: a call we cannot account for is a call we must not make.
+ * Books one call against the quota period, and refuses when the pass is out. Called BEFORE
+ * the request: a call we cannot account for is a call we must not make.
  *
  * A sweep runs for hours and can outlive its own period, so the period is re-read on every
  * cell rather than once at startup. Crossing into a new one resets the counter to zero:
  * nothing carries over, in either direction (D28). No query needed for that, since nothing
  * else can have queried a cell in a period we have only just entered.
+ *
+ * The ceiling is the pass's, read at the call: the first half of the period stops at
+ * CYCLE.firstPassCeiling, the rest at the period's (D38).
  */
 function spendOne(state: State, now: Date): void {
   if (stopping) throw new Error('stop signal received: no further call is booked')
@@ -501,14 +540,11 @@ function spendOne(state: State, now: Date): void {
     state.periodSpent = 0
   }
 
-  if (callsLeft(state.periodSpent, SWEEP.maxCallsPerPeriod) <= 0) {
-    throw new Error(
-      `ceiling of ${SWEEP.maxCallsPerPeriod} calls reached for ${state.period} ` +
-      `(SWEEP.maxCallsPerPeriod, under the ${FREE_MONTHLY_QUOTA} free ones) — ` +
-      `${state.periodSpent} spent in that period, ${state.calls} of them by this ` +
-      'execution. Stopping before any further spending. Resume once the period rolls ' +
-      'over: the new period owes every cell again, oldest content first, and there is ' +
-      'nothing to replan.',
+  const ceiling = passCeiling(now, PASS_CEILINGS)
+  if (callsLeft(state.periodSpent, ceiling) <= 0) {
+    throw new CeilingReached(
+      `ceiling of ${ceiling} calls reached for this pass of ${state.period} — ` +
+      `${state.periodSpent} spent in the period, ${state.calls} of them by this execution.`,
     )
   }
 
@@ -720,27 +756,130 @@ export function ledgerLossMessage(spend: PeriodSpend, period: string): string | 
   )
 }
 
+// --- What fails a pass (D39) ------------------------------------------------------------
+
+export interface PassFacts {
+  /** What stopped the walk, unless it was a planned ceiling — that is the normal end. */
+  interruption: Error | null
+  /** Why the pass refused to start: the lock is held, the ledger proves nothing, or the ceiling is spent. */
+  refusal: string | null
+  /** The lock could not be handed back: every later pass would be refused by it. */
+  lockLeak: string | null
+  failedCells: number
+  irreducibleCells: number
+  /** Truncated cells without a single recovery cell: the recovery was lost. */
+  orphanTruncations: number
+  /** Share of the records with hours usable at the worst hour before the next pass. */
+  forecast: number
+}
+
+/**
+ * The defects of a pass, all of them and only them (D39). An empty list is a green pass.
+ *
+ * What is NOT here is the point: cells still owed, discovery waiting, truncations whose
+ * recovery waits its turn, the ceiling reached. Those are there every month; a red that comes
+ * every month is a red nobody reads.
+ */
+export function passFailures(f: PassFacts): string[] {
+  const reasons: string[] = []
+  if (f.refusal) reasons.push(`refused to start: ${f.refusal}`)
+  if (f.interruption instanceof QuotaRefused) {
+    reasons.push(`Google refused on quota — our counter should have spoken first: ${errorReason(f.interruption)}`)
+  } else if (f.interruption) {
+    reasons.push(`interrupted: ${errorReason(f.interruption)}`)
+  }
+  if (f.lockLeak) reasons.push(f.lockLeak)
+  if (f.failedCells > 0) reasons.push(`${f.failedCells} failed cell(s): paid for, no result`)
+  if (f.irreducibleCells > 0) {
+    reasons.push(`${f.irreducibleCells} irreducible cell(s): a hole nothing covers, until someone decides`)
+  }
+  if (f.orphanTruncations > 0) {
+    reasons.push(`${f.orphanTruncations} truncated cell(s) without any recovery cell: the recovery was lost`)
+  }
+  if (f.forecast < CYCLE.freshnessFloor) {
+    reasons.push(
+      `forecast freshness ${percentOf(f.forecast)} at the worst hour before the next pass, under ` +
+      `${percentOf(CYCLE.freshnessFloor)}: the list is going dark beyond the structural dip`,
+    )
+  }
+  return reasons
+}
+
+/** `capped` on a planned ceiling, `succeeded` when nothing is left owed, `failed` on any defect. */
+export function passStatus(failures: string[], reachedCeiling: boolean): string {
+  if (failures.length > 0) return SWEEP_FAILED
+  return reachedCeiling ? SWEEP_CAPPED : SWEEP_SUCCEEDED
+}
+
+/** Truncated cells that no recovery cell answers for. */
+function orphanTruncations(cells: Pick<CellRow, 'id' | 'parentId' | 'status'>[]): number {
+  const parents = new Set(cells.map((c) => c.parentId).filter(Boolean))
+  return cells.filter((c) => c.status === 'truncated' && !parents.has(c.id)).length
+}
+
 // --- Summary --------------------------------------------------------------------------
 
 function percent(part: number, total: number): string {
   return total === 0 ? '—' : `${Math.round((part / total) * 100)}%`
 }
 
+function percentOf(share: number): string {
+  return `${(100 * share).toFixed(1)}%`
+}
+
+/** The forecast once a pass is over: read on the expiries it actually wrote. */
+async function storedForecast(nextPass: Date): Promise<number> {
+  const rows = await db.select({ expiresAt: restaurant.hoursExpiresAt }).from(restaurant)
+  return freshShare(rows.map((r) => r.expiresAt), forecastHorizon(nextPass))
+}
+
+/** Who holds the sweep lock, if anyone: a dry run cannot take it, but it can see it taken. */
+async function lockHolder(): Promise<string | null> {
+  const rows = await rawSql.unsafe(LOCK_HOLDER_QUERY) as unknown as { pid: number }[]
+  return rows.length === 0
+    ? null
+    : `the sweep lock is held by backend ${rows.map((r) => r.pid).join(', ')}: every pass will be ` +
+      `refused until it is released. Check whether a sweep is running; if none is, terminate that backend.`
+}
+
+function printPlan(plan: PassPlan<CellRow>, chosenLabel: string) {
+  const line = (label: string, cover: PassPlan<CellRow>['robust'], cost: number) =>
+    console.log(
+      `  ${label.padEnd(22)}: ${String(cost).padStart(4)} cells for the whole cover · this pass ` +
+      `${String(cover.picks.length).padStart(4)}, forecast ${percentOf(cover.forecast)}` +
+      (cover === plan.chosen ? '   <- served' : ''),
+    )
+  console.log('\nCOVER (D36) — what one refresh costs, and what this pass serves of it')
+  line('robust cover', plan.robust, plan.robustCost)
+  line('known-records cover', plan.known, plan.knownCost)
+  if (plan.chosen === plan.known && plan.known.picks.length > 0) {
+    console.log(
+      `  The robust cover forecasts ${percentOf(plan.robust.forecast)}, under the ` +
+      `${percentOf(CYCLE.freshnessTarget)} D38 aims for: the cover of known records replaces it ` +
+      '(D36 rule 3), and new places in SIRENE-only ground wait for discovery.',
+    )
+  }
+  console.log(`  ${chosenLabel}`)
+}
+
 // --- Main program -----------------------------------------------------------------------
+
+const SIMULATE_FAULT = '--simulate-fault='
+const FAULTS = ['429', 'interrupt'] as const
 
 async function main() {
   const args = process.argv.slice(2)
   const unknown = args.filter(
-    (a) => !['--go', '--dry-run', '--force'].includes(a) && !a.startsWith(AS_OF),
+    (a) => !['--go', '--dry-run'].includes(a) && !a.startsWith(AS_OF) && !a.startsWith(SIMULATE_FAULT),
   )
   if (unknown.length) {
     console.error(
-      `Unknown options: ${unknown.join(' ')}. Expected: --go, --dry-run, --force, ${AS_OF}<ISO date>`,
+      `Unknown options: ${unknown.join(' ')}. Expected: --go, --dry-run, ${AS_OF}<ISO date>, ` +
+      `${SIMULATE_FAULT}${FAULTS.join('|')}`,
     )
     process.exit(1)
   }
   const go = args.includes('--go')
-  const force = args.includes('--force')
 
   // Reading what another period would allow is useful; letting a run that SPENDS pick its
   // own clock would be a way to talk the ceiling out of its budget. Dry run only.
@@ -756,6 +895,13 @@ async function main() {
   const asOf = asOfArgs[0]?.slice(AS_OF.length)
   if (asOf && go) {
     console.error('--as-of simulates a quota period and cannot be combined with --go.')
+    process.exit(1)
+  }
+  // A rehearsal of D39's defects: the dry walk stops halfway through what it would spend, as a
+  // real one would. Never with --go, where the faults are real.
+  const fault = args.find((a) => a.startsWith(SIMULATE_FAULT))?.slice(SIMULATE_FAULT.length)
+  if (fault !== undefined && (go || !FAULTS.includes(fault as typeof FAULTS[number]))) {
+    console.error(`${SIMULATE_FAULT} takes ${FAULTS.join(' or ')}, and only in a dry run.`)
     process.exit(1)
   }
   const now = asOf ? new Date(asOf) : new Date()
@@ -781,8 +927,7 @@ async function main() {
     process.exit(1)
   }
 
-  // 1. The plan. Every cell of it owes a call once per quota period, so a run whose cells
-  // are all `done` is a run to replay — not a run with nothing left to do.
+  // 1. The plan. The sweep does not invent its own grid.
   const plannedRuns = await db.selectDistinct({ runId: cell.sweepRunId }).from(cell)
 
   if (plannedRuns.length === 0) {
@@ -816,87 +961,111 @@ async function main() {
   const cells = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
   const planned = cells.filter((c) => !c.parentId).length
 
-  // One plan, walked in the order its content expires. Not a refresh budget and a discovery
-  // budget to split: the cells whose content dies first come first, and what the quota
-  // leaves goes to the ones never queried (D30 rule 1).
+  // 2. What the cover has to contain: every record with hours, and every geocoded SIRENE point
+  // of the perimeter — where restaurants open before Google has a page for them (D36 rule 3).
+  const records = await db.select({
+    lat: restaurant.lat, lng: restaurant.lng, hoursExpiresAt: restaurant.hoursExpiresAt,
+    name: restaurant.name,
+  }).from(restaurant)
+  const points = await db
+    .select({
+      lat: sireneEstablishment.lat,
+      lng: sireneEstablishment.lng,
+      communeCode: sireneEstablishment.communeCode,
+      commune: sireneEstablishment.commune,
+    })
+    .from(sireneEstablishment)
+    .where(and(
+      isNotNull(sireneEstablishment.lat),
+      isNotNull(sireneEstablishment.lng),
+      gte(sireneEstablishment.geocodeScore, GRID.minGeocodeScore),
+    )) as SirenePoint[]
+  const perimeter = new Set<string>(COMMUNE_CODES)
+  const index = buildCoverIndex(cells, records, points.filter((p) => perimeter.has(p.communeCode)))
+
+  // 3. What the period, and this pass, still allow. Read on the QUOTA PERIOD, never on the
+  // run: judging on the run total deadlocked the resume (D28).
   const periodWindow = monthWindow(now)
-  const owedCells = cells.filter((c) => owesCall(c, periodWindow)).sort(byExpiry)
-  const toRefresh = owedCells.filter((c) => c.queriedAt).length
-  const toDiscover = owedCells.length - toRefresh
-
-  // 2. Recency: the quota is monthly, two sweeps in a month consume it entirely.
-  const [lastSucceeded] = await db.select().from(sweepRun)
-    .where(eq(sweepRun.status, SWEEP_SUCCEEDED))
-    .orderBy(desc(sweepRun.finishedAt))
-    .limit(1)
-
-  const daysSince = lastSucceeded?.finishedAt
-    ? (now.getTime() - lastSucceeded.finishedAt.getTime()) / 86_400_000
-    : Infinity
-  const tooRecent = daysSince < SWEEP.daysBetweenSweeps
-
-  // What the CURRENT QUOTA PERIOD still allows — not what this run has spent since it
-  // opened. Judging the refusal on the run total deadlocked the resume: the total only
-  // ever rises, so a run that reached the ceiling could never spend again (D28).
   const period = monthKey(now)
   const spend = await spentIn(periodWindow)
   const periodSpent = spend.charged
-  const headroom = callsLeft(periodSpent, SWEEP.maxCallsPerPeriod)
+  const ceiling = passCeiling(now, PASS_CEILINGS)
+  const headroom = callsLeft(periodSpent, ceiling)
   const ledgerLoss = ledgerLossMessage(spend, period)
-  // Still on screen because it is the logbook figure D22 was written from. It decides nothing.
-  const runTotalToDate = knownRuns[0]?.callsMade ?? 0
+  const nextPass = nextScheduledPass(now, CYCLE.scheduleDays, CYCLE.scheduleHourUtc)
 
-  console.log('--- Sweep plan ---')
+  // 4. The empty cells this pass replays, then the cover, then discovery. Recomputed on every
+  // pass, on the latest results (D36).
+  const secondPass = ceiling >= SWEEP.maxCallsPerPeriod
+  const replays = emptyReplays(index.empty, now, secondPass).slice(0, headroom)
+  const plan = planPass(index, { now, nextPass, ceiling: headroom - replays.length })
+  const { queue, discovery } = passQueue(replays, plan.chosen.picks, cells)
+  const unreached = outOfReach(index)
+  const irreducibleCells = cells.filter((c) => c.status === 'irreducible').length
+  const orphans = orphanTruncations(cells)
+
+  console.log('--- Pass plan ---')
   console.log(`run                     : ${runId}`)
   console.log(`cells in the plan       : ${cells.length}  (${planned} at depth 0)`)
-  console.log(`CALLS OWED FOR ${period}  : ${owedCells.length}`)
-  console.log(`  content to buy back   : ${toRefresh}  (queried in an earlier period)`)
-  console.log(`  never queried         : ${toDiscover}`)
-  console.log('  + the cells a truncation adds, until convergence')
-  console.log(`spent this period       : ${periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${period})`)
+  console.log(`this pass               : ${secondPass ? 'second' : 'first'} of ${period}, ceiling ${ceiling}` +
+    (secondPass ? '' : ` (the 16th takes the rest, up to ${SWEEP.maxCallsPerPeriod})`))
+  console.log(`spent this period       : ${periodSpent}  (${period})`)
   console.log(`  cells stamped         : ${spend.stamped}`)
   console.log(`  logbook floor         : ${spend.logged}  (sweep_run, survives deleted cells)`)
-  console.log(`THIS RUN CAN SPEND      : ${headroom}  before the ceiling stops it`)
-  console.log(`run total to date       : ${runTotalToDate}  (logbook only, no longer the refusal)`)
+  console.log(`THIS PASS CAN SPEND     : ${headroom}`)
+  console.log(`next scheduled pass     : ${nextPass.toISOString()}  (+${CYCLE.maxScheduleDelayHours} h at worst)`)
 
-  // The order is the rule, so it is printed rather than asserted: the head of the queue is
-  // what a dry run is read for before a period is paid for.
-  if (toRefresh > 0) {
-    const head = owedCells.filter((c) => c.queriedAt).slice(0, 3)
-    const tail = owedCells.filter((c) => c.queriedAt).slice(-1)
-    const label = (c: CellRow) => `${c.queriedAt!.toISOString().slice(0, 10)} (depth ${c.depth})`
-    console.log(`first to be bought back : ${head.map(label).join(', ')} … ${tail.map(label).join('')}`)
+  printPlan(plan,
+    `this pass serves       : ${plan.chosen.picks.length} cover cell(s), ${plan.chosen.urgent} of them for ` +
+    `content due before the next pass + ${CYCLE.urgentMarginHours} h`)
+  console.log(`  out of every reach    : ${unreached.records.length} record(s) with hours, ` +
+    `${unreached.sirene} SIRENE point(s) — no cover can refresh them`)
+  for (const r of unreached.records.slice(0, 10)) {
+    console.log(`    ${r.name ?? '(sans nom)'} — ${r.lat.toFixed(5)},${r.lng.toFixed(5)}`)
   }
-
-  if (headroom === 0) {
-    console.warn('! the ceiling for this period is already reached: nothing can be spent.')
-  } else if (owedCells.length > headroom) {
-    console.warn(
-      `! ${owedCells.length} cells owed for ${headroom} call(s) left: the run will be cut ` +
-      'short and what it does not reach stays old, counted, and said in the banner. ' +
-      'Nothing to replan.',
-    )
-  }
-  if (tooRecent) {
-    console.warn(
-      `! a sweep succeeded ${daysSince.toFixed(1)} day(s) ago, ` +
-      `less than the ${SWEEP.daysBetweenSweeps} days required.`,
-    )
-  }
+  console.log(`EMPTY CELLS             : ${index.empty.length} out of the cover, ${replays.length} replayed by this pass` +
+    (secondPass ? ` (reserve ${CYCLE.emptyReplayReserve})` : ' (only the 16th replays them)'))
+  console.log(`DISCOVERY BACKLOG       : ${discovery} cell(s) never queried, or failed  (reported, never red)`)
+  console.log(`QUEUE                   : ${Math.min(queue.length, headroom)} call(s) within the ceiling, of ` +
+    `${queue.length} queued — replays, then the cover, then discovery`)
+  console.log(`FORECAST                : ${percentOf(plan.chosen.forecast)} of the records with hours usable at ` +
+    `${forecastHorizon(nextPass).toISOString()}, the worst hour before the next pass  ` +
+    `(fails under ${percentOf(CYCLE.freshnessFloor)}, D39)`)
   if (ledgerLoss) console.warn(`! ${ledgerLoss}`)
 
+  // Every refusal to start is a defect (D39 rule 2): it says what it is waiting for.
+  const spentOut = headroom === 0
+    ? `${periodSpent} of ${ceiling} calls already spent in this pass of ${period}`
+    : null
+
   if (!go) {
+    let interruption: Error | null = null
+    if (fault) {
+      const at = Math.max(1, Math.floor(Math.min(queue.length, headroom) / 2))
+      interruption = fault === '429'
+        ? new QuotaRefused(`HTTP 429 simulated at call ${at}`)
+        : new Error(`interruption simulated at call ${at}`)
+      console.log(`\nSIMULATED FAULT — ${interruption.message}.`)
+    }
+    const reasons = passFailures({
+      interruption,
+      refusal: (await lockHolder()) ?? ledgerLoss ?? spentOut,
+      lockLeak: null,
+      failedCells: 0,
+      irreducibleCells,
+      orphanTruncations: orphans,
+      forecast: plan.chosen.forecast,
+    })
     console.log('\nDRY RUN — no call made, nothing written. Add --go to actually spend.')
+    if (reasons.length > 0) {
+      console.error(`PASS WOULD FAIL — ${reasons.join(' ; ')}`)
+      process.exit(1)
+    }
+    console.log(`The pass would end ${queue.length > headroom ? SWEEP_CAPPED : SWEEP_SUCCEEDED}: ` +
+      'what it leaves is reported, not a failure.')
     process.exit(0)
   }
 
-  if (tooRecent && !force) {
-    console.error(
-      '\nREFUSING TO START: the Google quota is monthly and a full sweep consumes two ' +
-      'thirds of it. Rerun after that delay, or force with --force knowingly.',
-    )
-    process.exit(1)
-  }
   if (!process.env.GOOGLE_PLACES_API_KEY) {
     console.error('GOOGLE_PLACES_API_KEY is missing — see .specs/technique/08-infrastructure.md')
     process.exit(1)
@@ -908,11 +1077,10 @@ async function main() {
     console.error(`\nREFUSING TO START: ${ledgerLoss}`)
     process.exit(1)
   }
-  if (headroom === 0) {
+  if (spentOut) {
     console.error(
-      `\nREFUSING TO START: ${periodSpent} of ${SWEEP.maxCallsPerPeriod} calls already spent ` +
-      `in ${period}. Nothing is left to spend before the period rolls over. The run is ` +
-      'untouched and resumes then, with nothing to replan.',
+      `\nREFUSING TO START: ${spentOut}. Nothing is left to spend before the next pass's ceiling ` +
+      'opens or the period rolls over. The run is untouched.',
     )
     process.exit(1)
   }
@@ -964,16 +1132,16 @@ async function main() {
     process.exit(1)
   }
   const lockedPeriodSpent = lockedSpend.charged
-  if (callsLeft(lockedPeriodSpent, SWEEP.maxCallsPerPeriod) <= 0) {
+  if (callsLeft(lockedPeriodSpent, ceiling) <= 0) {
     console.error(
-      `\nREFUSING TO START: ${lockedPeriodSpent} of ${SWEEP.maxCallsPerPeriod} calls were ` +
-      `spent in ${period} while this execution was starting up. Nothing left to spend.`,
+      `\nREFUSING TO START: ${lockedPeriodSpent} of ${ceiling} calls were spent in ${period} ` +
+      'while this execution was starting up. Nothing left to spend.',
     )
     await releaseLock()
     process.exit(1)
   }
 
-  // 3. The run may already exist (created by plan:cells, or interrupted and resumed).
+  // 5. The run may already exist (created by plan:cells, or interrupted and resumed).
   await db.insert(sweepRun).values({ id: runId, cellsPlanned: planned }).onConflictDoNothing()
   await db.update(sweepRun)
     .set({ cellsPlanned: planned, finishedAt: null, status: 'running', error: null })
@@ -985,31 +1153,13 @@ async function main() {
   const previousCellsQueried = current.cellsQueried
   const runStartedAt = current.startedAt ?? new Date()
 
-  // A failed cell never returned a result: the resume has to replay it.
+  // A failed cell never returned a result: discovery has to replay it.
   const toRetry = cells.filter((c) => c.status === 'failed').length
   if (toRetry > 0) {
     await db.update(cell).set({ status: 'pending' })
       .where(and(eq(cell.sweepRunId, runId), eq(cell.status, 'failed')))
     console.log(`${toRetry} failed cell(s) put back to pending.`)
   }
-  const alreadyFresh = cells.length - owedCells.length
-  if (alreadyFresh > 0) {
-    console.log(`${alreadyFresh} cell(s) already queried in ${period}, not replayed.`)
-  }
-
-  const points = await db
-    .select({
-      lat: sireneEstablishment.lat,
-      lng: sireneEstablishment.lng,
-      communeCode: sireneEstablishment.communeCode,
-      commune: sireneEstablishment.commune,
-    })
-    .from(sireneEstablishment)
-    .where(and(
-      isNotNull(sireneEstablishment.lat),
-      isNotNull(sireneEstablishment.lng),
-      gte(sireneEstablishment.geocodeScore, GRID.minGeocodeScore),
-    ))
 
   if (points.length === 0) {
     console.warn(
@@ -1026,88 +1176,99 @@ async function main() {
     seen: new Set(),
     withHours: new Set(),
     withoutCommune: new Set(),
-    sirenePoints: points as SirenePoint[],
+    sirenePoints: points,
     quarterFallbacks: 0,
   }
   openRun = { id: runId, previousCalls, previousCellsQueried, state }
 
   console.log('\n--- Sweep running ---')
   let interruption: Error | null = null
+  let reachedCeiling = false
 
-  // What THIS execution has already paid for. A run can outlive its period, and the next
-  // one owes every cell again — without this the queue would hand back cells the run has
-  // just bought, for as long as it kept going.
+  // What THIS execution has already paid for, and what it has been served: a cell whose call
+  // threw was paid for and served nothing.
   const queriedHere = new Set<string>()
+  const served = new Set<string>()
 
   try {
-    // Wave after wave: the cells a truncation adds are picked up on the next pass.
-    for (;;) {
-      const inPlan = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
-      const batch = inPlan
-        .filter((c) => owesCall(c, periodWindow) && !queriedHere.has(c.id))
-        .sort(byExpiry)
-      if (batch.length === 0) break
-
-      for (const c of batch) {
+    // Wave after wave: the cells a truncation adds are discovery, picked up while the
+    // ceiling allows.
+    let wave: CellRow[] = queue
+    while (wave.length > 0) {
+      for (const c of wave) {
         // Sequential and never parallel: the call counter has to stay exact.
         queriedHere.add(c.id)
         await processCell(c, state)
+        served.add(c.id)
         if (state.cellsQueried % 25 === 0) {
           console.log(`  ${state.calls} calls, ${state.seen.size} establishments`)
         }
       }
+      const inPlan = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
+      wave = inPlan.filter((c) => owesDiscovery(c) && !queriedHere.has(c.id)).sort(byDiscovery)
     }
   } catch (error) {
-    // Any error stops the sweep: keeping on calling an API that answers badly is spending
-    // without collecting. What this period already bought is not bought twice on resume.
-    interruption = error as Error
-    console.error(`\nSWEEP HALTED IMMEDIATELY — ${errorReason(interruption)}`)
+    if (error instanceof CeilingReached) {
+      reachedCeiling = true
+      console.log(`\n${error.message} The pass ends here.`)
+    } else {
+      // Any other error stops the pass: keeping on calling an API that answers badly is
+      // spending without collecting.
+      interruption = error as Error
+      console.error(`\nSWEEP HALTED IMMEDIATELY — ${errorReason(interruption)}`)
+    }
   }
 
-  // 4. Summary. It is authoritative: it is what decides whether the sweep succeeded.
+  // 6. Summary, and the verdict D39 writes.
   const finalCells = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
-  const isCovered = buildCoverage(finalCells)
+  const isResolved = buildResolution(finalCells)
   const truncatedCells = finalCells.filter((c) => c.status === 'truncated')
-  const resolved = truncatedCells.filter(isCovered).length
+  const resolved = truncatedCells.filter(isResolved).length
   const unresolved = truncatedCells.length - resolved
   const irreducible = finalCells.filter((c) => c.status === 'irreducible').length
   const failed = finalCells.filter((c) => c.status === 'failed').length
-  // What the period still owes, refresh and discovery in one figure — the plan is one queue.
-  const stillOwed = countOwed(finalCells, periodWindow)
-  const neverQueried = finalCells.filter((c) => !c.queriedAt).length
+  const backlog = finalCells.filter(owesDiscovery).length
+  const after = new Map(finalCells.map((c) => [c.id, c]))
+  // A cover cell whose reach shrank — it truncated, or its 20th result came closer — covers
+  // less from now on; the next pass's cover has other cells take over, and costs as much more.
+  const shrank = plan.chosen.picks.filter((p) => served.has(p.cell.id)
+    && (reachOf(after.get(p.cell.id)!) ?? 0) < (reachOf(p.cell) ?? 0)).length
+  const forecast = await storedForecast(nextPass)
 
-  const reasons: string[] = []
-  if (unresolved > 0) reasons.push(`${unresolved} unresolved truncation(s)`)
-  if (irreducible > 0) reasons.push(`${irreducible} irreducible cell(s)`)
-  if (failed > 0) reasons.push(`${failed} failed cell(s)`)
-  if (stillOwed > 0) reasons.push(`${stillOwed} cell(s) still owed for ${period}`)
-  if (interruption) reasons.push(`interrupted: ${errorReason(interruption)}`)
+  const reasons = passFailures({
+    interruption, refusal: null, lockLeak: null, failedCells: failed,
+    irreducibleCells: irreducible, orphanTruncations: orphanTruncations(finalCells), forecast,
+  })
 
   // Cumulative across resumes: this is the counter we compare with the billing console.
   const [{ runTotal }] = await db.select({ runTotal: count() }).from(restaurant)
     .where(gte(restaurant.lastSeenAt, runStartedAt))
   const resumed = previousCalls > 0
+  const coverServed = plan.chosen.picks.filter((p) => served.has(p.cell.id)).length
 
   console.log('\n--- Sweep summary ---')
-  console.log(`cells planned            : ${planned}`)
-  console.log(`cells queried            : ${state.cellsQueried}`)
-  console.log(`CALLS SPENT              : ${state.calls}  (owed at the start: ${owedCells.length})`)
-  console.log(`spent this period        : ${state.periodSpent} / ${SWEEP.maxCallsPerPeriod}  (${state.period})`)
+  console.log(`CALLS SPENT              : ${state.calls}${reachedCeiling ? '  (the pass ceiling ended it)' : ''}`)
+  console.log(`spent this period        : ${state.periodSpent}  (${state.period})`)
   if (resumed) {
     console.log(`  run total              : ${previousCalls + state.calls} calls, ` +
       `${previousCellsQueried + state.cellsQueried} cells queried`)
   }
+  console.log(`empty cells replayed     : ${replays.filter((c) => served.has(c.id)).length} of ${replays.length}`)
+  console.log(`cover cells served       : ${coverServed} of ${plan.chosen.picks.length} ` +
+    `(${plan.chosen.robust ? 'robust' : 'known-records'} cover)`)
+  console.log(`  reach shrank           : ${shrank}  (they cover less from the next pass on)`)
   console.log(`truncations resolved     : ${resolved}`)
-  console.log(`truncations UNRESOLVED   : ${unresolved}`)
+  console.log(`truncations awaiting     : ${unresolved}  (their recovery waits its turn — reported, never red)`)
   console.log(`irreducible cells        : ${irreducible}`)
   console.log(`truncations split by quarters: ${state.quarterFallbacks}  (no density plan covered the disk in fewer calls)`)
   console.log(`failed cells             : ${failed}`)
-  console.log(`cells STILL OWED         : ${stillOwed}  (${period})`)
-  console.log(`  of them never queried  : ${neverQueried}`)
+  console.log(`discovery backlog        : ${backlog}  (reported, never red)`)
   console.log(`establishments found     : ${state.seen.size}`)
   if (resumed) console.log(`  run total              : ${runTotal}`)
   console.log(`  with opening hours     : ${state.withHours.size} (${percent(state.withHours.size, state.seen.size)})`)
   console.log(`  without a commune      : ${state.withoutCommune.size}`)
+  console.log(`FORECAST                 : ${percentOf(forecast)} usable at ${forecastHorizon(nextPass).toISOString()}, ` +
+    'the worst hour before the next pass')
 
   if (irreducible > 0) {
     const list = finalCells.filter((c) => c.status === 'irreducible')
@@ -1120,11 +1281,10 @@ async function main() {
     }
   }
 
-  const succeeded = reasons.length === 0
   // Cleared before the write rather than after: a signal landing during it must not
   // overwrite the summary with a bare "interrupted".
   openRun = null
-  await db.update(sweepRun).set({
+  const writeRun = (failures: string[]) => db.update(sweepRun).set({
     finishedAt: new Date(),
     cellsPlanned: planned,
     cellsQueried: previousCellsQueried + state.cellsQueried,
@@ -1132,21 +1292,25 @@ async function main() {
     truncatedUnresolved: unresolved,
     irreducibleCells: irreducible,
     placesFound: runTotal,
-    status: succeeded ? SWEEP_SUCCEEDED : SWEEP_FAILED,
-    error: succeeded ? null : reasons.join(' ; '),
+    status: passStatus(failures, reachedCeiling),
+    error: failures.length === 0 ? null : failures.join(' ; '),
   }).where(eq(sweepRun.id, runId))
+  await writeRun(reasons)
 
   await releaseLock()
+  // Known only once the lock is given back, and it fails the pass like the rest: every later
+  // pass would be refused by it.
+  if (lockLeak) {
+    reasons.push(lockLeak)
+    await writeRun(reasons).catch(() => {})
+  }
 
-  if (!succeeded) {
-    console.error(`\nSWEEP FAILED — ${reasons.join(' ; ')}`)
-    console.error('A silently incomplete database is worse than a script in error: ' +
-      'resume this run once the cause is handled. Cells already queried in this period are ' +
-      'not replayed before the next one.')
+  if (reasons.length > 0) {
+    console.error(`\nPASS FAILED — ${reasons.join(' ; ')}`)
     process.exit(1)
   }
 
-  console.log('\nSweep succeeded. Next in the pipeline: match:sirene then compute:profiles.')
+  console.log(`\nPass ${passStatus(reasons, reachedCeiling)}. Next in the pipeline: match:sirene then compute:profiles.`)
   process.exit(0)
 }
 
@@ -1159,7 +1323,7 @@ async function main() {
 // otherwise make a live run exit 0 having spent nothing — reported as a success — and a dry
 // cycle rehearse nothing. No test passes these flags.
 const invokedAsScript = process.argv.slice(2)
-  .some((a) => a === '--go' || a === '--dry-run' || a === '--force' || a.startsWith(AS_OF))
+  .some((a) => a === '--go' || a === '--dry-run' || a.startsWith(AS_OF) || a.startsWith(SIMULATE_FAULT))
 if (!process.env.VITEST || invokedAsScript) {
   process.on('SIGINT', () => onStopSignal('SIGINT'))
   process.on('SIGTERM', () => onStopSignal('SIGTERM'))

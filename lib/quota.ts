@@ -101,6 +101,33 @@ export function monthKey(now: Date): string {
 }
 
 /**
+ * What the period may have spent by `now`: the first pass's ceiling until the second pass's
+ * day opens, the period's full ceiling from then on (D38).
+ *
+ * Read on the period's total, never on an execution's. A manual rerun on the 3rd shares the
+ * first half with the 1st's pass — otherwise every rerun would open another first half.
+ * And on the Pacific calendar, like the period: the 16th's pass fires at 09:00 UTC, which is
+ * already the 16th in California.
+ */
+export function passCeiling(
+  now: Date, ceilings: { first: number; full: number; secondPassDay: number },
+): number {
+  return partsIn(now).day < ceilings.secondPassDay ? ceilings.first : ceilings.full
+}
+
+/**
+ * The next scheduled pass strictly after `now`, on the UTC calendar sweep.yml's cron reads.
+ *
+ * Its start, not its end: GitHub may begin it hours late, which the caller adds.
+ */
+export function nextScheduledPass(now: Date, days: readonly number[], hourUtc: number): Date {
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth()
+  const candidates = [...days.map((d) => Date.UTC(year, month, d, hourUtc)), Date.UTC(year, month + 1, days[0], hourUtc)]
+  return new Date(candidates.find((t) => t > now.getTime())!)
+}
+
+/**
  * Calls the period still allows.
  *
  * Nothing carries over from one period to the next, in either direction: the leftovers of a

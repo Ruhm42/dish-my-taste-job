@@ -156,12 +156,75 @@ export const SWEEP = {
   maxCallsPerPeriod: 900,
   /** Subdivision depth beyond which a cell is declared irreducible. */
   maxDepth: 4,
-  /**
-   * A sweep that succeeded within the last N days blocks any new run.
-   * The quota is monthly: two sweeps in one month would consume it entirely.
-   */
-  daysBetweenSweeps: 25,
 } as const
+
+/**
+ * The two passes of a month (D38), and what fails one (D39).
+ *
+ * The 25-day refusal that used to sit in SWEEP is gone: it would refuse the 16th's pass
+ * whenever the 1st's succeeded. What bounds a month is the period ceiling, manual reruns
+ * included, and `firstPassCeiling` bounds its first half.
+ */
+export const CYCLE = {
+  /**
+   * What the period may have spent before the 16th. The 16th's pass takes the rest, up to
+   * SWEEP.maxCallsPerPeriod.
+   *
+   * The value that maximises the worst hour in `simulate:passes`, twelve months from
+   * 1 November 2026 on a copy of production taken on 2026-10-17 (D38 rule 1). With the cover
+   * drawn on each cell's reach — 622 calls robust, 560 for the known records — the worst hour
+   * reads 85.5% at 600, 87.4% at 550, 89.7% at 500, 90.9% at 475, 91.5% at 450, 89.9% at 425
+   * and 89.0% at 400, the same on ten draws of GitHub's delays. At 600 the 16th has 300 calls
+   * to buy back what the 1st refreshed before it lapses at the end of a 31-day month.
+   * Rerun the simulation whenever the cover's rule changes or its cost moves by a few dozen.
+   */
+  firstPassCeiling: 450,
+  /** Day of the Pacific month from which the period's full ceiling opens. */
+  secondPassDay: 16,
+  /** When sweep.yml fires both passes. The two must agree. */
+  scheduleDays: [1, 16],
+  scheduleHourUtc: 9,
+  /** GitHub has started the scheduled run up to seven hours late (measured, D38). */
+  maxScheduleDelayHours: 7,
+  /**
+   * Content due before the next pass plus this margin is served first (D38 rule 3): the next
+   * pass can start seven hours late and takes a while to reach any given cell.
+   */
+  urgentMarginHours: 12,
+  /** D39 rule 3: under this, the forecast worst hour fails the cycle. */
+  freshnessFloor: 0.8,
+  /**
+   * D38's acceptance target for the worst hour. The robust cover is used while its forecast
+   * keeps this; under it, the cover of known records replaces it (D36 rule 3).
+   */
+  freshnessTarget: 0.85,
+  /** An empty cell is replayed once a semester (D36 rule 4). */
+  emptyReplayDays: 182,
+  /**
+   * Calls the 16th's pass sets aside for empty cells owed their replay, before any content
+   * (D38 rule 2). The cover takes the whole budget otherwise, and they would never be called:
+   * 97 cells over six months is about fifteen a month.
+   */
+  emptyReplayReserve: 15,
+} as const
+
+/**
+ * How far past a cell's reach a point may sit and still count as inside it (D36).
+ *
+ * A millimetre, not a margin. The points that set a cell's radius sit exactly on its edge,
+ * and the database serves floats rounded to 15 significant digits: a strict test drops ~116
+ * of them. The 10 m margin is D45's, for settling an absence — applied to choosing cells it
+ * left 179 to 196 records out of every cover.
+ */
+export const CONTAINMENT_TOLERANCE_METERS = 0.001
+
+/**
+ * Share of queried cells that truncate, by depth, measured in production on 2026-10-17
+ * (D37): 26.3% at depth 0, 24.1% at 1, 22.2% at 2. Deeper levels have no measurement yet and
+ * reuse the last one. Each truncation adds CELLS_PER_TRUNCATION cells, so each truncated cell
+ * begets about one more at depths 0 and 1: the tree dies out slowly, around 3,100 cells.
+ */
+export const RETRUNCATION_RATE_BY_DEPTH = [0.263, 0.241, 0.222] as const
 
 /**
  * Share of cells at the density ceiling that truncate anyway.
