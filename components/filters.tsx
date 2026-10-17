@@ -62,8 +62,8 @@ export function FiltersPanel({ activeCount, hoursRequired }: { activeCount: numb
       </Section>
 
       <Section title="Rythme de travail">
-        <Choice label="Sans coupure" options={[
-          ['', 'Peu importe'], ['sans', 'Oui'], ['sans-ou-probable', 'Oui ou probablement'],
+        <Choice label="Coupure" options={[
+          ['', 'Peu importe'], ['sans', 'Sans coupure'],
         ]} value={valueOf('coupure')} onChange={(x) => set('coupure', x)} />
 
         <Choice label="Week-end" options={[

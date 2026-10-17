@@ -14,7 +14,8 @@ import { restaurant } from './db/schema'
  */
 export interface Filters {
   zones: string[]
-  splitShift: 'sans' | 'sans-ou-probable' | ''
+  /** Binary since D31: "Sans coupure" or "Peu importe". */
+  splitShift: 'sans' | ''
   weekend: 'libre' | 'dimanche' | ''
   twoDaysOff: boolean
   /** Values of the `category` enum, e.g. `bistro`, `fast_food`. */
@@ -94,7 +95,10 @@ export function parseFilters(params: Record<string, string | string[] | undefine
   const one = (k: string) => (Array.isArray(params[k]) ? params[k]![0] : params[k]) ?? ''
   return {
     zones: toList(params.zone),
-    splitShift: one('coupure') as Filters['splitShift'],
+    // `sans-ou-probable` ("Oui ou probablement") was retired by D31 — it only added the eight
+    // "Coupure peu probable" rows to "Oui". Saved links still carry it, and "Sans coupure" is
+    // what they nearly meant. Any other value reads as no criterion.
+    splitShift: ['sans', 'sans-ou-probable'].includes(one('coupure')) ? 'sans' : '',
     weekend: one('weekend') as Filters['weekend'],
     twoDaysOff: one('repos2') === '1',
     categories: toList(params.categorie),
@@ -116,9 +120,6 @@ function rhythmConditions(f: Filters): SQL[] {
   const c: SQL[] = []
 
   if (f.splitShift === 'sans') c.push(eq(restaurant.splitShiftRisk, 'none'))
-  else if (f.splitShift === 'sans-ou-probable') {
-    c.push(inArray(restaurant.splitShiftRisk, ['none', 'low']))
-  }
 
   if (f.weekend === 'libre') c.push(eq(restaurant.closedWeekend, true))
   else if (f.weekend === 'dimanche') c.push(eq(restaurant.closedSunday, true))

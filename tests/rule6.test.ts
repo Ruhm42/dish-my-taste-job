@@ -165,7 +165,6 @@ describe('what a search sets aside, and says it did', () => {
   // the page must not repeat a claim its hours can no longer back.
   it.each([
     { coupure: 'sans' },
-    { coupure: 'sans-ou-probable' },
     { weekend: 'libre' },
     { weekend: 'dimanche' },
     { repos2: '1' },
@@ -187,7 +186,7 @@ describe('what a search sets aside, and says it did', () => {
   // Invariant (c): every record matching the reader's criteria is either on the page or in
   // exactly one of the stated buckets. A record in neither is the silent drop.
   it.each([
-    {}, { weekend: 'libre' }, { coupure: 'sans' }, { repos2: '1' }, { weekend: 'dimanche', coupure: 'sans-ou-probable' },
+    {}, { weekend: 'libre' }, { coupure: 'sans' }, { repos2: '1' }, { weekend: 'dimanche', coupure: 'sans' },
     { zone: '69381' }, { categorie: 'bistro' }, { taille: 'petit' }, { q: 'rhythm' },
     { zone: '69381', weekend: 'libre', q: 'expired' },
   ])('accounts for every matching record: %o', async (params) => {
@@ -223,7 +222,6 @@ describe('what a search sets aside, and says it did', () => {
 describe('requiresUsableHours — one predicate for the exclusion and for the offer', () => {
   it('is true under each rhythm criterion', () => {
     expect(requiresUsableHours(parseFilters({ coupure: 'sans' }))).toBe(true)
-    expect(requiresUsableHours(parseFilters({ coupure: 'sans-ou-probable' }))).toBe(true)
     expect(requiresUsableHours(parseFilters({ weekend: 'libre' }))).toBe(true)
     expect(requiresUsableHours(parseFilters({ weekend: 'dimanche' }))).toBe(true)
     expect(requiresUsableHours(parseFilters({ repos2: '1' }))).toBe(true)

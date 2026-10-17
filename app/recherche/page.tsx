@@ -1,4 +1,5 @@
 import { count, like } from 'drizzle-orm'
+import { redirect } from 'next/navigation'
 import { db } from '@/lib/db/client'
 import { getUser } from '@/lib/supabase/server'
 import { restaurant } from '@/lib/db/schema'
@@ -20,6 +21,24 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   const user = await getUser()
   const filters = parseFilters(params)
   const hoursRequired = requiresUsableHours(filters)
+
+  // The search as the user expressed it, handed to the API verbatim so the next pages come
+  // from exactly the same query. Rebuilding it from the parsed filters would risk drifting.
+  const search = new URLSearchParams(
+    Object.entries(params).flatMap(([k, v]) =>
+      Array.isArray(v) ? v.map((x) => [k, x] as [string, string])
+      : v === undefined ? []
+      : [[k, v] as [string, string]]),
+  )
+
+  // The filters panel reads its state back from the URL, so the URL has to name the
+  // criterion actually applied. A saved `coupure=sans-ou-probable`, retired by D31, is
+  // filtered as "Sans coupure" and would otherwise sit under a select showing "Peu importe".
+  if ((search.get('coupure') ?? '') !== filters.splitShift) {
+    if (filters.splitShift) search.set('coupure', filters.splitShift)
+    else search.delete('coupure')
+    redirect(`/recherche?${search}`)
+  }
 
   // Sequential, never Promise.all.
   //
@@ -56,15 +75,6 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
   // exactly the one where nothing else on this page would say so.
   const freshness = await fetchHoursFreshness()
 
-  // The search as the user expressed it, handed to the API verbatim so the next pages come
-  // from exactly the same query. Rebuilding it from the parsed filters would risk drifting.
-  const query = new URLSearchParams(
-    Object.entries(params).flatMap(([k, v]) =>
-      Array.isArray(v) ? v.map((x) => [k, x] as [string, string])
-      : v === undefined ? []
-      : [[k, v] as [string, string]]),
-  ).toString()
-
   return (
     // The screen is the viewport: the list scrolls inside its own column rather than
     // dragging the header, the filters and the map away with it.
@@ -96,7 +106,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
         initialCursor={page.nextCursor}
         total={total}
         points={points}
-        query={query}
+        query={search.toString()}
         activeFilterCount={countActive(filters)}
         excluded={excluded}
         unknownHoursIncluded={filters.includeUnknownHours}

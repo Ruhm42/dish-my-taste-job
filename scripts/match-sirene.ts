@@ -400,7 +400,7 @@ async function main(): Promise<void> {
   console.log(`  ${gained.length} of them gained by this matching`
     + ` (${usableBefore.length} already had one)`)
   console.log(`  ${matchedWithoutHeadcount} matched but with no bracket on the SIRENE side:`
-    + ` they fall back on the amplitude heuristic`)
+    + ` they fall back on "Coupure probable, effectif inconnu"`)
 
   if (dryRun) {
     console.log('')
