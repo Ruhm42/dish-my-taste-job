@@ -378,6 +378,10 @@ jobs:
       # the alias reverts to the broken deployment itself, and the bare form silently
       # becomes `rollback status` and reverts nothing. Firing that off a flaky curl would
       # be worse than the failure it answers.
+      #
+      # The commands are the deploy skill's, verbatim. A human pastes them into a laptop
+      # shell, often a worktree with no project link, so they name the team and project and
+      # pin vercel@64, the major they were checked on, not this job's $VERCEL_CLI.
       - name: Say how to roll back
         if: failure()
         run: |
@@ -387,16 +391,16 @@ jobs:
             echo "Nothing was rolled back. To do it by hand:"
             echo ""
             echo '```bash'
-            echo "npx vercel ls --prod"
+            echo "npx --yes vercel@64 ls dish-my-taste-job --scope hipopo-2684 --environment production"
             echo '```'
             echo ""
             echo "Pick a row that is \`● Ready\` and is NOT the deployment just published"
             echo "(the list includes \`● Error\` rows, which never served anything), then:"
             echo ""
             echo '```bash'
-            echo "npx vercel rollback <that-deployment-hostname> --yes"
-            echo "npx vercel rollback status"
-            echo "npx vercel inspect $ALIAS 2>&1 | head -5"
+            echo "npx --yes vercel@64 rollback <that-deployment-hostname> --scope hipopo-2684 --yes"
+            echo "npx --yes vercel@64 rollback status dish-my-taste-job --scope hipopo-2684"
+            echo "npx --yes vercel@64 inspect $ALIAS --scope hipopo-2684 2>&1 | grep 'Fetched deployment'"
             echo '```'
             echo ""
             echo "The last line must name the deployment you rolled back to."
