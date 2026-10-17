@@ -90,9 +90,9 @@ Deux propriétés en découlent, et la seconde répare un défaut réel de la p�
   chemin pour se produire.
 - **Ce qui reste à faire à la main est ce qu'une machine ne peut pas faire.** Toutes les pages
   sont derrière le login et l'inscription est fermée (D14) : les quatre sondes automatiques
-  s'arrêtent au middleware. La panne de D23 était intermittente et ne se voyait qu'en session.
-  La skill `deploy` ne décrit plus une mise en production, elle décrit cette part-là et le
-  retour arrière.
+  s'arrêtent au middleware. Les pannes de D23 et de D46 étaient intermittentes et ne se voyaient
+  qu'en session. La skill `deploy` ne décrit plus une mise en production, elle décrit cette
+  part-là et le retour arrière.
 
 Une exception est inscrite dans le workflow : **un changement de `lib/db/schema.ts` fait
 échouer le déploiement.** La colonne ou l'enum doit exister en production *avant* que le code
@@ -321,7 +321,8 @@ de données.
    gratuite, la connexion directe n'est joignable qu'en IPv6, dont les runners GitHub ne
    disposent pas. Le balayage doit donc passer par le connecteur mutualisé, en mode
    **session** — le mode transaction convient à l'application, pas à un script batch qui
-   ouvre une connexion longue
+   ouvre une connexion longue. Et l'application n'y fait passer qu'une instruction à la fois,
+   toutes requêtes confondues (D23, D46)
 
 ### GitHub
 5. ⚠️ Configurer l'identité git du dépôt sur l'adresse `noreply`, **avant le premier push** —

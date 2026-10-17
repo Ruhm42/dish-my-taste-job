@@ -294,7 +294,7 @@ contenu. Reste à le construire.
 
 **Ce que ça demande.** Une requête de points distincte de la liste — identifiant, position,
 risque de coupure, rien d'autre. Trois colonnes sur 4 465 lignes, c'est quelques centaines de
-kilo-octets. Séquentielle, jamais en `Promise.all` (D23). Et le regroupement des points
+kilo-octets. Séquentielle, jamais en `Promise.all` (D23, D46). Et le regroupement des points
 devient alors indispensable, pas décoratif.
 
 ## 5. Le suivi des candidatures n'existe pas
