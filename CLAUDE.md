@@ -138,3 +138,6 @@ Actions tab — `workflow_dispatch` skips the guard. Never point `db:push` at pr
   the path, never to the port, so each port has to be listed on its own. And the failure is
   quiet from our side: a refused key does not reject the script, it loads and then Google
   paints its own panel over the map — only `gm_authFailure` surfaces it.
+- **Fluid compute shares the module-level connection across requests.** One instance serves
+  several requests on `lib/db/client.ts`'s single connection, so ordering one page's queries
+  does not protect it; the client's one-statement queue does (D46).

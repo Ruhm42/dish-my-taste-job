@@ -61,7 +61,46 @@ const global_ = globalThis as unknown as { _sql?: ReturnType<typeof postgres> }
 const sql = global_._sql ?? postgres(url, options)
 if (process.env.NODE_ENV !== 'production') global_._sql = sql
 
-export const db = drizzle(sql, { schema })
+type Sql = ReturnType<typeof postgres>
+
+/**
+ * One statement on the wire at a time, for every request this instance serves.
+ *
+ * Fluid compute routes several requests to one instance, and they all share the single
+ * connection above. postgres.js writes a query without parameters onto a busy connection
+ * at once, before the previous one has answered. Supavisor, in transaction mode, answers
+ * only the first of them: the replies still owed never arrive, and every request on the
+ * instance then waits, with no error, until the 300-second timeout. D23 made one page's
+ * queries sequential; this makes the whole instance's.
+ *
+ * drizzle reaches the client three ways — `unsafe()`, `unsafe().values()` and `begin()` —
+ * and each waits for the previous one to settle. A transaction keeps its turn until it ends.
+ */
+export function oneStatementAtATime(client: Sql): Sql {
+  let turn: Promise<unknown> = Promise.resolve()
+  const wait = <T>(run: () => PromiseLike<T>): Promise<T> => {
+    const done = turn.then(run, run)
+    turn = done.catch(() => {})
+    return done
+  }
+  const begin = client.begin as (...args: unknown[]) => Promise<unknown>
+
+  return new Proxy(client, {
+    get(target, key, receiver) {
+      if (key === 'unsafe')
+        return (...args: Parameters<Sql['unsafe']>) => ({
+          then: (ok?: (rows: unknown) => unknown, ko?: (e: unknown) => unknown) =>
+            wait(() => target.unsafe(...args)).then(ok, ko),
+          values: () => wait(() => target.unsafe(...args).values()),
+        })
+      if (key === 'begin')
+        return (...args: unknown[]) => wait(() => begin.apply(target, args))
+      return Reflect.get(target, key, receiver)
+    },
+  })
+}
+
+export const db = drizzle(isTransactionPooler ? oneStatementAtATime(sql) : sql, { schema })
 export { schema }
 
 /**
@@ -76,5 +115,8 @@ export { schema }
  * connection that never frees, with no error and no timeout. The symptom is an hour of
  * silence having spent nothing, which is why a batch script refuses the transaction pooler
  * at startup instead of hanging on it.
+ *
+ * It skips the queue above, so it stays out of the app: the app is what runs on the
+ * transaction pooler.
  */
 export { sql }
