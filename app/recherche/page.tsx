@@ -40,13 +40,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Param
     redirect(`/recherche?${search}`)
   }
 
-  // Sequential, never Promise.all.
-  //
-  // Supabase's transaction pooler hands out a backend PER TRANSACTION, and the serverless
-  // client holds a single connection. Queries pipelined onto that one connection can sit
-  // waiting for a backend that never arrives, until Postgres kills them with
-  // `57014 canceling statement due to statement timeout` — a five-millisecond query
-  // failing after two minutes. That took production down once; see D23.
+  // Sequential, though that is no longer what protects the pooled connection. Awaiting here
+  // only orders this request's own queries (D23), and Fluid compute serves several requests
+  // from one instance on one shared connection: three loads fired together still hung until
+  // the 300-second timeout. The queue in lib/db/client.ts now lets one statement at a time
+  // onto that connection for the whole instance (D46), so a Promise.all would be serialized
+  // anyway and gain nothing.
   const page = await fetchPage(filters, null)
   const total = await countResults(filters)
 
