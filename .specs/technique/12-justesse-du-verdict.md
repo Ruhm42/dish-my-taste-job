@@ -1,6 +1,6 @@
 # Justesse du verdict de coupure
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 La vision tient en une phrase : « obtenir la liste des restaurants sans coupure et fermés le
 week-end de son arrondissement — **et que cette liste soit juste** ».
@@ -10,6 +10,35 @@ mesure a répondu quand on lui a demandé si cette règle valait quelque chose �
 non — et où se trouve la justesse qu'on cherchait.
 
 Rien de ce qui suit ne consomme un appel réseau. Tout se recalcule hors ligne.
+
+---
+
+## Révision du 17 octobre 2026 — avant que rien ne soit construit
+
+Aucune des trois règles ci-dessous n'est construite : le nom reste éliminatoire dans
+l'appariement, le seuil de 70 heures est toujours dans le profil (**50 verdicts** *Coupure
+possible, probable*), le filtre propose toujours trois réponses. Trois mesures changent ce qu'il
+faut construire.
+
+**La règle de l'adresse attacherait des effectifs faux.** Son 97 % a été mesuré sur des paires
+déjà appariées par le nom — la population où l'adresse est déjà vraie. Sur les non-appariés,
+elle apparie **1 080** établissements, et dans un échantillon de **45** paires au même numéro
+où les deux côtés ont un nom, **13** sont deux commerces différents (« Au plaisir du Senegal »
+et SOS PIZZA). Le numéro de rue devient un critère de **corroboration**, jamais suffisant seul,
+et la précision se mesure sur un échantillon **non apparié** — voir
+[D40](../DECISIONS.md#d40--le-numéro-de-rue-corrobore-il-ne-suffit-jamais).
+
+**`NN` n'est pas un effectif inconnu.** Les 627 appariés sans tranche sont tous `NN`, et 249
+portent une coupure. L'INSEE range `NN` parmi les non-employeurs pour la grande majorité : ils
+se lisent « sans salarié déclaré » quand l'établissement est antérieur à l'année de référence —
+voir [D41](../DECISIONS.md#d41--nn-veut-dire--sans-salarié-déclaré--pas--effectif-inconnu-).
+
+**Le nom manquant existe ailleurs.** 2 485 enregistrements SIRENE (41 %) n'ont aucun nom, dont
+714 avec une tranche exploitable ; la raison sociale de l'unité légale peut en corroborer
+jusqu'à 210. Elle se mesure en lecture seule avant d'ajouter une colonne — voir
+[D42](../DECISIONS.md#d42--la-raison-sociale--mesurer-avant-dajouter-la-colonne).
+
+Les règles 2 et 3 tiennent telles quelles.
 
 ---
 
@@ -142,8 +171,11 @@ information fausse.** Plusieurs candidats indiscernables au même numéro, c'est
 sert au plus un établissement, sans quoi le compte des non-appariés, qui est le canari du
 balayage, mentirait dans le sens rassurant.
 
-**La précision de la règle se mesure avant de l'appliquer**, sur les appariements existants,
-et ne descend pas sous **95 %**. Mesurée aujourd'hui : 97 %.
+~~**La précision de la règle se mesure avant de l'appliquer**, sur les appariements existants,
+et ne descend pas sous **95 %**. Mesurée aujourd'hui : 97 %.~~ Mesurée sur la mauvaise
+population : voir la révision du 17 octobre ci-dessus et D40. La précision se mesure sur un
+échantillon tiré au hasard parmi les paires **non appariées** que la règle apparierait, au moins
+100 par critère, vérifiées à la main, et ne descend pas sous **95 %**.
 
 > **Pourquoi 97 % suffit ici, alors que le projet refuse l'information fausse.** Parce que le
 > verdict affiche son raisonnement, effectif compris — *« Coupure très probable — ouvert
@@ -207,9 +239,12 @@ qualifie un verdict, elle n'en sélectionne pas.
 
 Tout se vérifie hors ligne, sur une copie locale (`db:pull`), sans un appel réseau.
 
-1. La précision de la règle d'appariement, mesurée sur les 1 585 appariements existants, est
-   **≥ 95 %**.
-2. `match:sirene` à sec annonce **au moins 1 700 établissements avec effectif**, contre 974.
+1. ~~La précision de la règle d'appariement, mesurée sur les 1 585 appariements existants, est
+   **≥ 95 %**.~~ La précision de chaque critère d'appariement (D40), mesurée sur au moins 100
+   paires non appariées tirées au hasard et vérifiées à la main, est **≥ 95 %**.
+2. ~~`match:sirene` à sec annonce **au moins 1 700 établissements avec effectif**, contre 974.~~
+   Ce chiffre supposait la règle d'adresse seule. `match:sirene` à sec annonce le gain de chaque
+   critère séparément, et le chiffre rejoint D40.
 3. Un établissement avec plusieurs candidats au même numéro reste **sans effectif**.
 4. Aucun enregistrement SIRENE n'est utilisé deux fois.
 5. Après `compute:profiles` : **zéro fiche en « possible / probable »** — la règle d'amplitude

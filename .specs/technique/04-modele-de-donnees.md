@@ -1,6 +1,6 @@
 # Modèle de données
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Trois tables. La lecture seule sur les établissements (D10) fait tomber toute la mécanique
 multi-sources et sa résolution de priorité qui avait été envisagée ; l'allowlist est portée
@@ -48,6 +48,11 @@ rythme dénormalisé** — c'est-à-dire ce sur quoi porteront toutes les requê
 
 **On conserve les horaires brutes à côté du profil calculé.** C'est ce qui permet de
 réajuster les règles de déduction et de tout recalculer sans redépenser un appel Google.
+
+> **Jusqu'à leur échéance, et pas au-delà** ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)).
+> Une purge quotidienne efface horaires bruts, grille et colonnes de profil qui en dérivent dès
+> `hours_expires_at` passée ; `hours_fetched_at` et `hours_expires_at` restent, pour qu'une
+> fiche se compte *expirée* et non *inconnue*.
 
 ### Profil de rythme — les colonnes qu'on filtre
 
@@ -142,6 +147,26 @@ seconde source de vérité à tenir synchronisée, pour aucun gain (D14). Voir
 
 Cette table est le journal de bord du seul poste coûteux du projet. Sans elle, une dérive de
 consommation ou une base incomplète passeraient inaperçues.
+
+---
+
+## Colonnes à ajouter — décidées le 17 octobre 2026
+
+Toutes passent par **une seule migration**, appliquée à la main en production avant le code qui
+les lit (`CLAUDE.md`, D32). Les noms sont indicatifs ; ils suivent la règle du dépôt — en
+anglais.
+
+| Table | Colonne | Rôle | Décision |
+|---|---|---|---|
+| `sirene_establishment` | `headcount_code` | Conserve `NN` au lieu de le replier sur une valeur nulle — pas une colonne nouvelle, un changement d'ingestion | D41 |
+| `sirene_establishment` | `created_on` | Date de création de l'établissement | D41 |
+| `sirene_establishment` | `headcount_year` | Année de référence de la tranche d'effectifs | D41 |
+| `sirene_establishment` | `legal_name` | Raison sociale de l'unité légale, personnes morales seulement — **si la mesure de D42 passe son seuil** | D42 |
+| `restaurant` | `missing_since` | Date depuis laquelle une cellule complète ne renvoie plus la fiche ; nulle tant qu'elle est renvoyée | D45 |
+| `restaurant` | `raw_secondary_hours`, `rating_count`, `website_uri` | Horaires secondaires bruts (dont cuisine), nombre d'avis, site — soumis à la même échéance que les horaires | D43 |
+
+> `cell` ne gagne rien : la couverture de D36 se calcule à chaque passage depuis les résultats
+> déjà enregistrés, elle ne se stocke pas.
 
 ---
 

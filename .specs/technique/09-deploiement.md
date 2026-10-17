@@ -38,7 +38,8 @@ flowchart LR
 | Application web | Vercel Hobby | À chaque visite | Requête d'un utilisateur |
 | CI puis déploiement | GitHub Actions | À chaque poussée | Poussée + manuel |
 | Base + authentification | Supabase, région Europe | En continu | — |
-| Balayage mensuel | GitHub Actions | 1er du mois, 03:00 UTC | Planification + manuel |
+| Balayage | GitHub Actions | Le 1er et le 16 du mois, 09:00 UTC ([D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16)) | Planification + manuel |
+| Purge du contenu expiré | GitHub Actions | Chaque jour, job distinct du réveil ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)) | Planification + manuel |
 | Maintien en vie | GitHub Actions | Chaque jour (base), chaque lundi (commit) | Planification + manuel |
 | Ingestion SIRENE et géocodage | Poste local | Trimestriel | À la main |
 
@@ -256,6 +257,13 @@ relit à l'endroit où elle s'applique.
 - Ce qui borne le **total mensuel**, c'est autre chose : le balayage n'est planifié qu'une
   fois par mois, et le script refuse de rejouer un balayage réussi depuis moins de 25 jours.
   Un déclenchement manuel de trop ne dépense donc rien.
+
+> **Remplacé par D28 puis D38 — à corriger à la mise en œuvre.** Le plafond journalier vaut
+> 1 000, pas 800 (`02`, *posés et vérifiés*). Le total mensuel est borné par le **plafond de la
+> période** — 900 appels par mois du Pacifique, toutes exécutions confondues (D28) —, pas par la
+> planification. D38 planifie deux passages, le 1er plafonné à 600 et le 16 sur le reste, et
+> retire le refus des 25 jours, qui bloquerait le second. Un déclenchement manuel de trop
+> dépense donc ce que la période permet encore, jamais au-delà.
 
 Les deux protections sont nécessaires. Le plafond journalier seul autoriserait 24 000 appels
 sur un mois ; la règle des 25 jours seule ne protégerait pas d'une boucle.

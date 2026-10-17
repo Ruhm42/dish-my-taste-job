@@ -1,6 +1,6 @@
 # Reprise du balayage et fraîcheur des horaires
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Le premier balayage réel n'a pas tenu dans un mois ([D22](../DECISIONS.md)). Deux règles
 écrites séparément, chacune défendable, se contredisent dès qu'un balayage déborde :
@@ -125,6 +125,14 @@ et le premier a débordé.
 C'est la même règle que partout ailleurs dans ce projet : une base incomplète qui se dit
 complète est le pire résultat possible. Une base périmée qui se dit fraîche en est la variante
 temporelle.
+
+> **Le troisième point est remplacé, 17 octobre 2026.** « Échouer si un balayage mené jusqu'à
+> convergence laisse des horaires périmés » porte sur un état que le plan n'atteint jamais : la
+> découverte reste un arriéré, donc l'alarme ne peut pas se déclencher, et le cycle est rouge
+> chaque mois pour une autre raison — des cellules toujours dues. Un rouge qui ne dit rien.
+> Ce qui fait échouer le cycle est désormais listé par
+> [D39](../DECISIONS.md#d39--ce-qui-fait-échouer-le-cycle), dont une **fraîcheur prévue sous
+> 80 %** à la pire heure avant le passage suivant.
 
 ### Ce qu'on ne fait pas encore
 

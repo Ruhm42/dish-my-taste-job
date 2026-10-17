@@ -1,6 +1,6 @@
 # Budget Google et garde-fous
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 **Contrainte ferme du projet : zéro euro.** Cette spec explique comment on la tient, et
 pourquoi ce n'est pas une question de vigilance mais d'architecture.
@@ -72,6 +72,20 @@ La donnée n'a donc jamais plus de 30 jours : **la conformité est obtenue par c
 pas par une politique de purge qu'il faudrait penser à appliquer. Le balayage est calé au
 1er du mois pour que le remplacement précède toujours l'expiration.
 
+> **Trois affirmations de ce paragraphe sont fausses, relevé le 17 octobre 2026.**
+> - Le balayage complet ne coûte pas 692 appels ; il n'a jamais tenu dans un mois (D22), et
+>   c'est une couverture du contenu, ~700 appels, qui le rafraîchit
+>   ([D36](../DECISIONS.md#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt)).
+> - Le calage au 1er ne fait pas précéder l'expiration sept mois sur douze : un mois de 31 jours
+>   dépasse 30 jours de conservation, et toute la base s'éteint 17 à 30 heures. Le cycle passe
+>   le 1er et le 16 ([D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16)).
+> - Une purge est nécessaire : l'affichage respectait l'échéance, pas le stockage
+>   ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)).
+>
+> Et la prémisse elle-même — 30 jours pour « le contenu Places » — est mise en question : les
+> conditions n'accordent ce délai qu'à la latitude et à la longitude. Voir
+> [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), axe 0, ouvert.
+
 ---
 
 ## Le piège du field mask
@@ -83,6 +97,16 @@ Enterprise + Atmosphere, plus cher.
 **Règle** : la liste des champs est une **constante unique, partagée, jamais construite
 dynamiquement**. Aucune concaténation, aucun champ conditionnel. Toute modification est une
 décision consciente, vérifiée en console de facturation avant et après.
+
+> **Correction, vérifiée le 17 octobre 2026** dans *Place Data Fields (New)* : `places.rating`
+> relève du palier **Enterprise**, pas d'*Enterprise + Atmosphere*. Le piège porte sur
+> `reviews`, `editorialSummary`, les `serves…`, `dineIn`, `takeout`, `delivery` et consorts.
+>
+> **Champs ajoutés par [D43](../DECISIONS.md#d43--trois-champs-de-plus-dans-le-masque-au-même-palier)**,
+> en une seule modification : `places.regularSecondaryOpeningHours` (horaires de cuisine),
+> `places.userRatingCount`, `places.websiteUri`. Tous trois déclenchent *Nearby Search
+> Enterprise*, comme `places.regularOpeningHours` : zéro dollar de plus par appel. Contrôle au
+> passage suivant : Enterprise égal au nombre d'appels, **rien sur Atmosphere**.
 
 ---
 
@@ -182,7 +206,8 @@ changement de filtre consommerait un chargement par clic.
 ## Vérification après chaque balayage
 
 - Appels réellement consommés **vs** annoncés par le `--dry-run`
-- Consommation Enterprise ≈ 692, et **aucune consommation sur le palier Atmosphere**
+- Consommation Enterprise ≈ le nombre d'appels des passages du mois (≤ 900), et **aucune
+  consommation sur le palier Atmosphere**
 - Aucun dépassement de quota journalier
 
 Un écart significatif entre le `--dry-run` et le réel est un signal à traiter : soit le

@@ -93,6 +93,17 @@ petites structures — là où l'information est la plus décisive. Le
 mécanisme de repli est décrit dans [`05-inference-des-horaires.md`](05-inference-des-horaires.md).
 Cette limite doit rester visible dans l'interface, jamais masquée derrière un verdict net.
 
+> **`NN` ne veut pas dire « non renseigné », vérifié le 17 octobre 2026.** L'INSEE précise que,
+> pour la grande majorité, `NN` désigne des établissements **non employeurs**, et demande de le
+> regrouper avec `00` ; le catalogue de l'API Entreprise le définit comme des unités sans
+> salarié dans l'année de référence. Le vrai inconnu, ce sont surtout les établissements trop
+> récents pour avoir déclaré. Voir
+> [D41](../DECISIONS.md#d41--nn-veut-dire--sans-salarié-déclaré--pas--effectif-inconnu-).
+>
+> Et 41 % des enregistrements du périmètre n'ont **aucun nom** (ni enseigne ni dénomination
+> usuelle) ; la raison sociale existe dans le fichier des unités légales, à mesurer avant de
+> l'ingérer ([D42](../DECISIONS.md#d42--la-raison-sociale--mesurer-avant-dajouter-la-colonne)).
+
 **Accès** : le **fichier stock des établissements** se télécharge directement, **sans compte
 ni clé**, en Parquet (~830 Mo) ou en ZIP (~1,1 Go). Le format Parquet est retenu : il se
 filtre sur place, sans décompresser plusieurs giga-octets de CSV.

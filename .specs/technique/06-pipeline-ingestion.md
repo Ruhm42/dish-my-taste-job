@@ -1,6 +1,6 @@
 # Pipeline d'ingestion
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Sept scripts en ligne de commande, **idempotents et rejouables**. Une exécution interrompue
 se reprend sans dégât et sans double facturation.
@@ -92,11 +92,22 @@ Normalise les horaires brutes puis calcule les profils de rythme, selon
 Le 1er de chaque mois, via une tâche planifiée : enchaîne `plan:cells`, `sweep:google`,
 `match:sirene` et `compute:profiles`, et remplace intégralement les horaires stockées.
 
-Le calage au 1er du mois garantit que le remplacement précède l'expiration des 30 jours. Voir
-[`02-budget-google-et-garde-fous.md`](02-budget-google-et-garde-fous.md).
+~~Le calage au 1er du mois garantit que le remplacement précède l'expiration des 30 jours.~~
+Faux sept mois sur douze, relevé le 17 octobre 2026 : un mois de 31 jours dépasse la
+conservation de 30. Le cycle passe le 1er et le 16, et sert le contenu par échéance — voir
+[D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16) et
+[`13-rafraichissement-par-couverture.md`](13-rafraichissement-par-couverture.md).
+
+Une **purge quotidienne**, hors du cycle, efface le contenu horaire dès son échéance ; elle ne
+dépense aucun appel ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)).
 
 `ingest:sirene` et `ingest:geocode` ne sont pas dans la boucle mensuelle : le registre
 d'entreprises évolue lentement. Une réexécution trimestrielle suffit.
+
+> **Une réexécution est due maintenant.** Le fichier stock a reçu sa mise à jour annuelle des
+> tranches d'effectifs — valeurs au 31/12/2024 — le 1er octobre 2026, après l'ingestion du
+> 28 août. Et D41 cesse de replier `NN` à l'ingestion : elle conserve le code, la date de
+> création de l'établissement et l'année de référence de l'effectif.
 
 ---
 
@@ -105,7 +116,8 @@ d'entreprises évolue lentement. Une réexécution trimestrielle suffit.
 À vérifier avant de considérer un cycle réussi :
 
 - Appels consommés **vs** annoncés par le `--dry-run`
-- **Cellules tronquées non résolues = 0**
+- ~~**Cellules tronquées non résolues = 0**~~ — un arriéré de découverte, rapporté, jamais
+  bloquant ; ce qui fait échouer un cycle est listé par [D39](../DECISIONS.md#d39--ce-qui-fait-échouer-le-cycle)
 - Cellules irréductibles inspectées une par une
 - Taux d'établissements SIRENE non appariés, et absence de concentration géographique
 - Couverture des horaires : combien d'établissements en « horaires inconnus »

@@ -1,6 +1,6 @@
 # Prochaines étapes
 
-> **Statut** : brouillon · **Dernière mise à jour** : 2026-08-29
+> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-17
 
 Ce document n'est pas un journal de décisions : rien ici n'est acté. C'est l'état mesuré du
 produit au 29 août 2026 et les axes qui en découlent, chacun avec ses options, pour que
@@ -8,6 +8,96 @@ l'arbitrage se fasse sur des chiffres et non sur une impression. Ce qui sera tra
 rejoindra [`DECISIONS.md`](DECISIONS.md).
 
 Toutes les quantités ci-dessous sont **lues dans la base de production**, pas estimées.
+
+---
+
+## Révision du 17 octobre 2026
+
+Des mesures prises ce jour-là en production ont donné dix décisions,
+[D36 à D45](DECISIONS.md#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt),
+toutes à construire. La relecture des conditions de Google qu'elles demandaient a ouvert une
+question qu'aucune ne tranche, et qui passe avant elles : l'axe 0 ci-dessous.
+
+### 0. Ce que les conditions de Google permettent de stocker — à trancher avant le reste
+
+> **Ouvert, non arbitré.** Relevé en relisant la règle des 30 jours pour D38. Ce sont les
+> textes, lus le 17 octobre 2026, et ce qu'ils semblent dire ; ce n'est pas une lecture
+> juridique.
+
+**Constat.** D7 fonde toute la rétention sur une phrase : les conditions limiteraient « la mise
+en cache du contenu Places à 30 jours », l'identifiant de lieu étant stockable indéfiniment.
+Les textes en vigueur disent autre chose.
+
+- Les *Google Maps Platform Service Specific Terms* (dernière modification le 15 octobre 2026),
+  section *Places API (Legacy and New)* : la mise en cache temporaire, 30 jours calendaires
+  consécutifs, n'est accordée qu'à la **latitude et à la longitude**. Rien sur les horaires, le
+  nom, l'adresse, le téléphone.
+- Les conditions générales interdisent toute mise en cache qui n'est pas **expressément**
+  permise par ces termes, et donnent en exemple de ce qui est interdit le fait de copier et
+  conserver noms et adresses d'établissements.
+- La page *Places API Policies* le dit sans détour : hors identifiant de lieu, le contenu ne
+  peut être ni mis en cache ni stocké, sauf accord le permettant.
+- Pour un compte de facturation **domicilié dans l'Espace économique européen**, des
+  conditions EEA s'appliquent depuis le 8 juillet 2025 aux intégrations créées ou modifiées
+  depuis — ce projet date d'août 2026. Même règle de cache, et deux limites de plus : hors
+  latitude, longitude et identifiant, le contenu Places ne s'utilise **avec aucune carte**, et
+  seulement pour une liste fermée de neuf usages (recherche d'adresse, points de vente propres,
+  suivi commercial, notes personnelles, contexte immobilier, transaction financière, jeu,
+  réseau social, domotique). Un annuaire de prospection n'y figure pas.
+
+Si cette lecture est la bonne, la base stocke depuis août un contenu qu'elle n'a pas le droit
+de stocker, quelle que soit sa fraîcheur ; D38 et D45 ne règlent que la partie visible du
+problème, et D7 se trompait sur sa prémisse plutôt que sur son calendrier.
+
+**Ce qu'on ne sait pas.** L'adresse du compte de facturation, qui décide du texte applicable —
+elle n'est nulle part dans le dépôt. Et s'il existe un accord, ou une page non relue, qui
+accorde davantage.
+
+**Options**
+- *Vérifier l'adresse du compte de facturation*, puis lire le texte applicable avec un regard
+  juridique. Préalable à tout le reste.
+- *Poser la question au support Google Maps Platform* : conserver 30 jours des horaires pour
+  filtrer, est-ce permis ?
+- *Basculer sur OpenStreetMap* — le plan B que D3 et [`technique/01`](technique/01-sources-de-donnees.md)
+  conservent explicitement : format `opening_hours` normalisé, licence qui autorise la
+  redistribution. Couverture des horaires lyonnais à mesurer avant tout.
+- *Ne garder que l'identifiant et la position*, et recalculer le profil à chaque passage sans
+  stocker les horaires — à condition que le profil lui-même ne soit pas du « contenu créé à
+  partir du contenu Google », clause qui existe aussi.
+- *Ne rien changer en connaissance de cause* — ce que D30 a refusé pour la fraîcheur, au nom de
+  la conformité.
+
+**Ce que je ferais.** Vérifier l'adresse de facturation d'abord : une minute, et elle décide du
+texte à lire. Construire D45 sans attendre — la purge va dans le sens de la conformité quelle
+que soit la réponse. Ne pas étendre le stockage (D43) avant d'avoir la réponse. Les décisions D36
+à D44 sont écrites sous la lecture de D7 ; si elle tombe, elles tombent avec elle.
+
+### Laissé ouvert, et pourquoi
+
+- **L'axe 0**, ci-dessus.
+- **Étendre la purge à l'identité des fiches** — nom, adresse, téléphone, position. D7 la
+  demanderait (le contenu Places entier est limité à 30 jours, et les 923 fiches sans horaires
+  n'ont même pas d'échéance), mais l'axe 0 dit peut-être qu'il ne fallait pas les stocker du
+  tout. Une seule décision, après l'axe 0 ; D45 s'arrête délibérément aux horaires.
+
+Deux décisions sont prises avec un seuil posé d'avance plutôt que tranchées sur une
+estimation : la couverture robuste cède la place à celle des fiches connues si elle ne tient pas
+dans le budget (D36), et la colonne de raison sociale ne s'ajoute que si la mesure en lecture
+seule donne au moins 100 verdicts à 95 % (D42).
+
+### Ordre de construction proposé
+
+1. **D45** (purge) — la conformité, quelle que soit la réponse à l'axe 0.
+2. **D36, D38, D39** ensemble, **avant le 16 décembre 2026** : le cycle du 1er novembre passe
+   avec le correctif minimal (tri par profondeur), novembre a 30 jours, mais décembre en a 31 —
+   sans le passage du 16, le 31 décembre s'éteint.
+3. **D37** — l'affichage des trois coûts, qui accompagne D36.
+4. **D41 et D42** : une seule requête DuckDB en lecture seule, après avoir réingéré SIRENE
+   (tranches mises à jour le 1er octobre), puis une seule migration manuelle — avec la colonne
+   de D45.
+5. **D40** et les règles 2 et 3 de D31 — hors ligne, sans dépendance au reste.
+6. **D44** — hors ligne ; son critère « ni site ni avis » attend D43.
+7. **D43** — après l'axe 0.
 
 ---
 
