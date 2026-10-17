@@ -37,6 +37,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/google.maps": "^3.66.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",

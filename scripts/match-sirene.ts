@@ -20,30 +20,12 @@ import { cell, restaurant, sweepRun } from '../lib/db/schema'
 import { countUnfinished } from '../lib/coverage'
 import { COMMUNE_NAMES } from '../lib/config'
 import { computeProfile, parseOpeningHours, teamSize } from '../lib/hours'
+import { DEFAULT_THRESHOLD, googleNameColumns, nameScore, sireneNameColumns } from '../lib/name-match'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
 
 /** Matching radius, in meters. Beyond it, two establishments are neighbours, not the same. */
 const MAX_DISTANCE = 75
-
-/**
- * Trigram similarity threshold. Tunable — it is the one number in this script that will
- * need calibrating against real data, hence `--threshold`.
- * Too low and we pin wrong headcounts; too high and we lose legitimate matches, dropping
- * the split-shift filter back to its degraded mode.
- */
-const DEFAULT_THRESHOLD = 0.45
-
-/** Domain stop words: present everywhere, therefore discriminating nowhere. */
-const STOP_WORDS = [
-  'restaurant', 'le', 'la', 'les', 'chez', 'aux', 'du', 'de', 'brasserie', 'bar', 'cafe',
-]
-
-/**
- * A name that normalization shrinks below 3 characters discriminates nothing any more
- * ("Le Bar" becomes empty): we would rather not match at all.
- */
-const MIN_NAME_LENGTH = 3
 
 const METERS_PER_DEGREE_LAT = 110574
 const METERS_PER_DEGREE_LNG = 111320
@@ -53,26 +35,6 @@ const CONCENTRATION_FACTOR = 1.5
 const SIGNIFICANT_UNMATCHED = 20
 
 const BATCH_SIZE = 500
-
-/**
- * Name normalization, written in SQL so that `similarity()` compares two strings prepared
- * the same way. Written once and applied to BOTH sides: a divergence between the two
- * normalizations would sink the match rate without a single message.
- *
- * `unaccent` is not installed (only `pg_trgm` is), hence the explicit `translate`.
- * Ligatures come first, because they unfold into two letters.
- */
-function normalizedName(column: string): string {
-  return `btrim(regexp_replace(
-    regexp_replace(
-      regexp_replace(
-        translate(replace(replace(lower(${column}), 'œ', 'oe'), 'æ', 'ae'),
-                  'àáâãäåçèéêëìíîïñòóôõöùúûüýÿ',
-                  'aaaaaaceeeeiiiinooooouuuuyy'),
-        '[^a-z0-9]+', ' ', 'g'),
-      '\\y(${STOP_WORDS.join('|')})\\y', ' ', 'g'),
-    '\\s+', ' ', 'g'))`
-}
 
 interface Candidate {
   restaurant_id: string
@@ -116,11 +78,11 @@ async function findCandidates(threshold: number): Promise<Candidate[]> {
   const rows = await db.execute(sql`
     WITH google AS (
       SELECT r.id, r.google_place_id, r.lat, r.lng,
-             ${sql.raw(normalizedName('r.name'))} AS normalized_name
+             ${sql.raw(googleNameColumns('r.name'))}
       FROM restaurant r
     ), registry AS (
       SELECT s.siret, s.headcount_code, s.naf, s.lat, s.lng,
-             ${sql.raw(normalizedName('s.name'))} AS normalized_name
+             ${sql.raw(sireneNameColumns('s.name'))}
       FROM sirene_establishment s
       WHERE s.lat IS NOT NULL AND s.lng IS NOT NULL
     ), candidates AS (
@@ -129,7 +91,7 @@ async function findCandidates(threshold: number): Promise<Candidate[]> {
              s.siret,
              s.headcount_code,
              s.naf,
-             similarity(g.normalized_name, s.normalized_name) AS score,
+             ${sql.raw(nameScore('g', 's'))} AS score,
              sqrt(
                power((s.lat - g.lat) * ${METERS_PER_DEGREE_LAT}, 2) +
                power((s.lng - g.lng) * ${METERS_PER_DEGREE_LNG} * cos(radians(g.lat)), 2)
@@ -139,14 +101,12 @@ async function findCandidates(threshold: number): Promise<Candidate[]> {
         ON s.lat BETWEEN g.lat - ${deltaLat} AND g.lat + ${deltaLat}
        AND s.lng BETWEEN g.lng - (${MAX_DISTANCE} / (${METERS_PER_DEGREE_LNG} * cos(radians(g.lat))))
                      AND g.lng + (${MAX_DISTANCE} / (${METERS_PER_DEGREE_LNG} * cos(radians(g.lat))))
-      WHERE length(g.normalized_name) >= ${MIN_NAME_LENGTH}
-        AND length(s.normalized_name) >= ${MIN_NAME_LENGTH}
-        AND similarity(g.normalized_name, s.normalized_name) >= ${threshold}
     )
     SELECT restaurant_id::text AS restaurant_id,
            google_place_id, siret, headcount_code, naf, score, distance
     FROM candidates
     WHERE distance <= ${MAX_DISTANCE}
+      AND score >= ${threshold}
     ORDER BY score DESC, distance ASC
   `)
 
