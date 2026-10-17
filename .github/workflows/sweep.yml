@@ -1,30 +1,43 @@
-# Monthly sweep.
+# The refresh cycle: two passes a month (D38).
 #
-# This is the project's ONLY costly item: 692 Nearby Search calls per run, against
-# a free quota of 1,000 per month, and with no fallback credit on the billing
-# account. Any overage bills a real card.
-# See .specs/technique/02-budget-google-et-garde-fous.md.
+# This is the project's ONLY costly item: up to 900 Nearby Search calls a month, against a
+# free quota of 1,000, and with no fallback credit on the billing account. Any overage bills
+# a real card. See .specs/technique/02-budget-google-et-garde-fous.md and
+# .specs/technique/13-rafraichissement-par-couverture.md.
 
-name: Monthly sweep
+name: Refresh sweep
 
 on:
   schedule:
-    # The 1st of the month, 09:00 UTC. Anchoring on the 1st guarantees that hours are
-    # replaced before the 30-day expiry the Google terms of service impose (D7).
+    # The 1st and the 16th, 09:00 UTC. Must match CYCLE.scheduleDays and scheduleHourUtc in
+    # lib/config.ts: the sweep forecasts freshness up to the next scheduled pass.
+    #
+    # Two passes, because one a month cannot hold the 30-day retention: twelve refreshes
+    # spaced at most 30 days apart cover 360 days, so a record refreshed once a calendar month
+    # spends days a year expired, whatever the day — and on 1 October the whole base was
+    # refreshed within half an hour, so every 31-day month went dark for a day. The 1st's
+    # pass stops at CYCLE.firstPassCeiling; the 16th takes the rest of the period. That
+    # spreads the expiries; it guarantees nothing, and what lapses anyway is not shown
+    # (D30 rule 6) and counted in the banner.
     #
     # 09:00 and not 03:00: the quota period is the Pacific month, the one Cloud Billing
     # rolls over. At 03:00 UTC on the 1st it is still 20:00 on the LAST day of the previous
     # month in California — the run would be charged to a period whose ceiling it has
     # already spent. Pacific midnight is 08:00 UTC in winter and 07:00 in summer; 09:00
-    # clears both without leaving the 1st.
+    # clears both without leaving the day. The 16th's pass needs the same: its ceiling opens
+    # on the 16th in California.
+    #
+    # GitHub has started these up to seven hours late (CYCLE.maxScheduleDelayHours).
     - cron: '0 9 1 * *'
+    - cron: '0 9 16 * *'
   workflow_dispatch:
 
-# Two simultaneous sweeps would burn the month's quota in one go.
+# Two simultaneous sweeps would read the same remaining quota and each spend it.
 # `cancel-in-progress` is deliberately left at false: cancelling a running sweep
 # would leave the database half written AND waste the calls already issued.
-# A queued run will not spend anything on its own: the script refuses to replay a
-# sweep that succeeded less than 25 days ago (SWEEP.daysBetweenSweeps).
+# A queued or manual run spends at most what its PASS has left: the ceiling is read on the
+# period's total — CYCLE.firstPassCeiling before the 16th, the period's after. There is no
+# refusal by date any more: it would refuse the 16th's pass after a good 1st (D38).
 concurrency:
   group: sweep
   cancel-in-progress: false
@@ -59,10 +72,13 @@ jobs:
       # a cycle that lifts the dry-run differently from the script it drives would end
       # up diverging from it.
       #
-      # No `continue-on-error`, no `|| true`: if the sweep fails — an unresolved
-      # truncated cell, quota exceeded, database unreachable — the job must fail. A
-      # silently incomplete database is worse than a failing job, and in the meantime
-      # the application keeps serving the previous month's data.
+      # No `continue-on-error`, no `|| true`: a red job means look (D39) — an interruption
+      # (HTTP error, 429, a cancel, the database out of reach), a failed or irreducible cell, a
+      # truncation that lost its recovery cells, a refusal to start (lock held, ledger that
+      # proves nothing, ceiling already spent), or a forecast worst hour under 80%. A pass that
+      # stops on its planned ceiling ends `capped`, green. The discovery backlog and the
+      # truncations waiting their turn go in the run's notice, never in its colour: they are
+      # there every month, and an alert that fires every month is one nobody reads.
       - name: Run the sweep in live mode
         env:
           GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}

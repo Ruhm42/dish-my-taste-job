@@ -16,9 +16,10 @@
  */
 import { desc, eq, sql } from 'drizzle-orm'
 import { db } from '../lib/db/client'
-import { cell, restaurant, sweepRun } from '../lib/db/schema'
-import { countUnfinished } from '../lib/coverage'
-import { COMMUNE_NAMES } from '../lib/config'
+import { restaurant, sweepRun } from '../lib/db/schema'
+import { loadCoverInputs } from '../lib/db/cover-inputs'
+import { buildCoverIndex } from '../lib/coverage'
+import { COMMUNE_NAMES, HOURS_TTL_DAYS } from '../lib/config'
 import { computeProfile, parseOpeningHours, teamSize } from '../lib/hours'
 import { DEFAULT_THRESHOLD, googleNameColumns, nameScore, sireneNameColumns } from '../lib/name-match'
 import { assign } from '../lib/sirene-match'
@@ -253,17 +254,33 @@ function printCanary(registry: SireneRow[], matchedSirets: Set<string>): number 
 }
 
 /**
- * Whether the sweep still owes Google calls.
+ * What keeps the canary from being a signal: the SIRENE points no recent call has answered for.
+ *
+ * The canary reads a commune's unmatched rate against the others. That is a signal only once
+ * every SIRENE point sits inside the reach of a cell queried recently — the robust cover served
+ * whole (D39 rule 6) — so that "unmatched" means "Google has no page for it", not "nobody
+ * looked". Recently: within the retention, the age of the content the match was made on.
+ *
+ * Under the cover of known records, the SIRENE-only ground is not queried and the canary stays
+ * withheld; that is the price D36 rule 3 names. Points out of every reach are counted apart: no
+ * cover can serve them, only discovery.
  *
  * Asked here rather than passed in as a flag: the answer has one source of truth, and it
- * stays right when someone runs this script by hand after an interrupted sweep — which is
- * exactly when it matters.
+ * stays right when someone runs this script by hand after an interrupted pass.
  */
-async function sweepOwesCalls(): Promise<number> {
-  const cells = await db
-    .select({ id: cell.id, parentId: cell.parentId, status: cell.status })
-    .from(cell)
-  return countUnfinished(cells)
+async function robustCoverGaps(): Promise<{ unserved: number; outOfReach: number } | null> {
+  const inputs = await loadCoverInputs()
+  if (!inputs) return null
+  const index = buildCoverIndex(inputs.cells, inputs.records, inputs.sirene)
+  const now = Date.now()
+  let unserved = 0
+  let outOfReach = 0
+  index.items.forEach((item, i) => {
+    if (item.kind !== 'sirene') return
+    if (index.holders[i].length === 0) outOfReach++
+    else if (item.due === null || item.due <= now) unserved++
+  })
+  return { unserved, outOfReach }
 }
 
 /**
@@ -349,15 +366,23 @@ async function main(): Promise<void> {
    * in `sirene_unmatched` would also poison the sweep-to-sweep comparison the column exists
    * for.
    */
-  const owed = await sweepOwesCalls()
+  const gaps = await robustCoverGaps()
   const unmatched = printCanary(registry, matchedSirets)
-  if (owed > 0) {
+  if (gaps && gaps.outOfReach > 0) {
+    console.log(`  ${gaps.outOfReach} SIRENE point(s) lie out of every cell's reach: no cover serves them ` +
+      'until discovery resolves the truncations around them.')
+  }
+  if (!gaps || gaps.unserved > 0) {
     console.log('')
-    console.log(`! canary NOT recorded — the sweep still owes ${owed} cell(s).`)
-    console.log('  Read the number above as a floor, not a rate: a commune nobody has swept')
-    console.log('  yet is unmatched for lack of a sweep, not for lack of a match, and that')
-    console.log('  raises every commune at once — which is what hides a real concentration.')
-    console.log('  The headcounts ARE applied; only the canary waits for convergence.')
+    console.log(gaps
+      ? `! canary NOT recorded — ${gaps.unserved} SIRENE point(s) lie in the reach of no cell ` +
+        `queried in the last ${HOURS_TTL_DAYS} days: the robust cover was not served whole.`
+      : '! canary NOT recorded — there is no sweep plan.')
+    console.log('  Read the number above as a floor, not a rate: ground nobody has queried')
+    console.log('  is unmatched for lack of a call, not for lack of a match, and that raises')
+    console.log('  every commune at once — which is what hides a real concentration. Under the')
+    console.log('  cover of known records (D36 rule 3), that ground is not queried at all.')
+    console.log('  The headcounts ARE applied; only the canary waits for the robust cover.')
   } else if (!dryRun) {
     await recordCanary(unmatched)
   }

@@ -86,6 +86,10 @@ npm run match:sirene     # link Google places to SIRENE headcount
 npm run compute:profiles # recompute rhythm profiles offline, no network
 ```
 
+The cycle runs twice a month, on the 1st and the 16th (D38). `npm run simulate:passes` plays
+twelve months of it on the database's own cells, without a call: rerun it before touching
+`CYCLE` in `lib/config.ts` or the cover in `lib/coverage.ts`.
+
 Outside the cycle, every day from `.github/workflows/purge.yml`:
 
 ```bash

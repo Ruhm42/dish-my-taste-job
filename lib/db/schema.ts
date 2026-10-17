@@ -165,7 +165,10 @@ export const sweepRun = pgTable('sweep_run', {
   irreducibleCells: integer('irreducible_cells').notNull().default(0),
   placesFound: integer('places_found').notNull().default(0),
   sireneUnmatched: integer('sirene_unmatched').notNull().default(0),
-  /** Free text rather than an enum: 'running' | 'succeeded' | 'failed', written by sweep. */
+  /**
+   * Free text rather than an enum: 'running' | 'capped' | 'succeeded' | 'failed', written by
+   * sweep. 'capped' stopped on a planned ceiling with no defect, and is a success (D39).
+   */
   status: text('status').notNull().default('running'),
   error: text('error'),
 })

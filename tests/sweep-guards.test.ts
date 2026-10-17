@@ -11,7 +11,10 @@ vi.hoisted(() => {
 })
 
 const { isTransactionPoolerUrl } = await import('@/lib/db/client')
-const { LEDGER_SLACK, byExpiry, ledgerLossMessage, lockRelease, loggedFloor } = await import('@/scripts/sweep')
+const {
+  LEDGER_SLACK, QuotaRefused, ledgerLossMessage, lockRelease, loggedFloor, passFailures, passQueue,
+  passStatus,
+} = await import('@/scripts/sweep')
 
 /**
  * Connection strings built from parts, so that no line of this file reads as a committed
@@ -179,47 +182,63 @@ describe('lockRelease — what the way out does with the advisory lock', () => {
   })
 })
 
-describe('byExpiry — the order a period buys its cells back in', () => {
-  const queued = (id: string, depth: number, queriedAt: string | null) =>
-    ({ id, depth, queriedAt: queriedAt ? at(queriedAt) : null })
+describe('passQueue — the order a pass walks', () => {
+  const queued = (id: string, depth: number, status: string, queriedAt: string | null = null) =>
+    ({ id, depth, status: status as 'done', queriedAt: queriedAt ? at(queriedAt) : null })
 
-  it('takes the shallow cells first, then the oldest, and the never-queried last', () => {
+  it('walks the reserved replays, then the cover, then discovery shallow first', () => {
+    const cover = [queued('cover-b', 1, 'done', '2026-10-01T09:00:00Z'), queued('cover-a', 0, 'truncated', '2026-10-01T09:00:00Z')]
+    const replay = queued('empty', 0, 'done', '2026-03-01T09:00:00Z')
     const cells = [
-      queued('deep-old', 1, '2026-09-01T09:00:00Z'),
-      queued('deeper-old', 2, '2026-09-04T09:00:00Z'),
-      queued('never-deep', 2, null),
-      queued('root-late', 0, '2026-10-01T09:30:00Z'),
-      queued('deep-recent', 1, '2026-10-01T09:45:00Z'),
-      queued('never-root', 0, null),
-      queued('root-early', 0, '2026-10-01T09:10:00Z'),
+      ...cover, replay,
+      queued('deep', 3, 'pending'), queued('failed', 1, 'failed', '2026-10-01T09:00:00Z'),
+      queued('shallow', 1, 'pending'),
     ]
-    expect(cells.sort(byExpiry).map((c) => c.id)).toEqual([
-      'root-early', 'root-late',
-      'deep-old', 'deep-recent',
-      'deeper-old',
-      'never-root', 'never-deep',
-    ])
+    const { queue, discovery } = passQueue([replay], cover.map((cell) => ({ cell })), cells)
+    expect(queue.map((c) => c.id)).toEqual(['empty', 'cover-b', 'cover-a', 'failed', 'shallow', 'deep'])
+    expect(discovery).toBe(3)
+  })
+})
+
+describe('passFailures — what fails a pass (D39), and only that', () => {
+  const clean = {
+    interruption: null, refusal: null, lockLeak: null,
+    failedCells: 0, irreducibleCells: 0, orphanTruncations: 0, forecast: 0.9,
+  }
+
+  it('passes a pass that stopped on its ceiling and left a discovery backlog', () => {
+    // The backlog is not even an input: it can never make a pass red.
+    expect(passFailures(clean)).toEqual([])
+    expect(passStatus([], true)).toBe('capped')
+    expect(passStatus([], false)).toBe('succeeded')
   })
 
-  // ─────────────────────────────────────────────────────────────
-  // Production, 2026-10-17: the plan as the 1 November run finds it.
-  // Every restaurant's hours expire on 31 October, all re-stamped by
-  // the 1 October run — which happened to query the depth-0 cells.
-  // Sorted by queried_at alone, November's 900 calls would have gone to
-  // the 899 September children and left the depth-0 cells, the ones
-  // covering most of the city, for December.
-  // ─────────────────────────────────────────────────────────────
-  it('spends the period\'s ceiling on every depth-0 cell before the September children', () => {
-    const shape: [depth: number, day: string | null, count: number][] = [
-      [1, '2026-09-01', 417], [2, '2026-09-01', 319], [2, '2026-09-04', 163],
-      [0, '2026-10-01', 653], [1, '2026-10-01', 247],
-      [1, null, 23], [2, null, 158], [3, null, 428],
-    ]
-    const plan = shape.flatMap(([depth, day, n]) => Array.from({ length: n }, (_, i) =>
-      queued(`${depth}-${day}-${i}`, depth, day && `${day}T09:00:00Z`)))
+  it('fails on a 429, and on any other interruption', () => {
+    expect(passFailures({ ...clean, interruption: new QuotaRefused('HTTP 429') })[0]).toMatch(/quota/)
+    expect(passFailures({ ...clean, interruption: new Error('HTTP 503') })[0]).toMatch(/interrupted: HTTP 503/)
+  })
 
-    const bought = plan.sort(byExpiry).slice(0, CEILING)
-    expect(bought.filter((c) => c.depth === 0)).toHaveLength(653)
-    expect(bought.filter((c) => !c.queriedAt)).toHaveLength(0)
+  it('fails on a refusal to start: a held lock, an unprovable ledger, a spent ceiling', () => {
+    for (const refusal of ['the sweep lock is held by backend 42', 'the cell ledger is missing 12 calls', '450 of 450 calls already spent']) {
+      expect(passFailures({ ...clean, refusal })).toHaveLength(1)
+    }
+    expect(passFailures({ ...clean, lockLeak: 'the sweep lock could not be released' })).toHaveLength(1)
+  })
+
+  it('fails on a failed cell, any irreducible cell and a truncation with no recovery cell', () => {
+    expect(passFailures({ ...clean, failedCells: 1 })[0]).toMatch(/1 failed cell/)
+    expect(passFailures({ ...clean, irreducibleCells: 1 })[0]).toMatch(/1 irreducible/)
+    expect(passFailures({ ...clean, orphanTruncations: 2 })[0]).toMatch(/2 truncated cell\(s\) without/)
+  })
+
+  it('fails under the freshness floor, not at it', () => {
+    expect(passFailures({ ...clean, forecast: 0.799 })[0]).toMatch(/forecast freshness/)
+    expect(passFailures({ ...clean, forecast: 0.8 })).toEqual([])
+  })
+
+  it('lists every defect, and a failed pass is never capped', () => {
+    const reasons = passFailures({ ...clean, interruption: new Error('HTTP 500'), irreducibleCells: 1, forecast: 0.5 })
+    expect(reasons).toHaveLength(3)
+    expect(passStatus(reasons, true)).toBe('failed')
   })
 })

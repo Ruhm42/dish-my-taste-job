@@ -24,7 +24,8 @@
     "match:sirene": "node --env-file=.env.local --import tsx scripts/match-sirene.ts",
     "compute:profiles": "node --env-file=.env.local --import tsx scripts/compute-profiles.ts",
     "cron:refresh": "node --env-file=.env.local --import tsx scripts/cron-refresh.ts",
-    "purge:expired": "node --env-file=.env.local --import tsx scripts/purge-expired.ts"
+    "purge:expired": "node --env-file=.env.local --import tsx scripts/purge-expired.ts",
+    "simulate:passes": "node --env-file=.env.local --import tsx scripts/simulate-passes.ts"
   },
   "dependencies": {
     "@duckdb/node-api": "^1.5.5-r.4",
