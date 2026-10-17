@@ -46,6 +46,120 @@ describe('Google conversion pitfalls', () => {
 })
 
 // ─────────────────────────────────────────────────────────────
+// Periods longer than a day. Google merges consecutive "Open 24 hours" days into ONE
+// period, so the days in the middle never appear on their own.
+// ─────────────────────────────────────────────────────────────
+describe('periods spanning several days', () => {
+  it('spreads Friday 15:00 -> Sunday 00:00 over Friday and all of Saturday', () => {
+    // Google displays it "Friday: 3:00 PM – 12:00 AM / Saturday: Open 24 hours".
+    expect(parseOpeningHours(hours(p(FRI, 15, 0, SUN, 0, 0)))).toEqual([
+      { day: 5, opensAt: 900, closesAt: 1440 },
+      { day: 6, opensAt: 0, closesAt: 1440 },
+    ])
+  })
+
+  it('does not hand a free weekend to a bar open all of Saturday', () => {
+    const profile = profileOf(hours(
+      p(MON, 15, 0, TUE, 1, 0), p(TUE, 15, 0, WED, 1, 0), p(WED, 15, 0, THU, 1, 0),
+      p(THU, 15, 0, FRI, 1, 0), p(FRI, 15, 0, SUN, 0, 0),
+    ))
+    expect(profile.closedDays).toEqual([7])
+    expect(profile.closedSaturday).toBe(false)
+    expect(profile.closedWeekend).toBe(false)
+    expect(profile.maxConsecutiveDaysOff).toBe(1)
+  })
+
+  it('reads a café open around the clock Monday to Saturday as closed on Sunday only', () => {
+    // A single period, displayed "Monday … Saturday: Open 24 hours / Sunday: Closed".
+    const profile = profileOf(hours(p(MON, 0, 0, SUN, 0, 0)))
+    expect(profile.openDaysCount).toBe(6)
+    expect(profile.closedDays).toEqual([7])
+    expect(profile.maxConsecutiveDaysOff).toBe(1)
+  })
+
+  it('opens Sunday when Saturday evening runs through to Monday, across the week wrap', () => {
+    // "Saturday: 6:00 PM – 12:00 AM / Sunday: Open 24 hours".
+    const profile = profileOf(hours(
+      p(MON, 18, 0, TUE, 0, 0), p(TUE, 18, 0, WED, 0, 0), p(WED, 18, 0, THU, 0, 0),
+      p(THU, 18, 0, FRI, 0, 0), p(FRI, 18, 0, SAT, 2, 0), p(SAT, 18, 0, MON, 0, 0),
+    ))
+    expect(profile.closedDays).toEqual([])
+    expect(profile.closedSunday).toBe(false)
+  })
+
+  it('keeps the final past-midnight close on the last full day, and the weekly total intact', () => {
+    // Monday 11:00 -> Wednesday 1:00: Monday, all of Tuesday, then Tuesday night until 1 a.m.
+    const w = parseOpeningHours(hours(p(MON, 11, 0, WED, 1, 0)))
+    expect(w).toEqual([
+      { day: 1, opensAt: 660, closesAt: 1440 },
+      { day: 2, opensAt: 0, closesAt: 1500 },
+    ])
+    expect(computeProfile({ windows: w }).weeklyOpenMinutes).toBe(38 * 60)
+  })
+
+  it('still files a one-night period under its opening day, even when it closes after dawn', () => {
+    // "Saturday: 11:00 PM – 7:00 AM / Sunday: Closed": the night is Saturday's.
+    const profile = profileOf(hours(
+      p(WED, 23, 0, THU, 5, 0), p(THU, 23, 0, FRI, 7, 0),
+      p(FRI, 23, 0, SAT, 7, 0), p(SAT, 23, 0, SUN, 7, 0),
+    ))
+    expect(profile.closedDays).toEqual([1, 2, 7])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// The tail of the night before. Google sometimes files the end of an evening service
+// under the next day: "Monday: 12:00 – 3:00 AM, 11:00 AM – 11:59 PM".
+// ─────────────────────────────────────────────────────────────
+describe('the tail of the night before', () => {
+  const EVERY_DAY = [SUN, MON, TUE, WED, THU, FRI, SAT]
+
+  it('is not a split shift: midnight to 3 a.m., then 11 a.m. to midnight', () => {
+    const profile = profileOf(hours(
+      ...EVERY_DAY.flatMap((d) => [p(d, 0, 0, d, 3, 0), p(d, 11, 0, d, 23, 59)]),
+    ))
+    expect(profile.splitDaysCount).toBe(0)
+    expect(profile.splitShiftRisk).toBe('none')
+    expect(profile.servicePattern).toBe('continuous')
+    expect(profile.explanation).toBe('Sans coupure — service continu (11h-23h59)')
+  })
+
+  it('does not turn a bar open every evening into a split shift on the one day it appears', () => {
+    // 17:00 -> 1:00 every day but Sunday, plus a lone midnight-to-1 a.m. hour on Monday.
+    const profile = profileOf(hours(
+      p(MON, 0, 0, MON, 1, 0),
+      p(MON, 17, 0, TUE, 1, 0), p(TUE, 17, 0, WED, 1, 0), p(WED, 17, 0, THU, 1, 0),
+      p(THU, 17, 0, FRI, 1, 0), p(FRI, 17, 0, SAT, 1, 0), p(SAT, 17, 0, SUN, 1, 0),
+    ), '11')
+    expect(profile.splitDaysCount).toBe(0)
+    expect(profile.splitShiftRisk).toBe('none')
+    expect(profile.servicePattern).toBe('dinner_only')
+    // Ignored as a service, not as opening hours: the days off do not move.
+    expect(profile.closedDays).toEqual([7])
+  })
+
+  it('leaves a real split shift alone, and keeps the tail out of its explanation', () => {
+    const profile = profileOf(hours(
+      p(TUE, 0, 0, TUE, 1, 0), p(TUE, 11, 0, TUE, 14, 0), p(TUE, 18, 0, TUE, 23, 30),
+    ), null)
+    expect(profile.splitDaysCount).toBe(1)
+    expect(profile.explanation).toBe('Coupure probable — ouvert 11h-14h puis 18h-23h30, effectif inconnu')
+  })
+
+  it('counts a window opening at midnight as a service when it runs past dawn', () => {
+    const profile = profileOf(hours(p(FRI, 0, 0, FRI, 14, 0), p(FRI, 18, 0, FRI, 23, 0)), '02')
+    expect(profile.splitDaysCount).toBe(1)
+  })
+
+  it('keeps a midnight window as the service of a day that has nothing else', () => {
+    // A club whose hours were entered from midnight: "Friday: 12:00 – 5:00 AM".
+    const profile = profileOf(hours(p(FRI, 0, 0, FRI, 5, 0), p(SAT, 0, 0, SAT, 5, 0)))
+    expect(profile.closedDays).toEqual([1, 2, 3, 4, 7])
+    expect(profile.explanation).toContain('(0h-5h)')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
 // Ordinary cases
 // ─────────────────────────────────────────────────────────────
 describe('ordinary cases', () => {

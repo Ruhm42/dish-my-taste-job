@@ -15,6 +15,14 @@ export const SPLIT_GAP_MIN = 120
 /** Lunch / dinner boundary, used to tell a single service from a continuous one. */
 const DINNER_BOUNDARY_MIN = 17 * 60
 
+/**
+ * A window that opens at midnight and closes by this time is the end of the night before.
+ * Google sometimes files it under the next day — "Monday: 12:00 – 3:00 AM, 11:00 AM –
+ * 11:59 PM" — and read as a service of its own, the eight hours until 11 a.m. made a split
+ * shift out of a fast food open from 11 a.m. to 3 a.m.
+ */
+const NIGHT_TAIL_END_MIN = 6 * 60
+
 const ALL_DAYS: DayOfWeek[] = [1, 2, 3, 4, 5, 6, 7]
 
 const TEAM_SIZE_BY_HEADCOUNT_CODE: Record<string, TeamSize> = {
@@ -40,6 +48,16 @@ export function teamSize(headcountCode: string | null | undefined): TeamSize {
 /** French bracket label, e.g. "3 à 5 salariés". Null when SIRENE gave no bracket. */
 export function headcountLabel(code: string | null | undefined): string | null {
   return code ? (HEADCOUNT_LABELS[code] ?? null) : null
+}
+
+/**
+ * A day's services: its windows, minus the tail of the night before. The tail still makes
+ * the day open — only when it is all the day has is it the service.
+ */
+function servicesOn(windows: ServiceWindow[], day: DayOfWeek): ServiceWindow[] {
+  const all = windowsForDay(windows, day)
+  const services = all.filter((w) => !(w.opensAt === 0 && w.closesAt <= NIGHT_TAIL_END_MIN))
+  return services.length > 0 ? services : all
 }
 
 /** A day carries a split shift when two of its services are at least SPLIT_GAP_MIN apart. */
@@ -70,15 +88,11 @@ export function maxConsecutiveDaysOff(closedDays: DayOfWeek[]): number {
   return Math.min(max, 7)
 }
 
-function inferServicePattern(
-  windows: ServiceWindow[],
-  openDays: DayOfWeek[],
-  splitDays: number,
-): ServicePattern {
-  if (openDays.length === 0) return 'mixed'
+/** `perDay` holds the services of each open day — see `servicesOn`. */
+function inferServicePattern(perDay: ServiceWindow[][], splitDays: number): ServicePattern {
+  if (perDay.length === 0) return 'mixed'
   if (splitDays > 0) return 'split'
 
-  const perDay = openDays.map((d) => windowsForDay(windows, d))
   const singleService = perDay.every((w) => w.length === 1)
   if (!singleService) return 'mixed'
 
@@ -91,12 +105,8 @@ function inferServicePattern(
 }
 
 /** The most telling day to illustrate the verdict: the one that carries the split shift. */
-function representativeDay(windows: ServiceWindow[], openDays: DayOfWeek[]): ServiceWindow[] {
-  for (const d of openDays) {
-    const w = windowsForDay(windows, d)
-    if (dayHasSplitShift(w)) return w
-  }
-  return openDays.length ? windowsForDay(windows, openDays[0]) : []
+function representativeDay(perDay: ServiceWindow[][]): ServiceWindow[] {
+  return perDay.find(dayHasSplitShift) ?? perDay[0] ?? []
 }
 
 /** French fragment: "12h-14h30 puis 19h-22h30". */
@@ -135,7 +145,8 @@ export function computeProfile({ windows: raw, headcountCode, category }: Profil
    * about rhythm. See D29.
    */
   const closedDays = hasHours ? ALL_DAYS.filter((d) => !openDays.includes(d)) : []
-  const splitDaysCount = openDays.filter((d) => dayHasSplitShift(windowsForDay(windows, d))).length
+  const services = openDays.map((d) => servicesOn(windows, d))
+  const splitDaysCount = services.filter(dayHasSplitShift).length
   const weeklyOpenMinutes = windows.reduce((total, w) => total + (w.closesAt - w.opensAt), 0)
   const size = teamSize(headcountCode)
 
@@ -148,7 +159,7 @@ export function computeProfile({ windows: raw, headcountCode, category }: Profil
     closedWeekend: closedDays.includes(6) && closedDays.includes(7),
     maxConsecutiveDaysOff: maxConsecutiveDaysOff(closedDays),
     splitDaysCount,
-    servicePattern: inferServicePattern(windows, openDays, splitDaysCount),
+    servicePattern: inferServicePattern(services, splitDaysCount),
     earliestOpenMin: hasHours ? Math.min(...windows.map((w) => w.opensAt)) : null,
     latestCloseMin: hasHours ? Math.max(...windows.map((w) => w.closesAt)) : null,
     weeklyOpenMinutes,
@@ -157,7 +168,7 @@ export function computeProfile({ windows: raw, headcountCode, category }: Profil
   const { splitShiftRisk, confidence, explanation } = inferSplitShift({
     hasHours, category, splitDaysCount, size, headcountCode, weeklyOpenMinutes,
     pattern: base.servicePattern,
-    services: describeServices(representativeDay(windows, openDays)),
+    services: describeServices(representativeDay(services)),
   })
 
   return { ...base, splitShiftRisk, confidence, explanation }
