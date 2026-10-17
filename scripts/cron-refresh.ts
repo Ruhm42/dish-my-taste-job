@@ -31,6 +31,7 @@ import { desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../lib/db/client'
 import { cell, sweepRun } from '../lib/db/schema'
 import { buildCoverage, countOwed } from '../lib/coverage'
+import { errorReason } from '../lib/error-reason'
 import { monthWindow } from '../lib/quota'
 import { COMMUNE_NAMES, DISTRICT_BY_COMMUNE, HOURS_TTL_DAYS } from '../lib/config'
 import { fetchHoursFreshness, type HoursFreshness } from '../lib/results'
@@ -341,6 +342,6 @@ async function main(): Promise<void> {
 main()
   .then(() => process.exit(0))
   .catch((e) => {
-    console.error(`\nMONTHLY CYCLE FAILED — ${e instanceof Error ? e.message : e}`)
+    console.error(`\nMONTHLY CYCLE FAILED — ${errorReason(e)}`)
     process.exit(1)
   })

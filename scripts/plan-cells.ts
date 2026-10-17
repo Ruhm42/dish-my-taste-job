@@ -17,6 +17,7 @@ import {
 } from '../lib/config'
 import { db } from '../lib/db/client'
 import { cell, sireneEstablishment, sweepRun } from '../lib/db/schema'
+import { errorReason } from '../lib/error-reason'
 import { planCells } from '../lib/grid'
 import type { Cell, Point } from '../lib/grid'
 
@@ -280,6 +281,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(`\nplan:cells failed — ${e instanceof Error ? e.message : e}`)
+  console.error(`\nplan:cells failed — ${errorReason(e)}`)
   process.exit(1)
 })
