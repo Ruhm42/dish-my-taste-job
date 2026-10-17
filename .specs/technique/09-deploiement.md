@@ -1,6 +1,6 @@
 # Déploiement
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 L'outil doit tourner **sur le web, gratuitement, pour deux ou trois personnes**. Cette spec
 dit où tourne quoi, comment le résultat du balayage atteint la production, et surtout ce qui
@@ -18,15 +18,15 @@ flowchart LR
     subgraph GHA["GitHub Actions"]
         CI[CI puis déploiement]
         SWEEP[Balayage mensuel]
-        KEEP[Maintien en vie hebdomadaire]
+        KEEP[Maintien en vie]
     end
     subgraph VERCEL["Vercel"]
         APP[Application Next.js]
     end
     GOOGLE[(Google Places)] --> SWEEP
     SWEEP -->|écriture directe| DB[(Base Supabase)]
-    KEEP -.->|requête légère| DB
-    KEEP -.->|commit| REPO[(Dépôt GitHub)]
+    KEEP -.->|lectures quotidiennes| DB
+    KEEP -.->|commit hebdomadaire| REPO[(Dépôt GitHub)]
     REPO -->|poussée sur main| CI
     CI -->|vercel deploy --prod| APP
     DB --> APP
@@ -39,7 +39,7 @@ flowchart LR
 | CI puis déploiement | GitHub Actions | À chaque poussée | Poussée + manuel |
 | Base + authentification | Supabase, région Europe | En continu | — |
 | Balayage mensuel | GitHub Actions | 1er du mois, 03:00 UTC | Planification + manuel |
-| Maintien en vie | GitHub Actions | Chaque lundi | Planification + manuel |
+| Maintien en vie | GitHub Actions | Chaque jour (base), chaque lundi (commit) | Planification + manuel |
 | Ingestion SIRENE et géocodage | Poste local | Trimestriel | À la main |
 
 **Le balayage ne tourne pas sur Vercel**, et ce n'est pas un détail de commodité. Une
@@ -166,37 +166,62 @@ Les offres gratuites ne se contentent pas de plafonner : elles **éteignent ce q
 pas**. Deux mécanismes distincts s'appliquent ici, et pour un outil consulté par deux
 personnes de façon sporadique, **les deux se déclencheraient**.
 
-| Mécanisme | Délai | Ce qui se passe | Ce qui remet le compteur à zéro |
+| Mécanisme | Seuil | Ce qui se passe | Ce qui l'évite |
 |---|---|---|---|
-| Mise en pause Supabase | 7 jours sans activité sur la base | Projet en pause : l'application ne répond plus. Une pause prolongée finit par la **suppression** du projet | Toute activité sur la base |
+| Mise en pause Supabase | Trop peu de requêtes utilisateur sur les 7 derniers jours — un seuil de **volume**, dont Supabase ne publie pas la valeur | Projet en pause : l'application ne répond plus. Seule une reprise **à la main, depuis le tableau de bord**, la lève ; passé le délai de restauration, le projet est perdu | « Quelques requêtes utilisateur sur la base chaque jour », selon la documentation de Supabase |
 | Désactivation de la planification GitHub | 60 jours sans activité **sur le dépôt** | Le balayage mensuel cesse de se déclencher | Un **commit** |
 
-Le premier se déclenche en une semaine de vacances. Le second en deux mois sans commit — ce
-qui, sur un projet personnel arrivé à maturité, est une durée ordinaire.
+Le premier n'attend même pas une semaine de vacances : en octobre 2026, le projet s'est mis
+en pause **trois jours** après une connexion réussie. Le second se déclenche en deux mois
+sans commit — ce qui, sur un projet personnel arrivé à maturité, est une durée ordinaire.
+
+**Le piège du premier est qu'une pause ne se répare pas en se connectant.** Le pooler ne
+reconnaît plus le projet — `(ENOTFOUND) tenant/user … not found` — et le maintien en vie peut
+donc empêcher une pause, jamais la lever.
 
 **Le piège du second est qu'il est contre-intuitif** : une exécution de workflow **ne compte
 pas** comme activité du dépôt. Seul un commit compte. Le balayage mensuel ne se maintient
 donc pas lui-même — il se coupe l'herbe sous le pied, silencieusement, au bout du deuxième
 mois.
 
-### Un seul remède pour les deux
+### Un workflow, deux tâches sur deux rythmes
 
-Un workflow hebdomadaire qui fait deux gestes :
+[`.github/workflows/keepalive.yml`](../../.github/workflows/keepalive.yml) porte deux jobs
+indépendants :
 
-1. une **requête légère sur la base** — c'est la connexion qui compte comme activité, pas ce
-   qu'on lit ;
-2. un **commit d'horodatage** dans un fichier dédié — c'est le commit qui compte, pas son
-   contenu.
+1. **Chaque jour, des lectures réelles sur les tables de l'application**, par les deux voies
+   que nomme la documentation de Supabase :
+   - *les requêtes de l'application connectée* — Postgres par le pooler, comme l'application
+     et le balayage : un comptage sur `restaurant`, un sur `cell`, la date du dernier
+     balayage ;
+   - *les appels à l'API du projet* — trois requêtes sur la Data API, avec la clé
+     publishable. Toutes les tables ont la RLS activée sans politique : la requête
+     s'exécute, et ne lit rien.
+2. **Chaque lundi, un commit d'horodatage** dans un fichier dédié — c'est le commit qui
+   compte, pas son contenu. Un commit quotidien noierait l'historique sous les horodatages.
 
-Un seul mécanisme, deux pannes évitées. La fréquence hebdomadaire est dictée par le plus
-court des deux délais : elle laisse deux tentatives avant les 7 jours de Supabase.
+**Pourquoi chaque jour, et pourquoi pas `select 1`.** Le 1er octobre 2026, le balayage a
+envoyé des milliers de requêtes par le pooler ; le 5, le maintien en vie a réussi son
+`select 1` ; le projet était en pause avant le 8. Une rafale ne couvre donc pas la semaine,
+et la documentation ne dit pas si le trafic du pooler compte comme requête utilisateur. Le
+rythme quotidien répond à son « chaque jour », l'appel à l'API à ses « appels à l'API du
+projet ». Voir D35.
 
-> Le balayage mensuel réveille lui aussi la base, mais une fois par mois — c'est plus long
-> que 7 jours. Il ne remplace pas la requête hebdomadaire.
+**Pourquoi deux jobs.** Tant que le réveil et le commit étaient deux étapes d'un même job,
+une base en pause faisait échouer le réveil, et le commit qui le suivait ne partait plus :
+aucun commit depuis le 5 octobre 2026, le compteur GitHub courait à cause d'une panne
+Supabase. Séparés, une base en pause n'arrête plus que ce qui la concerne.
+
+Un déclenchement manuel n'a pas de planification : il lance les deux jobs, et vérifie d'un
+coup toute la chaîne.
+
+> Le balayage mensuel réveille lui aussi la base, mais une fois par mois, et octobre a
+> montré qu'une rafale ne tient pas la semaine. Il ne remplace pas les lectures quotidiennes.
 
 **Ce workflow n'a aucun effet visible : c'est exactement ce qui le rend fragile.** La
-prochaine personne qui fera le ménage le prendra pour un résidu et le supprimera — l'outil
-s'éteindra alors avec un mois de délai, sans rien signaler. D'où deux précautions : son
+prochaine personne qui fera le ménage le prendra pour un résidu et le supprimera — la base
+s'éteindra alors en quelques jours, le balayage en deux mois, sans que rien ne renvoie à la
+cause. D'où deux précautions : son
 en-tête explique les deux compteurs en toutes lettres, et le fichier d'horodatage qu'il
 produit renvoie lui-même à cet en-tête.
 
@@ -219,7 +244,7 @@ relit à l'endroit où elle s'applique.
 | **Google Places** | 1 000 appels Enterprise par mois | **C'est facturé**, dès le premier appel au-delà. Il n'y a aucun crédit de secours sur ce compte | Le seul poste à risque |
 | **Google Places** | Plafond journalier posé à la main : 800 | `HTTP 429`, l'appel échoue | 0 € — c'est un mur, pas un seuil |
 | **Supabase** | 500 Mo de base | Écritures refusées | 0 € — quelques dizaines de Mo suffisent ici |
-| **Supabase** | Pause après 7 jours d'inactivité | L'application ne répond plus ; réveil depuis le tableau de bord | 0 € |
+| **Supabase** | Pause sur trop peu de requêtes dans la semaine | L'application ne répond plus ; seule une reprise à la main depuis le tableau de bord la lève | 0 € |
 | **Vercel Hobby** | 100 Go de bande passante par mois | Déploiements suspendus jusqu'au mois suivant | 0 € — hors d'atteinte à cette échelle |
 | **Vercel Hobby** | Usage strictement non commercial | Suspension du compte | Sans objet tant que l'accès reste sur liste fermée (D11) |
 | **GitHub Actions** | Minutes illimitées sur dépôt public | — | 0 € |
@@ -298,7 +323,9 @@ de données.
 7. Créer les secrets de dépôt : clé Places, URL de la base **de production**, et
    `VERCEL_TOKEN` — un jeton créé côté Vercel, sur l'équipe qui porte le projet. C'est lui qui
    autorise le déploiement depuis Actions ; son expiration se manifestera par un déploiement
-   rouge, pas par une panne
+   rouge, pas par une panne. Puis deux **variables** de dépôt, pas des secrets puisqu'elles
+   sont publiques par construction : `SUPABASE_URL` et `SUPABASE_PUBLISHABLE_KEY`, pour les
+   requêtes quotidiennes du maintien en vie sur la Data API
 8. Vérifier que les workflows sont autorisés à écrire dans le dépôt — sans quoi le commit
    hebdomadaire de maintien en vie échouera
 
@@ -315,9 +342,9 @@ de données.
     et il échoue exactement comme le `localhost:*` qui ne couvre aucun port
 
 ### Mise en service
-11. Déclencher **manuellement le maintien en vie** — il vérifie d'un coup le secret de base,
-    la joignabilité de Supabase et le droit d'écriture sur le dépôt, sans dépenser un seul
-    appel Google
+11. Déclencher **manuellement le maintien en vie** — il lance ses deux jobs et vérifie d'un
+    coup le secret de base, les deux variables, la joignabilité de Supabase par le pooler et
+    par la Data API, et le droit d'écriture sur le dépôt, sans dépenser un seul appel Google
 12. ⚠️ Valider le coût en local avec `--dry-run` **pointé sur la base de production** : le
     plan doit annoncer de l'ordre de 692 appels. Au-delà de ~800, on retravaille le maillage
     avant de dépenser
@@ -330,6 +357,7 @@ de données.
 16. Créer les comptes des utilisateurs à la main — c'est l'allowlist (D14)
 
 ### Un mois plus tard
-17. Vérifier que le balayage planifié s'est bien déclenché tout seul, et que les commits
-    hebdomadaires de maintien en vie sont présents. C'est le seul moyen de savoir que les
+17. Vérifier que le balayage planifié s'est bien déclenché tout seul, que les réveils
+    quotidiens de la base sont verts, et que les commits hebdomadaires de maintien en vie
+    sont présents. C'est le seul moyen de savoir que les
     deux comptes à rebours sont bien neutralisés.

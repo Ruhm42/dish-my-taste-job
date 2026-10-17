@@ -469,6 +469,10 @@ zéro celui de GitHub.
 de son double rôle : sans elle, il ressemble à du bruit et la prochaine personne qui le lira
 le supprimera — ce qui casserait le balayage soixante jours plus tard, très loin de la cause.
 
+> **Révisée par [D35](#d35).** Le modèle « 7 jours sans activité, une connexion suffit » était
+> faux. La base est réveillée chaque jour, par le pooler et par l'API ; le commit reste
+> hebdomadaire, dans un job séparé du même fichier.
+
 ---
 
 ## D20 — Mot de passe plutôt que lien envoyé par email
@@ -1253,3 +1257,82 @@ puis `match:sirene` et `compute:profiles` s'exécutent, le canari se retire en s
 fraîcheur est rapportée, et le cycle finit sur `MONTHLY CYCLE FAILED — sweep:google failed
 (exit code 1)`. Sur la production en mode sec : **25 effectifs** et **33 profils** que
 l'ancien enchaînement abandonnait.
+
+---
+
+## D35 — Réveiller la base chaque jour, par le pooler et par l'API, et découpler le commit
+
+**Contexte.** [D19](#d19) reposait sur un modèle faux : Supabase mettrait un projet en pause
+après **7 jours sans activité**, et une connexion suffirait à remettre le compteur à zéro. Le
+projet s'est mis en pause deux fois :
+
+- entre le 7 et le 14 septembre 2026. Le correctif d'alors l'a lu avec ce modèle — un réveil
+  hebdomadaire ne laissait que 1,2 heure de marge contre 7,00 jours, et les retards de
+  planification de GitHub l'avaient mangée — et il est passé à deux réveils par semaine ;
+- entre le 5 octobre 12:16 UTC (`select 1` réussi) et le 8 octobre 12:02 UTC
+  (`(ENOTFOUND) tenant/user … not found`), soit **trois jours** après une connexion réussie.
+  Ce modèle ne peut pas l'expliquer.
+
+La documentation de Supabase (*Project Pausing*, lue le 17 octobre 2026) décrit autre chose :
+un projet gratuit est mis en pause quand il reçoit **trop peu de requêtes utilisateur sur la
+semaine écoulée**, et « quelques requêtes utilisateur sur la base chaque jour » suffisent
+d'ordinaire. C'est un seuil de volume, dont la valeur n'est pas publiée, et non un délai. Elle
+nomme deux façons de produire cette activité : les **appels à l'API du projet**, et les
+**requêtes de l'application connectée**.
+
+Un fait d'octobre pèse dans le choix. Le 1er, le balayage a envoyé **des milliers de
+requêtes** par le pooler — 900 appels Google, quelque 4 500 établissements écrits,
+l'appariement SIRENE, le calcul des profils — et le projet était en pause sept jours plus tard
+au plus. Une rafale ne tient donc pas la semaine, et la documentation ne dit pas si le trafic
+du pooler compte comme requête utilisateur.
+
+Enfin, le réveil et le commit étaient deux étapes d'un même job : la base en pause faisait
+échouer la première, et la seconde ne partait plus. Aucun commit depuis le 5 octobre — une
+panne Supabase faisait courir le compteur de GitHub.
+
+**Options écartées**
+- *Garder deux `select 1` par semaine*, le correctif de septembre — calibré contre un délai
+  de 7,00 jours qui n'existe pas. Deux requêtes par semaine sont loin de « quelques requêtes
+  chaque jour », et `select 1` est ce qu'envoient tous les poolers et toutes les sondes de
+  santé : rien ne dit qu'il compte comme requête utilisateur. Il a échoué en octobre comme le
+  rythme hebdomadaire en septembre.
+- *Un réveil quotidien par le pooler seulement* — répond au « chaque jour », pas au doute
+  qu'a laissé octobre : si le trafic du pooler ne compte pas, des milliers de requêtes ne
+  l'ont pas fait compter, et trois de plus n'y changeront rien.
+- *La Data API seulement* — c'est la voie que la documentation nomme le plus nettement, mais
+  quitter le pooler, c'est cesser de vérifier chaque jour le secret `DATABASE_URL` dont
+  dépend le balayage.
+- *Un commit quotidien, dans le même job* — noie l'historique sous les horodatages, et garde
+  le couplage qui a arrêté les commits en octobre.
+- *Passer à l'offre Pro* — supprime la pause, rompt la contrainte du zéro euro.
+
+**Décision.** Le même fichier porte désormais **deux jobs indépendants**, sur deux
+planifications :
+- **chaque jour**, des lectures réelles sur les tables de l'application, par les deux voies
+  que nomme la documentation : trois requêtes Postgres par le pooler (`restaurant`, `cell`,
+  `sweep_run`), et trois requêtes sur la Data API avec la clé publishable ;
+- **chaque lundi**, le commit d'horodatage.
+
+Chaque job exclut la planification de l'autre par `!=`, au lieu de nommer la sienne par `==` :
+si une expression cron est modifiée sans sa copie, le job tourne trop souvent au lieu de ne
+plus tourner du tout. Un déclenchement manuel n'a pas de planification ; il lance les deux.
+
+**Conséquences.**
+- Deux **variables** de dépôt à créer, `SUPABASE_URL` et `SUPABASE_PUBLISHABLE_KEY` — pas des
+  secrets, puisqu'elles sont publiques par construction. Tant qu'elles manquent, le réveil
+  échoue en le disant.
+- Toutes les tables ont la RLS activée sans politique : les requêtes sur la Data API
+  s'exécutent et ne lisent rien. Le corps de la réponse n'est affiché qu'en cas d'échec.
+- Ce modèle reste une lecture de la documentation, pas une mesure : Supabase ne publie aucun
+  seuil. Si le projet se met encore en pause malgré six requêtes par jour, c'est le volume ou
+  la voie qu'il faudra revoir — et ce journal dit ce qui a déjà été essayé.
+- Une pause ne se répare toujours pas depuis le workflow : seule une reprise à la main depuis
+  le tableau de bord la lève. Le job ne peut que l'empêcher ; son échec dit qu'il est trop
+  tard.
+- D19 tient sur l'essentiel — un seul fichier, et un en-tête qui l'explique — mais plus sur
+  « une seule action hebdomadaire ».
+
+**Vérification.** En local : les trois requêtes psql sur un Postgres 17 jetable, et l'échec
+d'une requête intermédiaire, qui sortait en `0` sans `ON_ERROR_STOP` ; la boucle Data API
+contre un faux PostgREST — succès, `401` sur une table, hôte introuvable, variable absente.
+L'exécution réelle attend la reprise du projet depuis le tableau de bord.

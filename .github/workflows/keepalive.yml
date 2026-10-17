@@ -4,10 +4,14 @@
 # this comment exists. It neutralises TWO countdowns that, without it, shut the tool
 # down on their own and in silence.
 #
-# 1. SUPABASE PAUSES a project after 7 days without activity on the database, and a
-#    prolonged pause eventually ends in the project being deleted. A tool consulted
-#    sporadically by two people reaches 7 days effortlessly.
-#    -> remedy: open a connection to the database every week.
+# 1. SUPABASE PAUSES a Free project that receives too few user queries over the past
+#    week. It is a volume threshold, not a timer, and Supabase publishes no number: its
+#    doc only says that "a few user requests to the database each day" keep a project
+#    up. A tool consulted sporadically by two people falls under it in days. A paused
+#    project cannot be woken by connecting to it — only resumed by hand from the
+#    dashboard — so this job can prevent a pause, never repair one.
+#    -> remedy: every day, real reads on user tables, through both ways in that the doc
+#       names: requests from the connected application, and API calls to the project.
 #
 # 2. GITHUB DISABLES a scheduled workflow after 60 days without activity on the
 #    REPOSITORY. The monthly sweep would therefore stop by itself after two months
@@ -15,66 +19,100 @@
 #    commit does. So the sweep cannot keep itself alive.
 #    -> remedy: commit a timestamp every week.
 #
-# Both remedies fit in a single weekly workflow: the job below. Deleting it shuts the
-# tool down, with a month's delay before anyone notices.
-# See .specs/technique/09-deploiement.md.
+# The two remedies are two jobs on two schedules, so that a paused database no longer
+# stops the commits too. Deleting this file shuts the database down within days and the
+# sweep within two months, and nothing will point back here.
+# See .specs/technique/09-deploiement.md and D35.
 
 name: Keepalive
 
 on:
   schedule:
-    # Mondays AND Thursdays, not weekly. Off-the-hour, because schedules on a round hour
+    # Every day: the database. Off the round hour, because schedules on a round hour
     # queue up on GitHub's side.
     #
-    # Supabase pauses a free project after 7.00 days of inactivity, and a weekly cron leaves
-    # no margin against that: the last successful pair of wakes measured 6.95 days apart —
-    # 1.2 hours of slack. GitHub then ate it. This schedule says 05:17 UTC, but the runs
-    # actually landed at 10:27, 10:45, 11:38 and 12:24, because scheduled workflows queue
-    # behind load and the delay varies by hours.
-    #
-    # The project paused between 7 and 14 September 2026, and every later run failed with
-    # `(ENOTFOUND) tenant/user not found`: a paused project cannot be woken by connecting
-    # to it, only restored from the dashboard — so the keepalive could no longer repair what
-    # it had failed to prevent.
-    #
-    # Two wakes a week put the worst gap at ~4 days, which survives hours of drift.
-    - cron: '17 5 * * 1,4'
+    # Every day, because a burst does not carry the week. On 1 October 2026 the sweep sent
+    # thousands of queries through the pooler, a keepalive ran `select 1` on the 5th, and
+    # the project was paused before the 8th all the same.
+    - cron: '17 5 * * *'
+    # Every Monday: the commit. A daily one would bury the history under timestamps.
+    - cron: '47 5 * * 1'
   workflow_dispatch:
 
 concurrency:
   group: keepalive
   cancel-in-progress: false
 
-# Required to push the timestamp: the commit, and only the commit, resets GitHub's
-# inactivity counter.
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  keepalive:
+  wake-database:
     # On a fork, neither the secret nor the counter belongs to this project.
-    if: github.repository == 'Ruhm42/dish-my-taste-job'
+    #
+    # `!=` rather than `== daily`, in both jobs: if a cron string above is edited and its
+    # copy here is not, the job runs too often instead of never. A manual run has no
+    # schedule, so it runs both jobs — which is what checks a setup end to end.
+    if: github.repository == 'Ruhm42/dish-my-taste-job' && github.event.schedule != '47 5 * * 1'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+
+    steps:
+      # Postgres through the pooler, the way the app and the sweep reach the database.
+      # Reads on user tables rather than `select 1`: the doc counts user queries, and
+      # `select 1` is what every pooler and health check sends. The psql client is
+      # preinstalled on the runner, so no project dependency is needed here.
+      #
+      # Failing loudly is deliberate: a database that does not answer is already paused,
+      # or the URL changed. That is precisely what we want to learn from an alert rather
+      # than from a user. Hence ON_ERROR_STOP: without it, psql exits 0 when any query but
+      # the last one fails.
+      - name: Query the database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: >-
+          psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1
+          -c 'select count(*) as restaurants from restaurant'
+          -c 'select count(*) as cells from cell'
+          -c 'select max(started_at) as last_sweep from sweep_run'
+
+      # API calls to the project, the other way in the doc names. The doc does not say
+      # whether pooler traffic counts as a user request, and the 1 October burst suggests
+      # it may not; a request through the API gateway is one in its own words.
+      #
+      # Both values are public by design, hence repository variables and not secrets.
+      # Every table has RLS enabled with no policy, so each request runs a query and reads
+      # nothing. The body is printed only on failure, where it is PostgREST's error.
+      - name: Query the Data API
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          : "${SUPABASE_URL:?the repository variable is not set}"
+          : "${SUPABASE_PUBLISHABLE_KEY:?the repository variable is not set}"
+          for table in restaurant cell sweep_run; do
+            body=$(curl --silent --show-error --fail-with-body \
+              --header "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+              "$SUPABASE_URL/rest/v1/$table?select=id&limit=1") \
+              || { echo "$body"; exit 1; }
+          done
+
+  commit-timestamp:
+    if: github.repository == 'Ruhm42/dish-my-taste-job' && github.event.schedule != '17 5 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Required to push the timestamp: the commit, and only the commit, resets GitHub's
+    # inactivity counter.
+    permissions:
+      contents: write
 
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      # Countdown no. 1. `select 1` is enough: it is the CONNECTION that counts as
-      # activity, not what it reads. The psql client is preinstalled on the runner, so
-      # no project dependency is needed here.
-      # Failing loudly is deliberate: a database that does not answer means it is
-      # already paused, or the URL changed. That is precisely what we want to learn
-      # from an alert rather than from a user.
-      - name: Wake the database
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: psql "$DATABASE_URL" --no-psqlrc --quiet -c 'select 1'
-
-      # Countdown no. 2. The file's content serves no purpose: the COMMIT is the point
-      # of the gesture. The file carries its own explanation so that the next person
-      # who stumbles on it does not take it for leftover junk.
+      # The file's content serves no purpose: the COMMIT is the point of the gesture. The
+      # file carries its own explanation so that the next person who stumbles on it does
+      # not take it for leftover junk.
       #
       # A push authenticated by GITHUB_TOKEN retriggers no workflow: no loop is
       # possible, and no pointless Vercel redeploy every week.
