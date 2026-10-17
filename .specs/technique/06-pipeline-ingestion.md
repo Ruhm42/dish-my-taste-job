@@ -1,6 +1,6 @@
 # Pipeline d'ingestion
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Sept scripts en ligne de commande, **idempotents et rejouables**. Une exécution interrompue
 se reprend sans dégât et sans double facturation.
@@ -67,6 +67,11 @@ Le seul script coûteux.
 
 **Échoue bruyamment** si une cellule tronquée n'a pas pu être résolue. Une base
 silencieusement incomplète est pire qu'un script en erreur.
+
+Une troncature dont les cellules de reprise attendent la période suivante n'est pas « non
+résolue » au sens de cette règle : c'est de la découverte due, rapportée sans faire échouer,
+comme l'arrêt sur le plafond de la période ([D36](../DECISIONS.md),
+[`10-reprise-du-balayage.md`](10-reprise-du-balayage.md) §4).
 
 Reprise sur interruption : les cellules déjà traitées ne sont pas rejouées.
 

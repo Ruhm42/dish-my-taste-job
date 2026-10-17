@@ -1,6 +1,6 @@
 # Algorithme de balayage
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 ## Le problème
 
@@ -139,6 +139,13 @@ Un balayage n'est réussi que si **toutes** ces conditions sont remplies :
 
 **Un balayage qui ne remplit pas ces conditions doit échouer bruyamment** plutôt que de
 livrer une base silencieusement incomplète. C'est le point le plus important de cette spec.
+
+> **Précisé par D36, le 17 octobre 2026.** Ces critères définissent un balayage *réussi*,
+> c'est-à-dire convergé. Un balayage arrêté par le plafond de sa période, sans autre défaut,
+> n'est ni réussi ni en échec : il est *plafonné*, sort en succès et dit ce qu'il laisse — ce
+> n'est pas une base silencieusement incomplète. « Zéro cellule tronquée non résolue » se lit
+> alors « aucune troncature que rien de ce qui est dû ne résoudra ». Voir
+> [`10-reprise-du-balayage.md`](10-reprise-du-balayage.md) §4.
 
 ---
 

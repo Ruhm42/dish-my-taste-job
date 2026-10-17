@@ -37,7 +37,7 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 - [`07-stack-et-tests.md`](technique/07-stack-et-tests.md) — technos, vérification
 - [`08-infrastructure.md`](technique/08-infrastructure.md) — comptes, clés, **ce qu'il y a à faire à la main**
 - [`09-deploiement.md`](technique/09-deploiement.md) — où tourne quoi, tâches planifiées, **ce qui s'éteint tout seul**
-- [`10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md) — **quand un balayage dure plus qu'un quota**, et la péremption des horaires
+- [`10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md) — **quand un balayage dure plus qu'un quota**, la péremption des horaires, et ce qu'un cycle rouge veut dire
 - [`11-convergence-du-balayage.md`](technique/11-convergence-du-balayage.md) — **pourquoi il ne converge pas**, et ce qui prime quand le quota ne suffit pas
 - [`12-justesse-du-verdict.md`](technique/12-justesse-du-verdict.md) — ce que la mesure dit des règles de repli, et où est l'effectif manquant
 

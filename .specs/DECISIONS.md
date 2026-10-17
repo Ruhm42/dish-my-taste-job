@@ -1258,6 +1258,12 @@ fraîcheur est rapportée, et le cycle finit sur `MONTHLY CYCLE FAILED — sweep
 (exit code 1)`. Sur la production en mode sec : **25 effectifs** et **33 profils** que
 l'ancien enchaînement abandonnait.
 
+> **Précisé par [D36](#d36), le 17 octobre.** L'arrêt sur le plafond de la période n'est plus
+> un échec : un balayage plafonné sans autre défaut sort en succès, et dit ce qu'il laisse. Ce
+> qui est décidé ici des étapes hors ligne tient toujours. « L'échec est l'état normal de
+> chaque mois » ne tient plus, et c'est l'objet de D36 : un rouge mensuel avait cessé de
+> signaler quoi que ce soit.
+
 ---
 
 ## D35 — Réveiller la base chaque jour, par le pooler et par l'API, et découpler le commit
@@ -1336,3 +1342,119 @@ plus tourner du tout. Un déclenchement manuel n'a pas de planification ; il lan
 d'une requête intermédiaire, qui sortait en `0` sans `ON_ERROR_STOP` ; la boucle Data API
 contre un faux PostgREST — succès, `401` sur une table, hôte introuvable, variable absente.
 L'exécution réelle attend la reprise du projet depuis le tableau de bord.
+
+---
+
+## D36 — Un balayage plafonné n'est pas un échec, et la péremption a un seuil
+
+**Contexte.** Deux alarmes du cycle mensuel ne disent plus rien, et pour la même raison :
+elles ont été écrites pour un balayage qui converge, et le plan ne converge pas.
+
+Le plan en place compte **2 408 cellules** pour un plafond de **900 appels** par période. Il
+reste donc des cellules dues à la fin de chaque cycle, et le balayage les range parmi ses
+motifs d'échec, avec l'arrêt sur plafond et les troncatures dont la reprise attend son tour.
+Le run du 1er octobre est en échec sur trois motifs, et **les trois sont le plafond** :
+
+> `331 unresolved truncation(s) ; 1508 cell(s) still owed for 2026-10 ; interrupted: ceiling
+> of 900 calls reached for 2026-10`
+
+[D33](#d33) l'avait vu — « l'échec est donc l'état normal de chaque mois » — et a gardé la
+construction rouge. Mais un rouge qui revient chaque mois ne distingue plus rien : un
+`HTTP 500` au quarantième appel, un journal des dépenses incohérent et un mois parfaitement
+nominal sortent de la même couleur. [`technique/09`](technique/09-deploiement.md) le dit :
+personne ne relit le résultat de ce job. Un rouge permanent, encore moins.
+
+La seconde alarme est muette pour la raison inverse. [`technique/10`](technique/10-reprise-du-balayage.md)
+§2 fait échouer le cycle quand un balayage **convergé** laisse des horaires périmés. Le plan
+ne converge pas, donc l'alarme ne peut pas sonner. Elle serait restée muette le 1er novembre
+avec l'ancien ordre de rachat, qui aurait laissé environ **un tiers** des horaires périmés
+jusqu'en décembre — c'est la mesure qui a motivé la PR #9.
+
+Mesuré en production le 17 octobre :
+
+| | Mesure |
+|---|---|
+| Cellules du plan | 2 408, dont 653 en profondeur 0 |
+| Plafond par période | 900 |
+| Cellules irréductibles | 0 |
+| Cellules tronquées sans cellule de reprise | 0 |
+| Fiches avec horaires | 3 730 |
+| Périmées juste après le cycle du 1er octobre | 82, soit **2,2 %** |
+| Périmées au 17 octobre | 122, soit **3,3 %** — relevées entre le 28 août et le 4 septembre |
+
+**Options écartées**
+- *Garder le rouge mensuel*, comme D33 l'a choisi — il a produit ce qu'il pouvait produire :
+  un voyant que plus personne ne peut lire. Le mois où un vrai défaut arrive ressemble
+  exactement au mois d'avant.
+- *`continue-on-error` dans le workflow* — met au vert les défauts avec le reste. C'est le
+  silence que D33 refusait, et il avait raison.
+- *Un avertissement chaque mois au lieu d'un échec* — le même rouge, un cran plus bas. Un
+  avertissement qui revient tous les mois s'apprend à ignorer comme le rouge.
+- *Relever le plafond ou réduire le plan pour que le rouge s'éteigne de lui-même* — c'est
+  l'arbitrage de [D30](#d30) règle 4, qui reste ouvert. On ne le tranche pas pour faire passer
+  un voyant au vert.
+- *Ranger le run plafonné en `succeeded`* — le garde-fou de récence refuse un balayage moins
+  de 25 jours après un succès. Un run repris à la main le 8 après une interruption, puis
+  plafonné, ferait refuser le cycle du 1er suivant, donc le rafraîchissement du mois. Et `succeeded` affirmerait une couverture
+  que le run n'a pas.
+- *Garder l'alarme de péremption à « zéro, une fois convergé » seulement* — juste sur le
+  principe, inopérante en fait : la condition n'arrive pas.
+- *Une alarme de péremption à zéro dès maintenant* — sonnerait chaque mois : 2 à 3 % des
+  fiches ne sont atteintes que par des cellules profondes que la période ne rachète pas. Le
+  rouge mensuel reviendrait par l'autre porte.
+
+**Décision.** Un cycle rouge doit appeler une action. Trois règles.
+
+1. **Atteindre le plafond comme prévu n'est pas un échec.** Un balayage qui s'arrête sur le
+   plafond de sa période, sans autre défaut, sort en succès avec le statut **`capped`** — ni
+   `succeeded`, réservé au plan convergé, ni `failed`. Les cellules dues, et les troncatures
+   dont les cellules de reprise attendent leur tour, sont rapportées et chiffrées ; elles ne
+   font plus échouer.
+2. **Le reste demeure un défaut et fait échouer** : une interruption autre que le plafond
+   (erreur HTTP, `429`, signal d'arrêt, base injoignable), une cellule en échec, une cellule
+   irréductible, une troncature qu'aucune cellule due ne résoudra, et tout refus de démarrer.
+3. **La péremption a un seuil, convergé ou non.** En mode réel, le cycle échoue si, après le
+   balayage, plus de **10 %** des fiches avec horaires sont périmées. Une fois le plan
+   convergé, la règle de `technique/10` demeure : une seule fiche périmée est un défaut. À
+   sec, le cycle avertit sans échouer, comme aujourd'hui.
+
+Un run plafonné ne se tait pas pour autant. Sous GitHub Actions, le cycle laisse une
+annotation de niveau *notice* — cellules dues, part des fiches périmées, taille du plan face
+au plafond. Le job est vert, et sa page dit ce qu'il a laissé.
+
+**Pourquoi 10 %.** C'est trois à quatre fois ce que le cycle d'octobre a laissé — 2,2 % juste
+après, 3,3 % deux semaines plus tard —, et trois fois moins que la défaillance que l'alarme
+doit attraper : l'ancien ordre de rachat en laissait un tiers. Un balayage interrompu tôt en
+laisse près de 100 %. Le seuil vit en configuration, à côté de la durée de rétention, et se
+recalibre sur mesure.
+
+**Conséquences.**
+- Livrée avant le 1er novembre, cette décision fait du cycle de novembre, s'il se déroule
+  comme prévu, le **premier cycle vert**. Un rouge redevient une information.
+- D33 tient pour ce qu'elle protégeait : les étapes hors ligne tournent après un échec, et un
+  échec fait toujours échouer le cycle. Ce qui change, c'est ce qui compte comme échec. Et le
+  cycle rapporte l'alarme de péremption **en plus** de la première étape en échec : un balayage
+  en échec ne la masque plus.
+- L'arbitrage de D30 règle 4 ne se voit plus par le rouge. Il se voit dans l'annotation de
+  chaque mois — 2 408 cellules pour 900 appels — et dans la part périmée : c'est elle, et non
+  le nombre de cellules dues, qui dit si le produit tient.
+- Le garde-fou de récence ne regarde que les balayages `succeeded`, donc convergés. Un run
+  plafonné ne bloque jamais la période suivante.
+- Une cellule irréductible fera échouer chaque cycle qui l'atteint, jusqu'à ce qu'on en
+  décide. C'est voulu : il n'en existe aucune, et en accepter une serait une décision à part
+  entière. Pas de mécanisme d'acquittement tant qu'il n'a pas servi une fois.
+- Un refus de démarrer reste rouge. En régime normal il ne vient jamais du cycle planifié :
+  il répond à une relance manuelle, et le rouge s'adresse à qui l'a lancée.
+
+**Ce que cette décision ne résout pas : les mois de 31 jours.** Les horaires relevés le 1er
+expirent 30 jours plus tard, donc le 31 d'un mois de 31 jours, et le cycle suivant ne tourne
+que le 1er à 09:00 UTC. Mesuré : les 3 608 fiches relevées le 1er octobre entre 15:54 et
+16:24 UTC expirent le **31 octobre** à la même heure. Presque toute la base n'affichera plus
+d'horaires pendant dix-sept heures — une journée entière quand le cycle tourne à l'heure
+prévue —, et cela sept mois par an. L'alarme se lit
+après le balayage et ne peut pas le voir. La conséquence de [D7](#d7) — un balayage « calé au
+1er du mois pour que le remplacement précède l'expiration » — ne tient pas pour ces mois-là.
+C'est une question de calendrier, liée à la période du quota, qui ouvrira sa propre entrée.
+
+Le classement de chaque motif, les statuts et la façon de vérifier vivent dans
+[`technique/10-reprise-du-balayage.md`](technique/10-reprise-du-balayage.md) §4.
