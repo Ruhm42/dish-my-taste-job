@@ -1,6 +1,6 @@
 # Recherche — carte et liste
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 C'est l'écran principal, et à peu près tout l'outil. Une seule page.
 
@@ -31,8 +31,10 @@ Groupés en trois blocs, dans cet ordre.
 ### Rythme de travail
 Le bloc qui justifie l'existence de l'outil.
 
-- **Sans coupure** — trois choix : *oui* (aucune coupure possible) · *oui ou probablement*
-  (inclut les établissements où la coupure est peu vraisemblable) · *peu importe*
+- **Sans coupure** — ~~trois choix : *oui* (aucune coupure possible) · *oui ou probablement*
+  (inclut les établissements où la coupure est peu vraisemblable) · *peu importe*~~ deux
+  choix : *oui* · *peu importe*. La troisième réponse n'ajoutait que huit établissements (D31,
+  pas encore construit).
 - **Week-end** — *fermé samedi et dimanche* · *fermé le dimanche* · *peu importe*
 - **2 jours de repos d'affilée** — *oui* · *peu importe*
 
@@ -118,10 +120,22 @@ base. Elles sont **écartées par défaut**, l'écran le dit, et un clic les ram
 dans le panneau, un lien sous le compteur. Rien n'est caché : c'est le défaut qui change,
 pas la disponibilité. Une recherche qui les inclut se met en favori comme une autre.
 
+**La fiche ne donne aucun moyen de la joindre.** Ni horaires, ni téléphone, ni numéro
+d'établissement au registre : rien n'atteste que l'établissement existe encore, et aucune
+démarche n'est possible depuis l'écran. Ces fiches ne reviennent **pas** avec celles dont les
+horaires sont inconnus ; l'écran dit combien ont été écartées pour cette raison. Il en va de
+même d'une fiche que Google ne renvoie plus là où elle devrait apparaître, et d'une fiche hors
+du périmètre. Voir D44 et D45.
+
 **L'effectif est inconnu.** Là, on affiche et on nuance : le verdict est présenté comme
 moins sûr, jamais comme certain.
+
+**L'établissement ne déclare aucun salarié.** Ce n'est pas un effectif inconnu, c'est une
+information : le verdict le dit en clair — *« sans salarié déclaré en 2024 »* —, avec l'année,
+parce que le registre a deux ans de retard. Un établissement sans salarié embauche rarement ;
+il reste listé, et c'est à l'utilisateur d'en juger. Voir D41.
 
 La règle commune : **on n'affiche pas par défaut ce dont on ne peut rien dire, et on dit
 qu'on ne l'affiche pas.** Ce qui reste interdit, c'est de retirer quelque chose en silence.
 
-Voir D29.
+Voir D29, D41, D44 et D45.

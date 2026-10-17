@@ -1,6 +1,6 @@
 # Convergence du balayage
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 [`10-reprise-du-balayage.md`](10-reprise-du-balayage.md) a réparé le compteur : à partir de
 septembre, la reprise dépense à nouveau. Elle laissait ouverte la question qu'elle nommait
@@ -99,6 +99,14 @@ l'échantillon de calibrage : la densité extrême gouverne le coût.
 
 ### 1. La fraîcheur prime sur la complétude
 
+> **Mise en œuvre remplacée le 17 octobre 2026.** Le principe tient ; l'ordre « de la plus
+> ancienne à la plus récente », lu dans le `queried_at` de chaque cellule, ne tient pas : les
+> cellules se recouvrent, et celle qui retrouve un restaurant repousse son échéance sans toucher
+> aux autres. Mesuré, cet ordre laisse 35 % de la base expirés un mois sur deux. Le cycle
+> rafraîchit désormais une **couverture du contenu périmé** — voir
+> [D36](../DECISIONS.md#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt)
+> et [`13-rafraichissement-par-couverture.md`](13-rafraichissement-par-couverture.md).
+
 Une base incomplète reste utile : on y cherche, on y trouve, ce qui manque est annoncé. Une
 base périmée n'est pas seulement fausse, elle sort des CGU (D7) — et son contenu ne peut plus
 être affiché du tout.
@@ -115,6 +123,11 @@ l'être d'une période à l'autre.
 Il n'y a donc pas un budget « rafraîchissement » et un budget « découverte » à répartir : il y
 a **un seul plan, parcouru dans l'ordre d'expiration du contenu qu'il couvre**. Ce qui n'entre
 pas dans le quota de la période reste vieux, est compté, et le bandeau le dit.
+
+> **Réfuté le 17 octobre 2026 — l'encadré ci-dessous conclut à tort.** Le contenu vient bien
+> des 900 cellules, mais il y est redondant : **528** cellules suffisent à retrouver chaque fiche
+> à horaires valides, ~708 en couvrant aussi chaque point SIRENE. Une seule couverture par mois
+> laisserait 190 à 370 appels ; les deux passages de D38 les dépensent (D36).
 
 > **Ce que ça retire à une intuition confortable.** On aurait pu croire que rafraîchir coûte
 > 688 appels — les cellules `done`, qui ne tronquent pas. C'est faux : les 212 cellules
@@ -156,6 +169,13 @@ commentaire dit lequel et pourquoi — une constante dont on a oublié ce qu'ell
 constante qui ment à la prévision de coût, qui est l'outil de décision du projet.
 
 ### 4. Le coût de la convergence est un nombre mesuré, pas une estimation — et il décide
+
+> **Amendée le 17 octobre 2026.** Le plan à sec est un plancher à un niveau de reprise (1 170) ;
+> l'arbre réel, à re-troncature presque critique, converge vers ~3 100. Sous D36, aucun des deux
+> n'est la facture mensuelle : c'est la couverture. La table ci-dessous s'applique au coût de la
+> couverture robuste augmenté du second passage, aujourd'hui sous 900 — la question du périmètre
+> est close tant qu'il y reste. Voir
+> [D37](../DECISIONS.md#d37--la-prévision-compte-larbre-entier-et-le-périmètre-devient-un-budget-de-découverte).
 
 `plan:cells` tourne à sec par défaut. Recalibré, sur les cellules feuilles mesurées, **le
 nombre de cellules qu'il annonce est le nombre d'appels que la couverture complète coûtera

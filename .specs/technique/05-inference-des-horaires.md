@@ -97,6 +97,12 @@ coupure **pour le salarié**.
 | `12` et au-delà | 20 et plus | Grand |
 | `NN` | Non renseigné | — |
 
+> **Corrigé le 17 octobre 2026 — voir [D41](../DECISIONS.md#d41--nn-veut-dire--sans-salarié-déclaré--pas--effectif-inconnu-).**
+> `NN` désigne pour la grande majorité des établissements **non employeurs** (INSEE). Il se lit
+> « sans salarié déclaré » et rejoint le groupe *petit* quand l'établissement existait avant la
+> fin de l'année de référence de l'effectif ; postérieur, il reste inconnu. Et `00` ne veut pas
+> dire « aucun salarié » mais « a employé dans l'année, aucun salarié au 31 décembre ».
+
 ### Règles
 
 | Situation | `coupure_risk` | Raison |
@@ -111,6 +117,14 @@ coupure **pour le salarié**.
 
 Les règles sont évaluées **dans cet ordre** : les trois premières sont des certitudes
 structurelles qui court-circuitent le raisonnement sur l'effectif.
+
+> **Les horaires de cuisine, à partir de [D43](../DECISIONS.md#d43--trois-champs-de-plus-dans-le-masque-au-même-palier).**
+> « Aucun jour comportant une coupure » se lit sur les horaires d'ouverture **et** sur les
+> horaires de cuisine quand Google les publie. Une salle ouverte en continu avec une cuisine
+> coupée n'est pas *Sans coupure* : le verdict se calcule comme pour toute coupure, et
+> l'explication nomme les deux — *« Coupure en cuisine — salle ouverte 12h-23h, cuisine
+> 12h-14h30 puis 19h-22h30, 3 à 5 salariés »*. Ce qui est en jeu : 1 142 verdicts *Sans
+> coupure, confirmé*, dont 536 restaurants assis.
 
 ### Fiabilité
 
@@ -135,6 +149,11 @@ Répartition mesurée des tranches renseignées : **60,6 % de petites équipes**
 l'hypothèse « petite équipe » : c'est le cas le plus fréquent, pas seulement le plus
 prudent.
 
+> **Le repli se réduit, 17 octobre 2026.** La règle d'amplitude (point 2 ci-dessous) est
+> supprimée par la règle 2 de D31, qui n'est pas encore construite — 50 verdicts en portent
+> encore la trace. Et une part des « inconnus » ne l'est pas : ce sont des `NN` qui se lisent
+> « sans salarié déclaré » (D41).
+
 Repli, dans l'ordre :
 1. **Catégorie** — la restauration collective et la restauration rapide ont des rythmes
    caractéristiques indépendants de la taille.
@@ -149,7 +168,10 @@ Repli, dans l'ordre :
 
 ### Un cas particulier à signaler
 
-Le code `00` désigne un établissement **sans salarié** : le gérant travaille seul. La coupure
+~~Le code `00` désigne un établissement **sans salarié** : le gérant travaille seul.~~
+Corrigé par D41 : c'est `NN`, pour la grande majorité, qui désigne un établissement sans
+salarié ; `00` désigne un établissement qui a employé dans l'année mais n'a plus d'effectif au
+31 décembre. Ce qui suit vaut pour l'un comme pour l'autre. La coupure
 y est certaine dès qu'il y a deux services — mais c'est aussi un établissement peu
 susceptible d'embaucher. L'information mérite d'être exposée, pas de filtrer l'établissement.
 
