@@ -21,6 +21,8 @@ import { countUnfinished } from '../lib/coverage'
 import { COMMUNE_NAMES } from '../lib/config'
 import { computeProfile, parseOpeningHours, teamSize } from '../lib/hours'
 import { DEFAULT_THRESHOLD, googleNameColumns, nameScore, sireneNameColumns } from '../lib/name-match'
+import { assign } from '../lib/sirene-match'
+import type { Candidate } from '../lib/sirene-match'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
 
@@ -35,16 +37,6 @@ const CONCENTRATION_FACTOR = 1.5
 const SIGNIFICANT_UNMATCHED = 20
 
 const BATCH_SIZE = 500
-
-interface Candidate {
-  restaurant_id: string
-  google_place_id: string
-  siret: string
-  headcount_code: string | null
-  naf: string | null
-  score: number
-  distance: number
-}
 
 /**
  * `similarity()` comes from `pg_trgm`, which has to be enabled by hand on Supabase
@@ -107,31 +99,9 @@ async function findCandidates(threshold: number): Promise<Candidate[]> {
     FROM candidates
     WHERE distance <= ${MAX_DISTANCE}
       AND score >= ${threshold}
-    ORDER BY score DESC, distance ASC
   `)
 
   return rows as unknown as Candidate[]
-}
-
-/**
- * Greedy assignment, best score first: a Google establishment and a SIRENE record are
- * each used only once. Without that exclusivity, a single SIRENE record would be consumed
- * by several Google entries and the unmatched count — the canary — would be skewed in the
- * reassuring direction.
- *
- * Score outranks distance: under 75 m, it is the name that discriminates.
- */
-function assign(candidates: Candidate[]): Map<string, Candidate> {
-  const kept = new Map<string, Candidate>()
-  const takenSirets = new Set<string>()
-
-  for (const c of candidates) {
-    if (kept.has(c.restaurant_id) || takenSirets.has(c.siret)) continue
-    kept.set(c.restaurant_id, c)
-    takenSirets.add(c.siret)
-  }
-
-  return kept
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
