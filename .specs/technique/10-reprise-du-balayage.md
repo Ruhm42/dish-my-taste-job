@@ -131,8 +131,10 @@ temporelle.
 > découverte reste un arriéré, donc l'alarme ne peut pas se déclencher, et le cycle est rouge
 > chaque mois pour une autre raison — des cellules toujours dues. Un rouge qui ne dit rien.
 > Ce qui fait échouer le cycle est désormais listé par
-> [D39](../DECISIONS.md#d39--ce-qui-fait-échouer-le-cycle), dont une **fraîcheur prévue sous
-> 80 %** à la pire heure avant le passage suivant.
+> [D39](../DECISIONS.md#d39--ce-qui-fait-échouer-le-cycle) : un passage arrêté sur un plafond
+> prévu sort `capped`, en succès ; les défauts font échouer ; et une **fraîcheur prévue sous
+> 80 %** à la pire heure avant le passage suivant aussi, rapportée même quand une autre étape a
+> échoué.
 
 ### Ce qu'on ne fait pas encore
 

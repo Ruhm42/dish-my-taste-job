@@ -79,6 +79,12 @@ que soit la réponse. Ne pas étendre le stockage (D43) avant d'avoir la répons
   demanderait (le contenu Places entier est limité à 30 jours, et les 923 fiches sans horaires
   n'ont même pas d'échéance), mais l'axe 0 dit peut-être qu'il ne fallait pas les stocker du
   tout. Une seule décision, après l'axe 0 ; D45 s'arrête délibérément aux horaires.
+- **Rendre de la fraîcheur pour acheter de la découverte.** Sous les deux passages de D38, la
+  simulation donne zéro appel à la découverte en régime permanent : tout le budget rachète le
+  contenu. Les ouvertures restent prises par la couverture robuste ; ce qui ne l'est plus, ce
+  sont les lieux que les troncatures cachent encore, surtout en Presqu'île. Réserver un budget
+  de découverte, c'est baisser la pire heure ; le chiffre de cet échange se lit dans la même
+  simulation. À trancher si le sous-comptage du centre devient le problème principal.
 
 Deux décisions sont prises avec un seuil posé d'avance plutôt que tranchées sur une
 estimation : la couverture robuste cède la place à celle des fiches connues si elle ne tient pas
@@ -90,7 +96,9 @@ seule donne au moins 100 verdicts à 95 % (D42).
 1. **D45** (purge) — la conformité, quelle que soit la réponse à l'axe 0.
 2. **D36, D38, D39** ensemble, **avant le 16 décembre 2026** : le cycle du 1er novembre passe
    avec le correctif minimal (tri par profondeur), novembre a 30 jours, mais décembre en a 31 —
-   sans le passage du 16, le 31 décembre s'éteint.
+   sans le passage du 16, le 31 décembre s'éteint. Une première implémentation existe, locale et
+   non poussée ; elle précède les revues intégrées le 17 octobre (portée des cellules tronquées,
+   statuts, annotation) et sert de base, pas de livraison.
 3. **D37** — l'affichage des trois coûts, qui accompagne D36.
 4. **D41 et D42** : une seule requête DuckDB en lecture seule, après avoir réingéré SIRENE
    (tranches mises à jour le 1er octobre), puis une seule migration manuelle — avec la colonne

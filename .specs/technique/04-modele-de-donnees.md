@@ -166,7 +166,13 @@ anglais.
 | `restaurant` | `raw_secondary_hours`, `rating_count`, `website_uri` | Horaires secondaires bruts (dont cuisine), nombre d'avis, site — soumis à la même échéance que les horaires | D43 |
 
 > `cell` ne gagne rien : la couverture de D36 se calcule à chaque passage depuis les résultats
-> déjà enregistrés, elle ne se stocke pas.
+> déjà enregistrés — le disque d'une cellule complète, la distance du 20e résultat d'une cellule
+> tronquée —, elle ne se stocke pas.
+>
+> `sweep_run.status` gagne une valeur, `capped` (D39). La colonne est du texte libre : aucune
+> migration. Mais le commentaire du schéma qui énumère ses valeurs déclenche le garde-fou de D32
+> quand on le modifie — à pousser par un déclenchement manuel, en sachant qu'aucune colonne ne
+> change.
 
 ---
 

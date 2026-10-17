@@ -1076,8 +1076,8 @@ Le détail vit dans [`technique/11-convergence-du-balayage.md`](technique/11-con
 > **Amendée le 17 octobre 2026.** La mise en œuvre de la règle 1 — l'ordre lu dans le
 > `queried_at` de chaque cellule — est remplacée par une couverture du contenu périmé
 > ([D36](#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt)),
-> et l'affirmation que rafraîchir « consomme tout le quota » est réfutée : 567 cellules
-> suffisent. La règle 4 lit désormais le coût de la couverture, pas le plan à sec
+> et l'affirmation que rafraîchir « consomme tout le quota » est réfutée : 528 cellules
+> suffisent, ~708 en robuste. La règle 4 lit désormais le coût de la couverture, pas le plan à sec
 > ([D37](#d37--la-prévision-compte-larbre-entier-et-le-périmètre-devient-un-budget-de-découverte)).
 
 ---
@@ -1375,21 +1375,42 @@ Mesuré en production le 17 octobre 2026 :
 | Passage du 1er octobre | 653 cellules de profondeur 0 + 247 de profondeur 1 — **~97 %** de la base rafraîchie |
 | File du 1er novembre sous la règle en vigueur | les **899 cellules filles interrogées en septembre** (profondeurs 1 et 2) |
 | Fiches qui resteraient expirées jusqu'en décembre | **~1 280, soit 35 %** — et la file s'inverse le mois suivant : une alternance mensuelle |
-| Couverture gloutonne de toutes les fiches avec horaires | **567** cellules |
-| … de tous les établissements (4 653) | **587** |
-| … qui contient aussi chaque point SIRENE géocodé (« robuste ») | **703** |
-| Lieux apparus pour la première fois le 1er octobre, rattrapés par une couverture bâtie sur les données antérieures | **63 sur 68** (fiches connues) · **68 sur 68** (robuste) |
-| Cellules qui renvoient toujours zéro résultat | **97** |
+| Lieux apparus pour la première fois le 1er octobre, rattrapés par une couverture bâtie sur les données antérieures | fiches connues seules : **63 ou 64 sur 68** · robuste : **67 ou 68 sur 68**, selon le calcul |
+| Cellules vides — zéro résultat, aucune fiche jamais vue dans leur cercle | **97** |
 
-Un correctif minimal part en parallèle avant le cycle du 1er novembre : il trie les cellules
-dues par profondeur, la profondeur 0 d'abord, ce qui reproduit la forme du passage d'octobre.
-C'est un pansement — il suppose que les cellules mères couvrent à peu près tout, et il paie
-encore chaque mois les cellules qui ne renvoient rien.
+La taille de la couverture a été calculée trois fois ce jour-là, sur les mêmes données. Le
+premier relevé n'a pas été reproduit ; les deux recalculs, indépendants, montrent que c'est la
+**règle de couverture** qui fait l'écart :
+
+| Ce qu'une cellule couvre | Fiches à horaires | Robuste | Fiches qu'aucune cellule ne couvre |
+|---|---|---|---|
+| Premier relevé, méthode non consignée | 567 | 703 | — |
+| Cellules complètes seules, fiche à 10 m du bord au moins | 648 à 663 | 745 à 800 | **179 à 196** |
+| Cellules complètes seules, sans marge | 583 à 599 | 678 à 747 | 31 |
+| **Toute cellule interrogée, une tronquée jusqu'à son 20e résultat** | **528** | **~708** | **2** |
+
+Ce qui départage les modèles : l'appel classe ses résultats par distance. Une cellule tronquée a
+donc renvoyé tout ce qui est plus proche que son 20e résultat, dont elle enregistre la distance
+— elle est exacte jusque-là. Ne compter que les cellules complètes, avec une marge de 10 m en
+plus, laisse 5 % des fiches qu'aucune cellule ne peut racheter : elles expireraient chaque mois,
+sans que rien ne le dise.
+
+Et une contrainte de lecture : la base sert les flottants tronqués à 15 chiffres
+significatifs, et le rayon d'une cellule vaut exactement la distance à son point le plus
+lointain. Un test d'inclusion strict contre un cercle relu en base manque ainsi ~116 points
+SIRENE posés sur le bord. Avec une tolérance d'un millimètre, chacun des 5 682 points géocodés
+est dans un disque déjà interrogé.
+
+Le correctif minimal du 17 octobre — les cellules dues triées par profondeur, la profondeur 0
+d'abord — reproduit la forme du passage d'octobre pour le cycle du 1er novembre. C'est un
+pansement : il suppose que les cellules mères couvrent à peu près tout, et il paie encore
+chaque mois les cellules qui ne renvoient rien.
 
 **Ce que ça réfute dans D30.** *« Sous le plan actuel, le rafraîchir consomme donc tout le
 quota mensuel »* : faux. Le contenu en base vient bien des 900 cellules interrogées, mais il y
-est **redondant** — 567 cellules suffisent à retrouver chaque fiche qui porte des horaires. Le
-rafraîchissement laisse de **200 à 310 appels** par mois.
+est **redondant** — 528 cellules suffisent à retrouver chaque fiche à horaires valides, ~708 en
+couvrant aussi chaque point SIRENE. Une seule couverture par mois laisserait de **190 à 370
+appels** ; [D38](#d38--deux-passages-par-mois-le-1er-et-le-16) les dépense autrement.
 
 **Options écartées**
 - *Garder l'ordre par `queried_at`.* C'est ce qui produit l'alternance mesurée : un tiers de la
@@ -1398,36 +1419,49 @@ rafraîchissement laisse de **200 à 310 appels** par mois.
   plutôt que par principe : il ne voit pas ce que la troncature d'une mère cachait, et il paie
   97 cellules vides chaque mois.
 - *Rafraîchir toutes les cellules du plan.* C'est tout le quota, et davantage, pour un contenu
-  que deux appels sur trois suffisent à retrouver.
-- *Une couverture des seules fiches connues (587).* Moins chère de 116 appels, mais elle a
-  manqué 5 des 68 ouvertures d'octobre. Ce qui ouvre là où aucune fiche n'existait encore n'est
-  pas retrouvé par le rafraîchissement, et attend un budget de découverte qui est, chaque mois,
-  le premier sacrifié.
+  que la moitié des appels suffit à retrouver.
+- *Ne couvrir qu'avec les cellules complètes, et une marge de 10 m au choix.* 179 à 196 fiches
+  hors de toute portée, qui expireraient chaque mois en silence.
+- *Une cellule tronquée couvre tout son disque.* Moins de cellules — 464 —, mais faux : elle n'a
+  renvoyé que ses vingt plus proches.
+- *Une couverture des seules fiches connues.* Moins chère d'environ 150 appels, mais elle a
+  manqué des ouvertures d'octobre que la robuste rattrape : ce qui ouvre là où aucune fiche
+  n'existait encore attend sinon un budget de découverte que D38 ne laisse pas.
 - *Retirer du plan les 97 cellules vides.* Une cellule vide aujourd'hui couvre un terrain où
   quelque chose peut ouvrir ; la retirer pour toujours rend ce terrain invisible sans que rien
   ne le dise.
 
-**Décision.** Quatre règles. Elles remplacent la mise en œuvre de la règle 1 de D30 ; son
+**Décision.** Cinq règles. Elles remplacent la mise en œuvre de la règle 1 de D30 ; son
 principe — la fraîcheur prime sur la complétude — reste.
 
-1. **Chaque passage rafraîchit une couverture du contenu, pas une liste de cellules.** Parmi
-   les cellules **complètes** du plan — moins de 20 résultats à leur dernier appel —, il choisit
-   gloutonnement la plus petite sélection qui contient chaque fiche à rafraîchir, en servant
-   d'abord les fiches dont l'échéance est la plus proche. Une cellule tronquée n'entre jamais
-   dans une couverture : elle ne garantit rien de ce qu'elle contient.
-2. **La couverture est robuste** : elle contient aussi chaque point SIRENE géocodé du
-   périmètre. C'est par là que le rafraîchissement trouve les ouvertures — 68 sur 68. Si elle ne
-   tient pas dans le budget de [D38](#d38--deux-passages-par-mois-le-1er-et-le-16), la couverture
-   des fiches connues la remplace, sans nouvelle discussion.
-3. **Une cellule qui a renvoyé zéro résultat à ses deux derniers appels sort de la
-   couverture**, et ses points SIRENE ne comptent plus dans la contrainte robuste. Elle reste au
-   plan et se rejoue une fois par semestre, avant la découverte : une quinzaine d'appels par
-   mois pour les 97.
-4. **Le solde va d'abord au second passage du mois (D38), ensuite à la découverte.**
+1. **Chaque passage rafraîchit une couverture du contenu, pas une liste de cellules.** Parmi les
+   cellules interrogées, il choisit gloutonnement la plus petite sélection dont la **portée**
+   contient chaque fiche à rafraîchir, en servant d'abord les fiches dont l'échéance est la plus
+   proche. La portée d'une cellule complète est son disque ; celle d'une cellule tronquée, le
+   disque de rayon égal à la distance de son 20e résultat. L'inclusion se teste avec une
+   tolérance d'un millimètre et sans autre marge : la marge de 10 m de
+   [D45](#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus) sert à
+   constater une absence, pas à choisir une cellule.
+2. **L'ordre de choix est total.** 97 % des choix sont des ex-aequo ; à gain égal passe la
+   cellule dont une fiche ajoutée expire le plus tôt, puis la moins profonde, puis la plus
+   anciennement interrogée, puis l'identifiant. Sans ordre total, le mode sec et le mode réel
+   n'achètent pas les mêmes cellules.
+3. **La couverture est robuste** : chaque point SIRENE géocodé du périmètre est dans la portée
+   d'une cellule choisie. C'est par là que le rafraîchissement trouve les ouvertures. Si elle ne
+   tient pas dans le budget de D38, la couverture des fiches connues la remplace, sans nouvelle
+   discussion.
+4. **Une cellule vide sort de la couverture** — zéro résultat à son dernier appel, et aucune
+   fiche jamais vue dans son cercle —, et ses points SIRENE ne comptent plus dans la contrainte
+   robuste. Elle reste au plan et se rejoue une fois par semestre, sur une part réservée du
+   passage du 16 (D38).
+5. **Le solde va d'abord au second passage du mois (D38), ensuite à la découverte.**
 
 **Conséquences.** Le coût mensuel du rafraîchissement devient un nombre calculé à sec et
-rapporté par le cycle : la couverture du jour. Il bouge quand une cellule de la couverture
-tronque — elle en sort, ses filles complètes la remplacent —, et ce mouvement est rapporté.
+rapporté par le cycle : la couverture du jour. Les fiches qu'aucune portée ne contient — deux
+aujourd'hui — sont nommées à chaque passage.
+
+En régime permanent, le second passage prend tout le solde : la découverte ne reçoit rien
+(D38). C'est le prix de la fraîcheur, et il est dit.
 
 `done` change encore de sens : une cellule n'est plus due parce qu'elle a été interrogée le
 mois dernier, mais parce que la couverture la choisit. Le décompte des appels, lui, ne bouge
@@ -1457,8 +1491,8 @@ mois**. `plan:cells` en annonce **1 170** : c'est un plancher à un seul niveau 
 le dit désormais.
 
 Et sous [D36](#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt),
-l'arbre n'est plus ce qu'on paie chaque mois. Le rafraîchissement coûte la couverture — 590 à
-700 appels —, le reste est de la découverte. Rendement mesuré : environ **0,13 lieu nouveau par
+l'arbre n'est plus ce qu'on paie chaque mois. Le rafraîchissement coûte la couverture — 530 à
+710 appels selon la contrainte robuste —, le reste serait de la découverte. Rendement mesuré : environ **0,13 lieu nouveau par
 appel de découverte**. Et **40 % des cellules de reprise sont dans les 1er et 2e
 arrondissements**, là où D30 mesurait le plus faible rendement de la recherche emblématique.
 
@@ -1487,9 +1521,11 @@ arrondissements**, là où D30 mesurait le plus faible rendement de la recherche
    reste caché est compté par commune et dit dans le bandeau, au même titre que l'expiration.
 
 **Conséquences.** Le zéro euro tient au périmètre actuel sans couper un arrondissement. Le prix
-est ailleurs, et il se dit : à 0,13 lieu par appel, avec ce que D38 laisse, la découverte
-rapporte quelques dizaines de lieux par mois au mieux, et la Presqu'île restera longtemps la
-zone la plus sous-comptée. La vision promet « la liste de son arrondissement » ; pour le 1er
+est ailleurs, et il se dit : sous D38, les deux passages prennent tout le budget, et la
+découverte ne reçoit rien en régime permanent ; même avec un solde, à 0,13 lieu par appel, elle
+rapporterait quelques dizaines de lieux par mois au mieux. La Presqu'île restera longtemps la
+zone la plus sous-comptée. La règle 3 dit comment dépenser la découverte le jour où elle a un
+budget ; elle ne lui en donne pas. La vision promet « la liste de son arrondissement » ; pour le 1er
 et le 2e, elle sera juste sur ce qu'elle montre et incomplète sur ce qu'elle tait — et elle le
 dira.
 
@@ -1517,9 +1553,23 @@ calendaire passe au moins cinq jours par an expirée**, quel que soit le jour du
 Seul un second rafraîchissement certains mois l'évite, et c'est ce que le solde du quota peut
 acheter.
 
-Simulé par le propriétaire sur les données du 17 octobre : **600 appels le 1er et 300 le 16**
-gardent la pire heure à **86,6 %** de fiches fraîches au lieu de **0 %**, et font passer la
-moyenne de **98,3 % à 99,7 %**.
+Deux simulations, le 17 octobre. Celle du propriétaire : **600 appels le 1er et 300 le 16**
+gardent la pire heure à **86,6 %** de fiches fraîches au lieu de **0 %**, et la moyenne passe
+de 98,3 % à 99,7 %. Rejouée sur une couverture (cellules complètes, marge de 10 m, 745
+cellules), douze mois à partir du 1er novembre, retards de GitHub tirés au hasard :
+
+| Plafond du 1er | 600 | 500 | **450** | 400 |
+|---|---|---|---|---|
+| Pire heure | 74,3 % | 82,7 % | **85,9 %** | 82,2 % |
+
+Dix tirages de retards donnent tous 85,9 à 86,0 % à 450. À 600, le passage du 16 n'a que 300
+appels pour racheter ce que le 1er a rafraîchi, et un mois de 31 jours s'éteint au quart.
+
+La même simulation montre ce que deviennent les priorités. Sous deux passages, **tout le
+contenu est dû à chaque passage** : ce que le 1er a rafraîchi expire avant le 1er suivant
+augmenté de douze heures, donc le passage du 16 le compte. Un glouton qui ne regarde que le
+nombre de fiches reprend toujours les mêmes cellules denses et affame ce qui vient d'expirer.
+Et rien ne reste pour la découverte, ni pour le rejeu des cellules vides.
 
 **Options écartées**
 - *Accepter et documenter.* Honnête, mais la défaillance est totale : à la pire heure la liste
@@ -1533,32 +1583,48 @@ moyenne de **98,3 % à 99,7 %**.
 - *Un passage tous les 30 jours plutôt que tous les mois.* Un mois calendaire par an en
   porterait deux : deux couvertures dans la même période, au-delà de 900 — la carte bancaire.
 - *Tout rafraîchir deux fois, le 1er et le 16.* Deux couvertures complètes dépassent 900.
+- *Garder 600 sur la foi de la première simulation.* Rejouée sur une couverture, elle donne
+  74,3 % : le plafond se lit dans la simulation de la règle qu'on applique, pas dans une autre.
 
 **Décision.**
-1. **Deux passages par mois, le 1er et le 16, à 09:00 UTC.** Le premier est plafonné à **600
-   appels** ; le second dispose du reste de la période, jusqu'au plafond de 900. Ce sont les
-   chiffres de la simulation ; ils se recalibrent sur la couverture de D36 quand elle existe.
-2. **Chaque passage sert d'abord le contenu dont l'échéance tombe avant le passage suivant
-   augmenté de douze heures**, puis le reste par ordre d'échéance, puis la découverte. C'est le
-   plafond du premier passage qui étale les échéances : sans lui, tout serait rafraîchi le même
-   jour et expirerait dans la même demi-heure.
-3. **Le refus de rejouer un balayage réussi depuis moins de 25 jours est retiré.** Il
-   bloquerait le passage du 16 dès qu'un passage réussit — ce que [D39](#d39--ce-qui-fait-échouer-le-cycle)
-   rend possible. Le plafond de la période borne déjà ce qu'un mois peut dépenser, relances
-   manuelles comprises ; le plafond par passage borne le premier.
-4. **L'affirmation « le 1er garantit le remplacement avant l'expiration » est retirée** de D7,
+1. **Deux passages par mois, le 1er et le 16, à 09:00 UTC.** Le plafond du 1er est celui qui
+   **maximise la pire heure** dans la simulation sur douze mois : **450 appels** au 17 octobre.
+   Le 16 dispose du reste de la période, jusqu'au plafond de 900. Le plafond se recalcule à
+   chaque changement de la règle de couverture — celle de
+   [D36](#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt)
+   est plus petite que celle de la simulation —, et la simulation qui le fixe est consignée.
+2. **Le passage du 16 réserve d'abord une quinzaine d'appels** aux cellules vides dues pour leur
+   rejeu semestriel. Sans réserve, elles ne recevraient jamais rien.
+3. **Puis chaque passage sert, dans cet ordre** : le contenu expiré ou qui expire avant
+   maintenant augmenté de douze heures ; celui qui expire avant le passage suivant augmenté de
+   douze heures ; le reste, par échéance ; la découverte. C'est le plafond du 1er qui étale les
+   échéances : sans lui, tout serait rafraîchi le même jour et expirerait dans la même
+   demi-heure.
+4. **Le refus de rejouer un balayage réussi depuis moins de 25 jours est retiré**, au plus tard
+   avec le premier passage piloté par la couverture. Il bloquerait le passage du 16 dès qu'un
+   passage du 1er sort `succeeded` ([D39](#d39--ce-qui-fait-échouer-le-cycle)). Le plafond de la
+   période borne déjà ce qu'un mois peut dépenser, relances manuelles comprises ; le plafond du
+   1er borne le premier passage.
+5. **L'affirmation « le 1er garantit le remplacement avant l'expiration » est retirée** de D7,
    de `technique/02`, de `cron-refresh.ts` et de `sweep.yml`, au profit de ce qui est vrai : le
    cycle étale les échéances, et ce qui expire malgré lui ne s'affiche pas (D30 règle 6) et se
    compte dans le bandeau.
 
 **Conséquences.** La pire heure n'est plus nulle, mais elle n'est pas pleine : environ une fiche
-sur huit peut être expirée au même moment, certains jours. C'est la limite de l'arithmétique
+sur sept peut être expirée au même moment, certains jours. C'est la limite de l'arithmétique
 sous 900 appels, et l'écran le dit au lieu de le cacher.
 
+**La découverte ne reçoit rien en régime permanent.** Le budget entier va au rafraîchissement,
+et la part réservée est ce qui garde vivantes les cellules vides. Les lieux que les troncatures
+cachent encore — surtout en Presqu'île — ne seront pas achetés tant que la couverture ne
+rétrécit pas, ou qu'on ne rend pas de la fraîcheur pour eux. C'est un arbitrage, laissé ouvert
+dans [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md). Les ouvertures, elles, restent prises par la
+couverture robuste.
+
 Le critère d'acceptation se joue à sec : une simulation sur douze mois, retards de GitHub
-compris, garde la pire heure au-dessus de **85 %** sans jamais dépasser 900 appels dans une
-période. Décembre a 31 jours : pour que le 31 décembre ne s'éteigne pas, le passage du
-**16 décembre 2026** doit exister.
+compris, garde la pire heure au-dessus de **85 %**, sans jamais dépasser 900 appels dans une
+période ni le plafond du 1er. Décembre a 31 jours : pour que le 31 décembre ne s'éteigne pas, le
+passage du **16 décembre 2026** doit exister.
 
 > D7 reste vrai sur l'essentiel — un horaire ne s'affiche jamais au-delà de 30 jours. Il cesse
 > d'affirmer que la planification suffit à l'obtenir.
@@ -1568,50 +1634,83 @@ période. Décembre a 31 jours : pour que le 31 décembre ne s'éteigne pas, le 
 ## D39 — Ce qui fait échouer le cycle
 
 **Contexte.** Un cycle rouge ne porte aujourd'hui aucun signal. Le balayage sort en échec
-**chaque mois, par construction** : il rapporte toujours des cellules dues, et il en restera
-toujours — la découverte est un arriéré, pas un reliquat. L'alarme de fraîcheur de
-`cron-refresh`, elle, ne se déclenche que lorsque le plan a **entièrement convergé**, ce qui
-n'arrive jamais. Le seul état observable est donc « rouge », que le mois se soit bien ou mal
-passé, et l'alerte que GitHub envoie à chaque échec est devenue un bruit qu'on apprend à
-ignorer. Le jour où quelque chose cassera vraiment, elle ressemblera à toutes les autres.
+**chaque mois, par construction** : l'arrêt sur le plafond est levé comme une erreur ordinaire,
+les cellules encore dues s'ajoutent aux motifs, et `sweep_run.status` passe à `failed`. Le
+passage du 1er octobre est en échec sur trois motifs, et **les trois sont le plafond**. L'alarme
+de fraîcheur de `cron-refresh`, elle, ne se déclenche que lorsque le plan a **entièrement
+convergé**, ce qui n'arrive jamais. Le seul état observable est donc « rouge », que le mois se
+soit bien ou mal passé, et l'alerte que GitHub envoie à chaque échec est devenue un bruit qu'on
+apprend à ignorer. Le jour où quelque chose cassera vraiment, elle ressemblera à toutes les
+autres.
 
 [D33](#d33--un-balayage-en-échec-nemporte-plus-les-étapes-hors-ligne) avait raison de garder le
 cycle rouge plutôt que de le taire. Il ne disait pas *quoi* rendre rouge.
 
+Repères mesurés le 17 octobre : **2,2 %** des fiches à horaires étaient périmées juste après le
+passage du 1er octobre (82 sur 3 730), **3,3 %** deux semaines plus tard (122). Aucune cellule
+irréductible, aucune cellule tronquée sans cellule de reprise.
+
+> Une PR parallèle (#12) a instruit la même question le même jour, puis a été fermée au profit
+> de celle-ci ; sa revue a apporté les règles 1, 4 et 5 et le dernier paragraphe des
+> conséquences.
+
 **Options écartées**
 - *Garder l'échec sur les cellules dues.* Rouge douze mois sur douze : aucune information, et
   une alerte dressée à être ignorée.
-- *Passer au vert dès que le balayage a dépensé.* Un passage interrompu après dix appels serait
-  vert : le silence que D33 refuse.
-- *Garder l'alarme « convergé et périmé ».* Elle porte sur un état que le plan n'atteint jamais.
-- *Un seuil d'expiration nul.* Sous D38, l'arithmétique laisse jusqu'à une fiche sur huit
-  expirée certains jours : chaque mois de 31 jours serait rouge, et on retomberait dans le bruit.
+- *`continue-on-error` dans le workflow.* Met au vert les défauts avec le reste : le silence que
+  D33 refuse.
+- *Un avertissement chaque mois au lieu d'un échec.* Le même rouge, un cran plus bas.
+- *Ranger un passage plafonné en `succeeded`.* Il affirmerait une couverture que le passage n'a
+  pas.
+- *Garder l'alarme « convergé et périmé ».* Elle porte sur un état que le plan n'atteint jamais ;
+  la prévision de la règle 3 la remplace.
+- *Ne faire échouer que les cellules irréductibles nouvelles.* Il n'en existe aucune ; en
+  accepter une est une décision à part entière, qui n'a pas à être prise d'avance.
+- *Un seuil d'expiration nul.* Sous D38, jusqu'à une fiche sur sept peut être expirée certains
+  jours : chaque mois de 31 jours serait rouge, et on retomberait dans le bruit.
 
-**Décision.** Le cycle échoue quand, et seulement quand :
+**Décision.**
 
-1. **Google refuse sur quota (`HTTP 429`).** Toujours un défaut : notre compteur doit parler
-   avant celui de Google (D8, D28).
-2. **Le passage s'arrête avant d'avoir servi le contenu échu** — erreur HTTP, réseau, signal
-   d'arrêt — alors qu'il lui restait du budget.
-3. **Le verrou du balayage est tenu par une session disparue**, ou ne peut pas être rendu.
-4. **Le registre des dépenses ne peut pas prouver ce qui a été dépensé** dans la période.
-5. **La fraîcheur prévue passe sous 80 %** : à la pire heure entre la fin du passage et le
-   passage suivant, retard de GitHub compris, moins de 80 % des fiches à horaires les auraient
-   encore utilisables. Calculé sur les échéances réelles, ce seuil sépare le creux structurel de
-   D38 (~87 %) de l'extinction mesurée aujourd'hui (0 %).
-6. **Une cellule irréductible nouvelle apparaît** : leur nombre monte d'un passage à l'autre.
-
-Le reste est **rapporté, jamais rouge** : l'arriéré de découverte, les troncatures non
-résolues, les cellules irréductibles déjà connues, la couverture du jour et son coût.
+1. **Trois statuts.** `capped` : le passage s'est arrêté sur un plafond prévu — celui de la
+   période ou celui du 1er (D38) — sans aucun défaut ; il sort en succès, `error` vide, et son
+   résumé dit ce qui reste. `succeeded` : aucun défaut et plus rien de dû. `failed` : au moins
+   un défaut ; il sort en échec, et `error` liste les défauts, tous et eux seuls. La colonne est
+   du texte libre, sans migration ; le commentaire du schéma qui énumère ses valeurs déclenche
+   le garde-fou de D32 quand on le modifie — à pousser par un déclenchement manuel, en sachant
+   qu'aucune colonne ne change.
+2. **Est un défaut, et fait échouer** : une interruption autre qu'un plafond prévu (erreur HTTP,
+   `429`, signal d'arrêt, base injoignable) ; une cellule en échec ; une cellule irréductible ;
+   une troncature sans aucune cellule de reprise ; un refus de démarrer (verrou tenu, journal
+   des dépenses qui ne prouve pas ce qui a été dépensé, plafond déjà atteint).
+3. **La fraîcheur se prévoit, et fait échouer sous 80 %** : à la pire heure entre la fin du
+   passage et le passage suivant, retard de GitHub de sept heures compris, au moins 80 % des
+   fiches à horaires doivent rester utilisables. La prévision se calcule sur la portée attendue
+   des cellules choisies, sans marge : avec la marge de 10 m, elle lisait environ sept points
+   sous la pire heure réelle, et la règle aurait viré au rouge un passage sur deux. Le seuil
+   laisse passer le creux de D38 (~86 %) et attrape l'extinction d'octobre (0 %).
+4. **Rapporté, jamais rouge — et visible** : l'arriéré de découverte, les troncatures dont la
+   reprise attend son tour, la couverture du jour et son coût face au plafond, la fraîcheur
+   prévue et l'heure de sa pire échéance. Sous GitHub Actions, chaque cycle réel, vert ou rouge,
+   les laisse dans une annotation de niveau *notice* — pas *warning* : un avertissement chaque
+   mois serait le rouge mensuel un cran plus bas.
+5. **Une alarme de fraîcheur n'est jamais masquée.** Le cycle rapporte la première étape en
+   échec, comme D33 le veut, **et** l'échec de fraîcheur : celui-ci n'est pas une étape en aval
+   du balayage, c'est sa conséquence pour le produit.
+6. **Le canari de `match:sirene` s'enregistre quand le passage a servi toute sa couverture
+   robuste** : chaque point SIRENE est alors dans la portée d'une cellule interrogée, condition
+   sous laquelle le taux de non-appariement par commune redevient un signal. Sous la couverture
+   des seules fiches connues, il reste retenu, en le disant.
 
 **Conséquences.** Un cycle vert dit que le contenu affiché tiendra jusqu'au passage suivant ; un
 cycle rouge dit qu'il faut regarder. C'est la seule propriété qui rende une alerte utile.
 
-Le canari de `match:sirene` se retirait tant que des cellules restaient dues (D33) — donc pour
-toujours. Il s'enregistre désormais quand le passage a servi toute sa couverture **robuste** :
-chaque point SIRENE est alors dans une cellule complète interrogée, condition sous laquelle le
-taux de non-appariement par commune redevient un signal. Sous la couverture des fiches connues,
-il reste retiré, en le disant.
+**La règle 3 se construit avec D38, jamais avant.** Avec un seul passage par mois, chaque mois
+s'éteint au moins le temps du retard de GitHub — même un mois de 30 jours, puisque le contenu
+relevé le 1er à 9 h expire le 1er suivant à 9 h —, et la prévision serait rouge chaque mois. Ce
+serait vrai, mais inactionnable : c'est le défaut que D38 corrige, pas un incident.
+
+Une cellule irréductible fera échouer chaque cycle qui l'atteint, jusqu'à ce qu'on en décide.
+C'est voulu, et il n'y a pas de mécanisme d'acquittement tant qu'il n'a pas servi une fois.
 
 ---
 
@@ -1870,16 +1969,26 @@ artefact géométrique :
 Aucune concentration au bord, médiane à 40 m à l'intérieur : ce sont de vraies absences —
 fermeture, déménagement, changement de type —, pas des lieux posés sur la ligne.
 
+Une seconde mesure, le même jour, regarde l'autre échelle de temps : les lieux à l'intérieur de
+la portée d'un appel **du même jour** qui ne sont pas revenus de cet appel. **51** sur environ
+4 640 paires observables, **tous à moins de 7,2 m du bord** (médiane 0,6 m) : 5 % de manqués
+dans les dix derniers mètres d'une portée, aucun au-delà. Les deux mesures tiennent ensemble —
+un effet de bord réel mais étroit, qui n'explique pas les absences de long terme.
+
 **Options écartées**
 - *Garder les horaires expirés pour l'audit.* C'est le stockage que D7 interdit.
 - *Purger une fois par mois, au cycle.* Le contenu resterait stocké jusqu'à un mois après son
   échéance.
 - *Supprimer la fiche.* Une candidature peut la référencer ; la fiche reste, vidée de son
   contenu Google.
-- *Une tolérance de bord large, 25 m ou plus.* La mesure n'en justifie aucune : elle protégerait
-  d'un effet qui n'existe pas, et laisserait listées 23 fiches absentes.
-- *Aucune tolérance.* Notre distance et celle de Google ne sortent pas de la même formule ; un
-  lieu à 2 m du bord ne prouve rien.
+- *Aucune tolérance.* Le jour même, une fiche sur vingt dans la bande des dix derniers mètres ne
+  revient pas : une quarantaine de fiches par période passeraient absentes à tort, puis
+  reviendraient.
+- *Une tolérance plus large, 25 m ou davantage.* Aucun manqué au-delà de 7,2 m : elle ne
+  protégerait de rien, et laisserait listées des fiches réellement absentes.
+- *Appliquer la tolérance au choix des cellules.* C'est ce qui laissait 179 à 196 fiches hors de
+  toute couverture
+  ([D36](#d36--rafraîchir-le-contenu-périmé-par-couverture-pas-la-cellule-interrogée-le-plus-tôt)).
 
 **Décision.**
 1. **Une purge quotidienne efface le contenu horaire dès son échéance** : horaires bruts,
@@ -1887,12 +1996,15 @@ fermeture, déménagement, changement de type —, pas des lieux posés sur la l
    ce sont nos métadonnées, pas du contenu Google — pour que la fiche se compte *expirée* et non
    *inconnue*. Un job distinct du réveil ([D35](#d35--réveiller-la-base-chaque-jour-par-le-pooler-et-par-lapi-et-découpler-le-commit)
    a appris ce que coûte un couplage), avec un mode sans écriture.
-2. **Une fiche qu'une cellule complète aurait dû renvoyer, et n'a pas renvoyée, est marquée
-   absente** par le passage qui le constate. Elle n'est plus listée, l'écran compte « N fiches
-   que Google ne renvoie plus », et son contenu suit la purge à son échéance. Elle revient
-   d'elle-même si un passage la retrouve.
-3. **« Aurait dû »** : à l'intérieur du cercle d'au moins **10 m**. La tolérance absorbe l'écart
-   entre deux calculs de distance, pas un effet mesuré.
+2. **Une fiche qu'un appel aurait dû renvoyer, et n'a pas renvoyée, est marquée absente** par
+   le passage qui le constate. Elle n'est plus listée, l'écran compte « N fiches que Google ne
+   renvoie plus », et son contenu suit la purge à son échéance. Elle revient d'elle-même si un
+   passage la retrouve.
+3. **« Aurait dû »** : à au moins **10 m** à l'intérieur de la portée que cet appel vient de
+   mesurer — son disque s'il est complet, la distance de son 20e résultat s'il est tronqué. Une
+   fiche non revenue dans la bande des dix mètres n'est pas absente : elle reste due au passage
+   suivant, une quarantaine de reprises par période. Les distances se comparent avec la
+   tolérance d'un millimètre de D36.
 
 **Conséquences.** Une colonne de plus — la date depuis laquelle la fiche est absente —, jointe à
 la migration de D41 et D42.

@@ -125,9 +125,9 @@ a **un seul plan, parcouru dans l'ordre d'expiration du contenu qu'il couvre**. 
 pas dans le quota de la période reste vieux, est compté, et le bandeau le dit.
 
 > **Réfuté le 17 octobre 2026 — l'encadré ci-dessous conclut à tort.** Le contenu vient bien
-> des 900 cellules, mais il y est redondant : **567** cellules suffisent à retrouver chaque fiche
-> à horaires, 703 en couvrant aussi chaque point SIRENE. Rafraîchir laisse 200 à 310 appels par
-> mois (D36).
+> des 900 cellules, mais il y est redondant : **528** cellules suffisent à retrouver chaque fiche
+> à horaires valides, ~708 en couvrant aussi chaque point SIRENE. Une seule couverture par mois
+> laisserait 190 à 370 appels ; les deux passages de D38 les dépensent (D36).
 
 > **Ce que ça retire à une intuition confortable.** On aurait pu croire que rafraîchir coûte
 > 688 appels — les cellules `done`, qui ne tronquent pas. C'est faux : les 212 cellules

@@ -261,7 +261,7 @@ relit à l'endroit où elle s'applique.
 > **Remplacé par D28 puis D38 — à corriger à la mise en œuvre.** Le plafond journalier vaut
 > 1 000, pas 800 (`02`, *posés et vérifiés*). Le total mensuel est borné par le **plafond de la
 > période** — 900 appels par mois du Pacifique, toutes exécutions confondues (D28) —, pas par la
-> planification. D38 planifie deux passages, le 1er plafonné à 600 et le 16 sur le reste, et
+> planification. D38 planifie deux passages, le 1er plafonné à 450 et le 16 sur le reste, et
 > retire le refus des 25 jours, qui bloquerait le second. Un déclenchement manuel de trop
 > dépense donc ce que la période permet encore, jamais au-delà.
 
