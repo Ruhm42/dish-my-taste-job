@@ -302,6 +302,19 @@ describe('inferring the risk borne by the employee', () => {
     expect(profile.splitShiftRisk).toBe('high') // cautious assumption
   })
 
+  // D31: the 70 h threshold separated 39% of two-brigade teams from 38%. It used to soften
+  // exactly this case to "Coupure possible — forte amplitude".
+  it('unknown headcount: a wide weekly amplitude no longer softens the verdict', () => {
+    const EVERY_DAY = [SUN, MON, TUE, WED, THU, FRI, SAT]
+    const profile = profileOf(hours(
+      ...EVERY_DAY.flatMap((d) => [p(d, 10, 0, d, 15, 0), p(d, 18, 0, d, 23, 30)]),
+    ), null)
+    expect(profile.weeklyOpenMinutes).toBeGreaterThan(70 * 60)
+    expect(profile.splitShiftRisk).toBe('high')
+    expect(profile.confidence).toBe('likely')
+    expect(profile.explanation).toBe('Coupure probable — ouvert 10h-15h puis 18h-23h30, effectif inconnu')
+  })
+
   it('contract catering short-circuits the headcount reasoning', () => {
     const profile = computeProfile({
       windows: parseOpeningHours(hours(p(TUE, 7, 0, TUE, 15, 0))),
@@ -331,7 +344,7 @@ describe('explainability', () => {
       p(TUE, 12, 0, TUE, 14, 30),
       p(TUE, 19, 0, TUE, 22, 30),
     ), null)
-    expect(profile.explanation).toContain('effectif inconnu')
+    expect(profile.explanation).toBe('Coupure probable — ouvert 12h-14h30 puis 19h-22h30, effectif inconnu')
   })
 
   it('never displays a numeric score', () => {

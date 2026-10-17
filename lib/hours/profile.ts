@@ -166,7 +166,7 @@ export function computeProfile({ windows: raw, headcountCode, category }: Profil
   }
 
   const { splitShiftRisk, confidence, explanation } = inferSplitShift({
-    hasHours, category, splitDaysCount, size, headcountCode, weeklyOpenMinutes,
+    hasHours, category, splitDaysCount, size, headcountCode,
     pattern: base.servicePattern,
     services: describeServices(representativeDay(services)),
   })
@@ -180,12 +180,11 @@ function inferSplitShift(ctx: {
   splitDaysCount: number
   size: TeamSize
   headcountCode?: string | null
-  weeklyOpenMinutes: number
   pattern: ServicePattern
   services: string
 }): { splitShiftRisk: SplitShiftRisk; confidence: Confidence; explanation: string } {
   const {
-    hasHours, category, splitDaysCount, size, headcountCode, weeklyOpenMinutes, pattern, services,
+    hasHours, category, splitDaysCount, size, headcountCode, pattern, services,
   } = ctx
 
   // 1. Nothing to infer from.
@@ -233,14 +232,15 @@ function inferSplitShift(ctx: {
   }
 
   // Fallback: headcount is unknown, which is common among small businesses — precisely
-  // where the information matters most. We infer from the weekly amplitude, and degrade
-  // the confidence visibly rather than asserting.
-  const wideAmplitude = weeklyOpenMinutes > 70 * 60
+  // where the information matters most. Assume a single brigade and degrade the confidence
+  // visibly rather than asserting. No free signal does better: amplitude, gap length, split
+  // days and category, measured against the known headcounts, all sit on the 61% base rate
+  // of small teams — the 70 h amplitude rule that used to soften this to "possible" split
+  // 39% from 38%. Softening without evidence is the one error this verdict must not make.
+  // See D31.
   return {
-    splitShiftRisk: wideAmplitude ? 'medium' : 'high',
+    splitShiftRisk: 'high',
     confidence: 'likely',
-    explanation: wideAmplitude
-      ? `Coupure possible — ouvert ${services}, forte amplitude, effectif inconnu`
-      : `Coupure probable — ouvert ${services}, effectif inconnu`,
+    explanation: `Coupure probable — ouvert ${services}, effectif inconnu`,
   }
 }
