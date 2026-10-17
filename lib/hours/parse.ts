@@ -26,11 +26,13 @@ function allDayWindows(): ServiceWindow[] {
 /**
  * Converts Google opening hours into normalized service windows.
  *
- * Three pitfalls are handled here, and nowhere else:
+ * Four pitfalls are handled here, and nowhere else:
  *  - `day` 0 means Sunday, not Monday
  *  - a past-midnight close carries the NEXT day: we fold it back onto the opening
  *    day by letting the value exceed 1440
  *  - an open point without a close means 24/7
+ *  - consecutive "Open 24 hours" days come merged into ONE period, Friday 15:00 to
+ *    Sunday 00:00: we spread it over every day it covers
  *
  * A closed day is simply absent from the periods: it is not an empty range.
  */
@@ -45,20 +47,28 @@ export function parseOpeningHours(hours: GoogleOpeningHours | null | undefined):
   for (const period of periods) {
     if (!period.open || !period.close) continue
 
-    const day = toDayOfWeek(period.open.day)
     const opensAt = period.open.hour * 60 + period.open.minute
     const rawCloseMin = period.close.hour * 60 + period.close.minute
 
-    // Day gap between open and close, accounting for the Saturday -> Sunday wrap.
-    // Equals 0 (same day) or 1 (past midnight).
-    const dayGap = (period.close.day - period.open.day + 7) % 7
-    let closesAt = dayGap * MINUTES_PER_DAY + rawCloseMin
+    // Calendar days from open to close, accounting for the Saturday -> Sunday wrap.
+    let dayGap = (period.close.day - period.open.day + 7) % 7
 
     // Safety net: a close earlier than the open on the same day is a mislabelled
     // past-midnight close.
-    if (closesAt <= opensAt) closesAt += MINUTES_PER_DAY
+    if (dayGap === 0 && rawCloseMin <= opensAt) dayGap = 1
 
-    windows.push({ day, opensAt, closesAt })
+    // Every midnight the period crosses starts a new day, except the last one: the final
+    // close stays on the day before, past 1440, exactly like an ordinary overnight close.
+    // Filed whole under its opening day, Friday 15:00 to Sunday 00:00 left Saturday
+    // reading as closed — a false "week-end libre" on a bar open all of Saturday.
+    const days = Math.max(dayGap, 1)
+    for (let k = 0; k < days; k++) {
+      windows.push({
+        day: toDayOfWeek((period.open.day + k) % 7),
+        opensAt: k === 0 ? opensAt : 0,
+        closesAt: k < days - 1 ? MINUTES_PER_DAY : (dayGap - k) * MINUTES_PER_DAY + rawCloseMin,
+      })
+    }
   }
 
   return sortWindows(windows)

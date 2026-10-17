@@ -1,6 +1,6 @@
 # Inférence des horaires
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Le cœur fonctionnel du projet, et sa seule vraie difficulté conceptuelle.
 
@@ -22,19 +22,36 @@ pour cette raison, et uniquement celle-là, qu'on croise avec l'effectif SIRENE 
 
 ## Étape 1 — Normalisation des horaires Google
 
-Trois pièges, à couvrir par des tests **avant** d'écrire quoi que ce soit d'autre :
+Quatre pièges, à couvrir par des tests **avant** d'écrire quoi que ce soit d'autre :
 
 | Piège | Comportement |
 |---|---|
 | **Numérotation des jours** | `0` = dimanche, pas lundi |
 | **Fermeture après minuit** | La fermeture porte le jour **suivant**. Un service finissant à 1h30 dans la nuit de samedi à dimanche a une fermeture datée au dimanche |
 | **Ouverture continue** | Un établissement 24h/24 renvoie une ouverture **sans fermeture associée** |
+| **Période de plusieurs jours** | Des jours consécutifs « ouverts 24h/24 » arrivent fusionnés en **une seule** période : vendredi 15h → dimanche 0h, c'est vendredi soir **et** tout le samedi |
 
 Cas normaux à traiter sans erreur : un jour fermé est simplement **absent** de la liste des
 périodes ; un établissement peut n'avoir **aucun horaire renseigné**.
 
 **Convention de sortie** : minutes depuis minuit du jour d'ouverture, la fermeture pouvant
 dépasser 1440. Fermeture à 1h30 → `1530`. Aucune gymnastique de date par la suite.
+
+Une période de plusieurs jours est **découpée à chaque minuit qu'elle franchit, sauf le
+dernier** : la fermeture finale reste au jour précédent, au-delà de 1440, exactement comme une
+fermeture après minuit ordinaire. Lundi 11h → mercredi 1h donne lundi `660-1440` et mardi
+`0-1500`. Une période d'une seule nuit ne change donc pas : samedi 23h → dimanche 7h reste au
+samedi, et le dimanche reste fermé — c'est aussi ce qu'affiche Google.
+
+> **Mesuré le 17 octobre 2026** sur les 3 730 horaires en base : 11 établissements portaient une
+> telle période. Rangée en entier sous son jour d'ouverture, elle faisait passer pour fermés
+> tous les jours qu'elle couvre — 3 « week-end libre » et 5 « 2 jours de repos d'affilée »
+> faux, et un café ouvert six jours sur sept lu fermé six jours.
+>
+> *Option écartée : déclarer ces horaires inexploitables.* Google les décrit sans ambiguïté
+> (« Saturday: Open 24 hours »), et avec le découpage les jours fermés concordent avec ceux
+> qu'affiche Google sur **les 3 730 horaires** — 11 écarts avant. Les écarter aurait retiré des
+> fiches justes pour un défaut qui était le nôtre.
 
 ---
 
@@ -53,6 +70,16 @@ si écart ≥ SEUIL_COUPURE  →  le jour comporte une coupure
 > minutes : c'est une vraie coupure, le salarié rentre chez lui. Un écart de 14h30 à 15h30
 > fait 60 minutes : c'est une respiration de service, elle ne libère personne et ne doit pas
 > compter. Le seuil est à réajuster après confrontation au terrain — d'où sa configurabilité.
+
+**La fin de la nuit précédente n'est pas un service.** Google range parfois la fin d'un
+service du soir sous le jour suivant : « Monday: 12:00 – 3:00 AM, 11:00 AM – 11:59 PM ». Lue
+comme un service, la fenêtre `0h-3h` fait de l'attente jusqu'à 11h une coupure de huit heures.
+Une fenêtre qui **ouvre à minuit et ferme au plus tard à 6h** est donc ignorée pour décider de
+la coupure, du type de service et de l'explication — mais elle laisse le jour ouvert : les
+jours de repos ne bougent pas. Seule, elle reste le service du jour (une boîte de nuit saisie
+« 0h-5h »).
+
+> Mesuré le 17 octobre 2026 : 3 verdicts « Coupure possible » ne tenaient qu'à cette fenêtre.
 
 ---
 
