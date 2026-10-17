@@ -73,7 +73,7 @@ jobs:
           psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1
           -c 'select count(*) as restaurants from restaurant'
           -c 'select count(*) as cells from cell'
-          -c 'select max(started_at) as last_sweep from sweep_run'
+          -c 'select max(finished_at) as last_sweep_ended from sweep_run'
 
       # API calls to the project, the other way in the doc names. The doc does not say
       # whether pooler traffic counts as a user request, and the 1 October burst suggests

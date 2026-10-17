@@ -192,8 +192,8 @@ indépendants :
 1. **Chaque jour, des lectures réelles sur les tables de l'application**, par les deux voies
    que nomme la documentation de Supabase :
    - *les requêtes de l'application connectée* — Postgres par le pooler, comme l'application
-     et le balayage : un comptage sur `restaurant`, un sur `cell`, la date du dernier
-     balayage ;
+     et le balayage : un comptage sur `restaurant`, un sur `cell`, la fin de la dernière
+     exécution du balayage ;
    - *les appels à l'API du projet* — trois requêtes sur la Data API, avec la clé
      publishable. Toutes les tables ont la RLS activée sans politique : la requête
      s'exécute, et ne lit rien.
