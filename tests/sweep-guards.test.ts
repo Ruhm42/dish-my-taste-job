@@ -11,7 +11,7 @@ vi.hoisted(() => {
 })
 
 const { isTransactionPoolerUrl } = await import('@/lib/db/client')
-const { LEDGER_SLACK, ledgerLossMessage, lockRelease, loggedFloor } = await import('@/scripts/sweep')
+const { LEDGER_SLACK, byExpiry, ledgerLossMessage, lockRelease, loggedFloor } = await import('@/scripts/sweep')
 
 /**
  * Connection strings built from parts, so that no line of this file reads as a committed
@@ -176,5 +176,50 @@ describe('lockRelease — what the way out does with the advisory lock', () => {
         if (mayBeHeld) expect(lockRelease(answered, granted).sendUnlock).toBe(true)
       }
     }
+  })
+})
+
+describe('byExpiry — the order a period buys its cells back in', () => {
+  const queued = (id: string, depth: number, queriedAt: string | null) =>
+    ({ id, depth, queriedAt: queriedAt ? at(queriedAt) : null })
+
+  it('takes the shallow cells first, then the oldest, and the never-queried last', () => {
+    const cells = [
+      queued('deep-old', 1, '2026-09-01T09:00:00Z'),
+      queued('deeper-old', 2, '2026-09-04T09:00:00Z'),
+      queued('never-deep', 2, null),
+      queued('root-late', 0, '2026-10-01T09:30:00Z'),
+      queued('deep-recent', 1, '2026-10-01T09:45:00Z'),
+      queued('never-root', 0, null),
+      queued('root-early', 0, '2026-10-01T09:10:00Z'),
+    ]
+    expect(cells.sort(byExpiry).map((c) => c.id)).toEqual([
+      'root-early', 'root-late',
+      'deep-old', 'deep-recent',
+      'deeper-old',
+      'never-root', 'never-deep',
+    ])
+  })
+
+  // ─────────────────────────────────────────────────────────────
+  // Production, 2026-10-17: the plan as the 1 November run finds it.
+  // Every restaurant's hours expire on 31 October, all re-stamped by
+  // the 1 October run — which happened to query the depth-0 cells.
+  // Sorted by queried_at alone, November's 900 calls would have gone to
+  // the 899 September children and left the depth-0 cells, the ones
+  // covering most of the city, for December.
+  // ─────────────────────────────────────────────────────────────
+  it('spends the period\'s ceiling on every depth-0 cell before the September children', () => {
+    const shape: [depth: number, day: string | null, count: number][] = [
+      [1, '2026-09-01', 417], [2, '2026-09-01', 319], [2, '2026-09-04', 163],
+      [0, '2026-10-01', 653], [1, '2026-10-01', 247],
+      [1, null, 23], [2, null, 158], [3, null, 428],
+    ]
+    const plan = shape.flatMap(([depth, day, n]) => Array.from({ length: n }, (_, i) =>
+      queued(`${depth}-${day}-${i}`, depth, day && `${day}T09:00:00Z`)))
+
+    const bought = plan.sort(byExpiry).slice(0, CEILING)
+    expect(bought.filter((c) => c.depth === 0)).toHaveLength(653)
+    expect(bought.filter((c) => !c.queriedAt)).toHaveLength(0)
   })
 })

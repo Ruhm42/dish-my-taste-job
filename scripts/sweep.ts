@@ -238,6 +238,7 @@ function onStopSignal(signal: keyof typeof EXIT_CODE): void {
 }
 
 type CellRow = typeof cell.$inferSelect
+type QueuedCell = Pick<CellRow, 'id' | 'depth' | 'queriedAt'>
 
 interface GooglePlace {
   id?: string
@@ -291,12 +292,25 @@ function distance(aLat: number, aLng: number, bLat: number, bLng: number): numbe
 }
 
 /**
- * Expiry order: the cell queried longest ago is the one whose content dies first, so it is
- * bought back first. Never-queried cells sort LAST — freshness before completeness (D30
- * rule 1) — and among those the shallow before the deep, the order the plan was written in.
+ * Expiry order (D30 rule 1): the cells whose content dies first are bought back first.
+ *
+ * A cell's own `queried_at` does not say which cells those are. The plan's cells overlap —
+ * every child lies inside its parent's disk, neighbours share their edges — and whichever cell
+ * re-finds a restaurant pushes that restaurant's expiry back without touching the `queried_at`
+ * of the other cells covering it. Sorted on `queried_at` alone, the queue for 1 November 2026
+ * would have spent the whole ceiling on the children queried in September and left the
+ * depth-0 cells, queried in October, for the month after: about a third of the hours would
+ * have stayed expired for a month.
+ *
+ * Depth 0 is the level that re-stamps most of the base — on its own it returns about 95% of
+ * the known places — so the shallow come first and `queried_at` only breaks ties inside a
+ * depth. Never-queried cells sort LAST, freshness before completeness, and among those the
+ * shallow before the deep, the order the plan was written in.
  */
-function byExpiry(a: CellRow, b: CellRow): number {
-  if (a.queriedAt && b.queriedAt) return a.queriedAt.getTime() - b.queriedAt.getTime()
+export function byExpiry(a: QueuedCell, b: QueuedCell): number {
+  if (a.queriedAt && b.queriedAt) {
+    return a.depth - b.depth || a.queriedAt.getTime() - b.queriedAt.getTime()
+  }
   if (a.queriedAt) return -1
   if (b.queriedAt) return 1
   return a.depth - b.depth || a.id.localeCompare(b.id)
@@ -849,8 +863,8 @@ async function main() {
   if (toRefresh > 0) {
     const head = owedCells.filter((c) => c.queriedAt).slice(0, 3)
     const tail = owedCells.filter((c) => c.queriedAt).slice(-1)
-    const day = (c: CellRow) => c.queriedAt!.toISOString().slice(0, 10)
-    console.log(`first to be bought back : ${head.map(day).join(', ')} … ${tail.map(day).join('')}`)
+    const label = (c: CellRow) => `${c.queriedAt!.toISOString().slice(0, 10)} (depth ${c.depth})`
+    console.log(`first to be bought back : ${head.map(label).join(', ')} … ${tail.map(label).join('')}`)
   }
 
   if (headroom === 0) {
