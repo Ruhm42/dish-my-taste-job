@@ -42,6 +42,7 @@ import { distanceInMeters, planRecovery, pointsInCircle } from '../lib/grid'
 // Shared with cron:refresh: the same rules decide what a period owes and what a
 // truncation still hides, so the sweep and the cycle cannot disagree about either.
 import { buildCoverage, countOwed, owesCall } from '../lib/coverage'
+import { errorReason } from '../lib/error-reason'
 
 const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby'
 
@@ -176,7 +177,7 @@ async function recordInterruption(reason: string): Promise<void> {
   } catch (error) {
     console.error(
       `! the run could not record the ${run.state.calls} call(s) this execution spent: ` +
-      `${(error as Error).message}\n` +
+      `${errorReason(error)}\n` +
       `  sweep_run.calls_made for ${run.id} is short by that much.`,
     )
   }
@@ -1060,7 +1061,7 @@ async function main() {
     // Any error stops the sweep: keeping on calling an API that answers badly is spending
     // without collecting. What this period already bought is not bought twice on resume.
     interruption = error as Error
-    console.error(`\nSWEEP HALTED IMMEDIATELY — ${interruption.message}`)
+    console.error(`\nSWEEP HALTED IMMEDIATELY — ${errorReason(interruption)}`)
   }
 
   // 4. Summary. It is authoritative: it is what decides whether the sweep succeeded.
@@ -1080,7 +1081,7 @@ async function main() {
   if (irreducible > 0) reasons.push(`${irreducible} irreducible cell(s)`)
   if (failed > 0) reasons.push(`${failed} failed cell(s)`)
   if (stillOwed > 0) reasons.push(`${stillOwed} cell(s) still owed for ${period}`)
-  if (interruption) reasons.push(`interrupted: ${interruption.message}`)
+  if (interruption) reasons.push(`interrupted: ${errorReason(interruption)}`)
 
   // Cumulative across resumes: this is the counter we compare with the billing console.
   const [{ runTotal }] = await db.select({ runTotal: count() }).from(restaurant)
@@ -1165,7 +1166,7 @@ if (!process.env.VITEST || invokedAsScript) {
 
   main().catch(async (e) => {
     console.error(e)
-    await recordInterruption(`crashed: ${e instanceof Error ? e.message : e}`)
+    await recordInterruption(`crashed: ${errorReason(e)}`)
     // The lock outlives the process through a pooler, so an unexpected throw has to give it
     // back too — otherwise one crash refuses every sweep that follows.
     await releaseLock()
