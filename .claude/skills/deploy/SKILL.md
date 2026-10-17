@@ -164,16 +164,22 @@ user's reloads.** Every part of that is load-bearing:
 `statement timeout`, `ECONNREFUSED` or a digest would be there in full. That is what `-x` used to be for: the old default printed one summary
 line per request with no message body. CLI 64 shows full messages by default and refuses `-x`.
 
-Why each flag is there:
+Why each flag is there. The first two apply to **every** `vercel` command in this skill:
 
 - **`vercel@64`, pinned to a major like CI's `$VERCEL_CLI`.** `vercel logs` was rewritten in
   64.0.0: `--level`, `--status-code` and `-x` exist in every major from 59 to 63 and are refused
   from 64 on. A bare `npx vercel` picked up 64.5.0 on 2026-10-17 and broke both commands this
   section used to give. CI pins `vercel@59` for the deploy, which predates the rewrite, so do not
-  align the two. Moving this pin is a deliberate edit: run all three commands on the new major
-  first.
-- **`--scope` and `--project`.** `.vercel/` is gitignored, so a worktree has no project link and
-  the CLI answers `not_linked`. Naming the team and project works from any checkout.
+  align the two. Moving this pin is a deliberate edit: run every read-only command in this skill
+  on the new major first.
+- **`--scope hipopo-2684`, and the project wherever the sub-command takes one.** `.vercel/` is
+  gitignored, so a worktree has no project link, and each sub-command fails differently without
+  it. `logs` answers `not_linked`. `rollback status` stops to ask whether to link the directory.
+  `ls` quietly lists every project in the team — the same rows today, another project's
+  deployments the day there are two. `logs` takes `--project`; `ls` and `rollback status` take
+  the project as an argument. `inspect`, `rollback <host>` and `promote <host>` find the project
+  from the deployment, but `rollback` refuses a deployment outside the CLI's current team, so
+  they get `--scope` too.
 - **`--environment production`.** The default is every environment, previews included.
 - **`httpStatus>=500`, not `500`.** A 504 from a function timeout is the same failure as a 500.
 
@@ -204,7 +210,8 @@ runtime, and `lib/db/client.ts` keys `prepare: false` off that port. `psql` work
 ### What changed since the previous deploy
 
 ```bash
-PREV=$(npx vercel ls --prod --json 2>/dev/null | python3 -c "
+PREV=$(npx --yes vercel@64 ls dish-my-taste-job --scope hipopo-2684 --environment production \
+  --json 2>/dev/null | python3 -c "
 import json,sys
 d = json.load(sys.stdin)['deployments']
 print(next((x['meta'].get('githubCommitSha') or x['meta'].get('commit','') for x in d[1:] if x['state']=='READY'), ''))")
@@ -217,7 +224,7 @@ printf '%s\n' "$files" | grep -E '^(app|components|lib|middleware|next\.config|p
 ```
 
 `d[1:]` skips the deployment just published; the first `READY` entry after it is the one that
-was live before. Filtering on `READY` matters — `vercel ls --prod` lists `● Error` rows too, and
+was live before. Filtering on `READY` matters — `vercel ls` lists `● Error` rows too, and
 those never served anything. If `PREV` comes back empty, say the previously deployed commit is
 unknown and skip the diff rather than guessing a ref. Keep the last two commands split: `|| echo`
 on a single pipeline swallows git's "unknown revision" and prints the reassuring "no runtime code
@@ -228,11 +235,14 @@ changed" instead.
 Only needed if you are diagnosing something; CI asserts it on every deploy.
 
 ```bash
-npx vercel inspect dish-my-taste-job.vercel.app 2>&1 | head -5
+npx --yes vercel@64 inspect dish-my-taste-job.vercel.app --scope hipopo-2684 2>&1 | grep 'Fetched deployment'
 ```
 
 Pass the **alias hostname**, and keep the `2>&1` — this output goes to stderr. The line that
-matters is `Fetched deployment "<hostname>"`.
+matters is `Fetched deployment "<hostname>"`, so grep for it as CI does rather than counting
+lines: what comes before it varies — a plugin hint when the CLI detects Claude Code, an install
+warning when `npx` has not cached `vercel@64` yet, `Loading teams…` without `--scope`. No line at
+all means the command failed; drop the `grep` to see why.
 
 > **Do not use the `Aliases` block printed by `vercel inspect <deployment-url>`.** It lists
 > aliases a deployment *may* serve, not the one currently bound — the previous production
@@ -256,23 +266,24 @@ deployment you want to go back **to**, and has two ways of turning on you.
 
 > **Never pass the production alias.** It resolves to the deployment currently live — the broken
 > one — so the command reverts to itself. **And never run it bare:** with no argument the CLI
-> substitutes the `status` sub-command and rolls nothing back.
+> substitutes the `status` sub-command and rolls nothing back — and in a worktree, `--yes` then
+> answers the prompt asking whether to link the directory.
 
 ```bash
-npx vercel ls --prod
+npx --yes vercel@64 ls dish-my-taste-job --scope hipopo-2684 --environment production
 ```
 
 Pick a row that is `● Ready` (the list includes `● Error` rows, which cannot be promoted) and is
 not the deployment just published. Then:
 
 ```bash
-npx vercel rollback <previous-deployment-hostname> --yes
-npx vercel rollback status
-npx vercel inspect dish-my-taste-job.vercel.app 2>&1 | head -5
+npx --yes vercel@64 rollback <previous-deployment-hostname> --scope hipopo-2684 --yes
+npx --yes vercel@64 rollback status dish-my-taste-job --scope hipopo-2684
+npx --yes vercel@64 inspect dish-my-taste-job.vercel.app --scope hipopo-2684 2>&1 | grep 'Fetched deployment'
 ```
 
-The last line must name the deployment you rolled back to. `npx vercel promote
-<previous-deployment-hostname>` is the equivalent forward-facing form.
+The last line must name the deployment you rolled back to. `npx --yes vercel@64 promote
+<previous-deployment-hostname> --scope hipopo-2684` is the equivalent forward-facing form.
 
 `origin/main` is now ahead of production. Do not force-push — **revert forward instead**, which
 also re-runs the pipeline.
