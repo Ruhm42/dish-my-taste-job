@@ -130,17 +130,52 @@ all**. Say that plainly rather than implying the app was checked.
 
 ### Runtime logs
 
-CI does not read these: they need a time window and a human.
+CI does not read these: they need a time window and a human. Read them **within the hour**:
+production is on the Hobby plan, which keeps runtime and request logs for about an hour —
+`--since 1h` is already refused for runtime logs.
 
 ```bash
-npx vercel logs dish-my-taste-job.vercel.app --since 10m --level error -x
-npx vercel logs dish-my-taste-job.vercel.app --since 10m --status-code 500 -x
+npx --yes vercel@64 logs runtime --scope hipopo-2684 --project dish-my-taste-job \
+  --environment production --since 10m --query 'level:error OR level:fatal' --json
+npx --yes vercel@64 logs requests --scope hipopo-2684 --project dish-my-taste-job \
+  --environment production --since 10m --query 'httpStatus>=500' --json
+npx --yes vercel@64 logs requests --scope hipopo-2684 --project dish-my-taste-job \
+  --environment production --since 10m --query 'requestPath:/recherche' --json
 ```
 
-Zero rows from both is the pass. **`-x` is required**: without it each request is one summary
-line with no message body, so `57014`, `statement timeout`, `ECONNREFUSED` or a digest could
-never appear even if they had occurred. An empty window 30 seconds after a deploy only means
-nobody has used the site — get the user to load a page first.
+The pass is the first two printing nothing but their summary line,
+`{"type":"summary","recordsReturned":0,…,"excludedIntervals":[]}`, **and the third printing the
+user's reloads.** Every part of that is load-bearing:
+
+- **The third command is what gives the zeros a meaning.** An empty window 30 seconds after a
+  deploy only means nobody has used the site, and the first two print the same summary whether
+  the site was clean or idle. `/recherche` is behind the login, so `{"type":"request",…,
+  "httpStatus":200}` lines there are the user's logged-in reloads, and their `deploymentId` says
+  which deployment served them. None? Get the user to load the page, then run all three again.
+- **`excludedIntervals` must be `[]`.** When part of the window is unavailable, the CLI lists it
+  there, adds a `"type":"warning"` line with reason `stream_gap`, and still prints a summary. A
+  zero over half a window is not a pass.
+- **A `{"status":"error",…}` object instead of a summary means the check did not run.** It is not
+  a zero. Expect one for a typo in `--query`, a `--since` past retention (which `requests`
+  misreports as `plan_upgrade_required`), or a missing project link.
+
+**`--json` carries the whole message.** A runtime entry is
+`{"type":"log","data":{…,"message":…}}`, the API record written out unchanged, so `57014`,
+`statement timeout`, `ECONNREFUSED` or a digest would be there in full. That is what `-x` used to be for: the old default printed one summary
+line per request with no message body. CLI 64 shows full messages by default and refuses `-x`.
+
+Why each flag is there:
+
+- **`vercel@64`, pinned to a major like CI's `$VERCEL_CLI`.** `vercel logs` was rewritten in
+  64.0.0: `--level`, `--status-code` and `-x` exist in every major from 59 to 63 and are refused
+  from 64 on. A bare `npx vercel` picked up 64.5.0 on 2026-10-17 and broke both commands this
+  section used to give. CI pins `vercel@59` for the deploy, which predates the rewrite, so do not
+  align the two. Moving this pin is a deliberate edit: run all three commands on the new major
+  first.
+- **`--scope` and `--project`.** `.vercel/` is gitignored, so a worktree has no project link and
+  the CLI answers `not_linked`. Naming the team and project works from any checkout.
+- **`--environment production`.** The default is every environment, previews included.
+- **`httpStatus>=500`, not `500`.** A 504 from a function timeout is the same failure as a 500.
 
 ### Production data untouched
 
