@@ -102,6 +102,28 @@ Then follow the run. The `production` job asserts, in order:
 
 If the run is red, the job summary carries the rollback commands. Section 4 explains them.
 
+### A `cancelled` run on `main` is not a failed deploy — its commits ship with the next one
+
+Sessions push to `main` minutes apart, and a newer push cancels the older run: `check` is
+`cancel-in-progress` per branch, and `deploy-production` keeps one job running and one waiting, so
+a newer waiting deploy cancels the older waiting one. The older run ends `cancelled`, at `check` or
+in the queue, but its commits are ancestors of the newer one and the newer run deploys them. On
+2026-10-17 PR #22's merge `3808556` was cancelled three seconds after it started and reached
+production inside `b275b28`'s run. Three consequences:
+
+- **Follow the run that superseded yours, and confirm it carries your commit**:
+  `git merge-base --is-ancestor <your-sha> <deployed-sha> && echo shipped`. The converse holds
+  too: your run may ship someone else's code. The section 3 diff lists every file that went out,
+  so read it rather than assuming your PR is all that shipped.
+- **Never press *Re-run* on a cancelled or older `main` run.** A re-run keeps the original
+  event's `GITHUB_SHA`, so its `production` job would deploy that older commit over the newer one
+  already live. To redeploy, use *Run workflow* (section 5), which takes the branch tip.
+- **The schema guard did not see those commits.** It diffs the pushed commit against the previous
+  tip of `main`, not against what production runs. A `lib/db/schema.ts` change reaches
+  production unstopped when its own run was cancelled, or when its run failed on the guard and
+  someone pushes on top before the column exists. When the range you are shipping touches that
+  file, section 1 still applies: check by hand that the column exists in production first.
+
 ---
 
 ## 3. What the pipeline cannot verify — this is the part that needs you
