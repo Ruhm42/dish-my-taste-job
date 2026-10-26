@@ -1,6 +1,6 @@
 # Prochaines étapes
 
-> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-17
+> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-26
 
 Ce document n'est pas un journal de décisions : rien ici n'est acté. C'est l'état mesuré du
 produit au 29 août 2026 et les axes qui en découlent, chacun avec ses options, pour que
@@ -26,6 +26,13 @@ y était tranchable l'a été :
 Ce qui suit revient au propriétaire. Rien n'y est acté : chaque point donne le constat mesuré,
 les options et leurs conséquences. Deux échéances commandent l'ordre : **le 1er novembre** (C2,
 C3, C4) et **le 16 novembre** (C1).
+
+> **Relu le 26 octobre 2026.**
+> - Rien de ce qui suit n'a bougé en production : même plan, aucune ré-ingestion, mêmes
+>   échéances. Les constats du 17 tiennent.
+> - Le réveil et la purge sont verts chaque jour depuis le 18.
+> - `main` n'a reçu que les commits du réveil : ni C1 ni le retrait des noms dans les logs ne
+>   sont construits.
 
 ### C1. Le garde-fou de dépense ne protège plus après le 16 — avant le 16 novembre
 
@@ -382,7 +389,8 @@ seule donne au moins 100 verdicts à 95 % (D42).
 
 > **État au 17 octobre 2026, au soir.**
 > - **Construits** :
->   - D45 règle 1 (commit `0fee11c`), qui écrira pour la première fois le 18 octobre ;
+>   - D45 règle 1 (commit `0fee11c`), qui écrit chaque jour depuis le 18 octobre : 122 fiches
+>     vidées ce jour-là, aucune depuis (relevé le 26 octobre) ;
 >   - D36, D38 et D39 (commit `05058b4`), dont la première passe planifiée est le 1er novembre ;
 >   - les règles 2 et 3 de D31 (PR #14).
 > - **D37** : construit en partie.

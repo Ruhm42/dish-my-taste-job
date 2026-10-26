@@ -1,6 +1,6 @@
 # Le cycle d'import mensuel des points d'intérêt
 
-> **Statut** : acté, sauf les sections marquées *brouillon* · **Dernière mise à jour** : 2026-10-17
+> **Statut** : acté, sauf les sections marquées *brouillon* · **Dernière mise à jour** : 2026-10-26
 
 Cette spec est la référence consolidée du cycle de rafraîchissement : ce qui tourne, quand,
 dans quel ordre, ce que chaque pièce écrit, ce qui la fait échouer et quoi faire alors. Elle ne
@@ -319,6 +319,17 @@ après 60 jours sans commit, ou cesse de planifier, rien de ce qui précède ne 
   n° 14748). La liste du logiciel de l'image 26.04 porte PostgreSQL 18.6 : le `psql` que suppose
   le réveil reste préinstallé, d'après la documentation lue le 17/10.
 
+**Observé du 18 au 26 octobre**, relevé le 26/10 à 17:40 UTC :
+- **Le réveil** a été vert chaque jour. Il démarre entre 09:32 et 11:07 UTC, soit 4 h 15 à
+  5 h 50 de retard. Les deux commits du lundi sont partis.
+- **La purge** a été verte chaque jour. Elle démarre entre 14:02 et 17:01 UTC, soit 3 h 39 à
+  6 h 38 de retard. La première écriture, le 18/10 à 14:03 UTC, a vidé les **122** fiches
+  échues ; les suivantes, 0. Aucun contenu échu n'est plus stocké.
+- **L'image** de tous ces runs est encore `ubuntu-24.04`.
+- **La production** n'a pas bougé : même plan, même `sweep_run`, aucune ré-ingestion SIRENE.
+  3 608 horaires valides, échéance inchangée le 31/10 entre 15:54 et 16:24 UTC. La prévision à
+  sec du 1er novembre, 95,9 %, tient donc.
+
 ## 8. L'exclusion mutuelle
 
 [D49](../DECISIONS.md#d49--la-purge-rattrape-ce-quune-étape-hors-ligne-réécrit).
@@ -331,9 +342,14 @@ La purge ne la reprend jamais : elle ne vise que les fiches qui portent encore l
 bruts. Les recalculs, eux, l'ignorent désormais comme « purgée ». Le contenu reste stocké
 jusqu'à ce qu'une passe renvoie le lieu.
 
-**La fenêtre.** `compute:profiles` a duré 2 min 20 le 01/10. Les passes ont démarré à 13:51 et
-15:54 UTC, et la purge part à 10:23 UTC avec les mêmes retards possibles. Rare, mais pas
-impossible, et le dommage dure.
+**La fenêtre.**
+- Les passes ont fini vers 14:21 UTC le 01/09 et 16:24 UTC le 01/10.
+- Le 01/10, les étapes hors ligne ont tourné de 16:24 à 16:27 UTC ; `compute:profiles` a duré
+  2 min 20.
+- Les neuf premières purges planifiées, du 18 au 26 octobre, ont démarré **entre 14:02 et
+  17:01 UTC** : la même plage horaire.
+
+Rare, mais pas impossible, et le dommage dure.
 
 **La règle.**
 1. La purge vise tout ce qui dérive d'un horaire échu, pas seulement les fiches qui portent

@@ -1,6 +1,6 @@
 # Journal des décisions
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-26
 
 Format : *contexte → options écartées → décision → conséquences*. Une décision sans
 alternative écartée n'est pas une décision, c'est une note.
@@ -2121,13 +2121,15 @@ est la conséquence logique de D7 ; mais la relecture des conditions faite pour 
 question est plus large que trente jours. Elle reste ouverte, avec elle, dans
 [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), axe 0.
 
-> **Annoté le 17 octobre 2026, après la construction de la règle 1 (commit `0fee11c`).**
+> **Annoté le 17 octobre 2026, après la construction de la règle 1 (commit `0fee11c`) ; complété
+> le 26 octobre.**
 >
 > **Où en est la règle 1.**
-> - La purge tourne chaque jour à 10:23 UTC.
-> - Elle n'a encore jamais écrit : le lancement manuel du 17 octobre était à sec, 122 fiches. La
->   première écriture est planifiée le 18 octobre.
-> - « Dès son échéance » veut dire en pratique jusqu'à un jour, plus le retard de GitHub.
+> - La purge est planifiée chaque jour à 10:23 UTC.
+> - Sa première écriture, le 18 octobre à 14:03 UTC, a vidé les 122 fiches échues ; les huit
+>   suivantes, jusqu'au 26 octobre, n'ont rien trouvé à vider.
+> - Elle a démarré avec 3 h 39 à 6 h 38 de retard. « Dès son échéance » veut donc dire en
+>   pratique jusqu'à un jour, plus ce retard.
 > - Lancée à la main, elle **écrit par défaut**.
 >
 > **Les règles 2 et 3** ne sont pas construites ; aucune colonne n'existe.
@@ -2319,10 +2321,11 @@ Le contenu reste alors stocké jusqu'à ce qu'une passe renvoie le lieu, et peut
 une fiche que Google ne renvoie plus.
 
 **La fenêtre.**
-- `compute:profiles` a duré 2 min 20 s le 1er octobre.
-- Les passes ont démarré à 13:51 et 15:54 UTC.
-- La purge est planifiée à 10:23 UTC, avec les mêmes retards possibles : jusqu'à 7 h 52 mesurés
-  sur le réveil.
+- Le 1er octobre, les étapes hors ligne ont tourné de 16:24 à 16:27 UTC ; `compute:profiles` a
+  duré 2 min 20 s.
+- La purge est planifiée à 10:23 UTC. Ses neuf premières exécutions, du 18 au 26 octobre, ont
+  démarré **entre 14:02 et 17:01 UTC**, avec 3 h 39 à 6 h 38 de retard : la plage même où les
+  passes finissent.
 
 C'est rare, pas impossible, et le dommage ne se répare pas seul.
 
