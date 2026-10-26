@@ -1,6 +1,6 @@
 # Prochaines étapes
 
-> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-17
+> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-26
 
 Ce document n'est pas un journal de décisions : rien ici n'est acté. C'est l'état mesuré du
 produit au 29 août 2026 et les axes qui en découlent, chacun avec ses options, pour que
@@ -8,6 +8,264 @@ l'arbitrage se fasse sur des chiffres et non sur une impression. Ce qui sera tra
 rejoindra [`DECISIONS.md`](DECISIONS.md).
 
 Toutes les quantités ci-dessous sont **lues dans la base de production**, pas estimées.
+
+---
+
+## Le cycle d'import — révision du 17 octobre 2026, au soir
+
+La spec consolidée du cycle est [`technique/14`](technique/14-cycle-d-import-mensuel.md). Ce qui
+y était tranchable l'a été :
+- [D47](DECISIONS.md#d47--la-période-du-quota-est-le-mois-du-pacifique), le mois Pacifique ;
+- [D48](DECISIONS.md#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche), une base sans
+  échéance n'est pas fraîche ;
+- [D49](DECISIONS.md#d49--la-purge-rattrape-ce-quune-étape-hors-ligne-réécrit), la purge et les
+  étapes hors ligne ;
+- [D50](DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour), l'âge de la dernière
+  passe.
+
+Ce qui suit revient au propriétaire. Rien n'y est acté : chaque point donne le constat mesuré,
+les options et leurs conséquences. Deux échéances commandent l'ordre : **le 1er novembre** (C2,
+C3, C4) et **le 16 novembre** (C1).
+
+> **Relu le 26 octobre 2026.**
+> - Rien de ce qui suit n'a bougé en production : même plan, aucune ré-ingestion, mêmes
+>   échéances. Les constats du 17 tiennent.
+> - Le réveil et la purge sont verts chaque jour depuis le 18.
+> - `main` n'a reçu que les commits du réveil : ni C1 ni le retrait des noms dans les logs ne
+>   sont construits.
+
+### C1. Le garde-fou de dépense ne protège plus après le 16 — avant le 16 novembre
+
+**Constat.** Le compteur impute à la période le maximum de deux lectures : les cellules
+tamponnées dans la période, et un plancher tiré de `sweep_run`.
+
+Sous D38, la passe du 16 rachète des cellules déjà achetées le 1er : 234 en novembre, mesuré sur
+une copie. Chaque cellule ne garde qu'un tampon. Rejoué sur une copie locale, sans un appel :
+- **après les deux passes de novembre**, tout lancement dans le mois est refusé
+  (« ledger missing at least 234 call(s) »), reprise comprise ;
+- **une passe du 16 interrompue** après 200 appels ne peut pas reprendre (« missing at least 23 ») :
+  sa période reste à 650 ;
+- **un mois resté sous 900 relâche le plancher pour toujours.** Après ce novembre, un décembre
+  complet est lu à 651 au lieu de 900, et le balayage autorise 249 appels de plus. Un `--go`
+  manuel le 20 décembre porterait le mois Pacifique à 1 149 appels réels : **149 facturés**.
+
+Le détail est dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4.
+
+**L'invariant proposé** : *la dépense imputée à une période n'est jamais inférieure à la dépense
+réelle.* C'est la seule propriété qui permette au compteur de garantir le zéro euro.
+
+**Options**
+
+- *Un journal par passe*, une ligne par exécution, appels comptés au fil de l'eau
+  ([`technique/14`](technique/14-cycle-d-import-mensuel.md) § 5).
+  - Pour : il corrige les deux conséquences, et il donne l'historique que les logs Actions
+    perdent au bout de 90 jours.
+  - Contre : une table nouvelle, donc une migration appliquée à la main en production avant le
+    code, comme toute modification de `schema.ts`.
+- *Un tampon par appel* : une table qui reçoit une ligne par appel.
+  - Pour : exact et simple à compter, environ 900 lignes par mois.
+  - Contre : une migration aussi, et rien de plus que la dépense.
+- *Interdire au 16 de racheter ce que le 1er a tamponné.*
+  - Pour : aucune migration.
+  - Contre : c'est défaire D38 r3 — tout le contenu est dû à chaque passe. À simuler avant d'y
+    penser : la pire heure baisserait.
+- *Ne rien construire, et tenir la règle provisoire pour toujours.*
+  - C'est reposer le zéro euro sur la discipline, ce que D8 refuse : « garanti par la plateforme
+    et non par l'attention ».
+  - Et une passe du 16 interrompue, non reprise, relâche quand même le plancher des mois
+    suivants.
+
+**Proposé.**
+- Le journal par passe, construit et migré **avant le 16 novembre 2026 à 09:00 UTC**.
+- D'ici là, règle provisoire : **aucun `--go` ni `workflow_dispatch` de `sweep.yml` entre le 16
+  et la fin du mois Pacifique.**
+- Un refus « ledger missing » après le 16 se lit comme ce défaut, pas comme une perte de lignes.
+
+### C2. La passe du 1er novembre
+
+**Constat.**
+- `simulate:passes`, graines 1 à 10, sur la copie du 17/10 et à partir du 01/11 09:00 UTC :
+  pire heure 91,5 %, `lowest forecast` 91,5 %. Consigné sous D38.
+- La passe à sec au 01/11 09:00 UTC prévoit **95,9 %** et finirait `capped`, au-dessus des 80 %
+  qui la feraient échouer.
+- Ce chiffre vaut tant que la base ne change pas d'ici là : pas de ré-ingestion (C4), pas de
+  nouveau plan.
+- Environ 4 % des fiches restent échues du 31/10 au 16/11 : les 450 cellules du 1er ne les
+  rachètent pas.
+
+**Options**
+- *Garder 450.* La passe devrait finir verte.
+- *Relever `firstPassCeiling` pour novembre seulement*, à 622, la couverture robuste entière.
+  - Pour : tout est racheté dès le 1er, 99,9 % frais au soir.
+  - Contre : le 16 n'a plus que 278 appels. Il se rabat sur la couverture des fiches connues et
+    prévoit 85,1 %, et les échéances se regroupent de nouveau.
+  - Simulé sur douze mois avec ce plafond tous les mois (graine 1) : pire heure **83,2 %**,
+    contre 91,5 % à 450 ; à 600, 85,5 % le 31 décembre. La simulation ne sait pas relever le
+    plafond pour un seul mois : l'effet de novembre seul n'est pas mesuré.
+- *Accepter un rouge* si la prévision réelle passe sous 80 %. Cela ne se produirait qu'après un
+  changement de la base.
+
+### C3. La coupure du 31 octobre au 1er novembre
+
+**Constat.**
+- Les 3 608 horaires valides expirent tous le 31/10, entre 15:54 et 16:24 UTC.
+- La période 2026-11 ouvre le 01/11 à 07:00 UTC, jour du changement d'heure en Californie.
+- La passe est planifiée à 09:00 UTC, avec jusqu'à 7 h 52 de retard, et ses 450 appels prennent
+  environ 15 minutes.
+- La liste par défaut sera donc vide **de 17 à 25 heures environ**.
+
+**Options**
+- *Accepter.* Une fois, et D38 l'a prévu : c'est le pont jusqu'aux deux passes.
+- *Un lancement manuel à 07:00 UTC.* La coupure descend vers 15 heures. La passe planifiée de
+  09:00 est alors refusée (« already spent in this pass ») et sort rouge, ce qui est attendu et se
+  dit d'avance.
+- *Désactiver le workflow avant, et le réactiver après.* Plus de rouge. Mais un oubli coûte la
+  passe du 16 ; D50 le verrait le lendemain.
+- *Planifier à minuit Pacifique*, avec le fuseau IANA que GitHub accepte dans `on.schedule`.
+  - Pour : une à deux heures de gagnées chaque mois, sur toutes les passes.
+  - Contre : le code de la prévision lit une heure UTC (`scheduleHourUtc`), et le retard de
+    GitHub reste.
+  - Pour servir dès le 1er novembre, il faudrait une session de code d'ici là.
+- *Dépenser les 100 appels gratuits qui restent en octobre.* Écarté : notre plafond de 900 est la
+  marge qui garantit le zéro euro, et 100 appels ne couvrent qu'une petite part de la base.
+
+### C4. SIRENE : pas de ré-ingestion avant le 1er novembre, puis un rythme
+
+**Constat.** La ré-ingestion est due (D41 r5). Le stock du 1er octobre, comparé à la table :
+- 120 lignes radiées depuis, dont 10 appariées ;
+- 116 établissements actifs absents de la table ;
+- 1 259 tranches d'effectif changées.
+
+Une ré-ingestion déplace les points de la couverture robuste et invalide le calibrage à 450.
+
+**La NAF 2025.**
+- La bascule a lieu « à partir de début janvier 2027 », date précise non annoncée au 17/10 (page
+  INSEE *Sirene Open Data — Actualités*).
+- Le stock du 1er janvier 2027 sera le dernier à porter les deux nomenclatures ; une version en
+  NAF 2025 seule suit « quelques jours après ».
+- Le stock actuel porte déjà le futur code de chaque établissement.
+- Sur nos 5 995 établissements actifs, 96,5 % tombent dans cinq codes NAF 2025 : 56.11G, 56.11H,
+  56.11J, 56.22Y et 56.30Y.
+- Le reste se disperse : 49 en 56.12Y, 33 en 56.21Y — le code des traiteurs que l'ingestion
+  exclut aujourd'hui sous 56.21Z, 582 établissements en périmètre —, et quelques dizaines hors de
+  la restauration.
+
+**Options**
+- *Aucune ré-ingestion avant la passe du 1er novembre* — proposé, pour garder le calibrage à 450
+  vrai le jour où il sert.
+- *Le rythme* :
+  - mensuel, entre le 2 et le 10, suivi d'un géocodage, d'une simulation et d'un plafond
+    recalibré avant le 16 ;
+  - trimestriel, comme D13 ;
+  - ou calé sur la migration commune de D41, D42 et D45.
+- *Les radiés.*
+  - Les supprimer : ils sortent de la contrainte robuste, mais leurs dix fiches appariées perdent
+    leur effectif.
+  - Ou les marquer : une colonne de plus dans la même migration.
+- *Les adresses changées* : regéocoder ce dont l'adresse a bougé, à chaque ingestion.
+- *La NAF 2025*, avant début janvier 2027 :
+  - filtrer sur la liste des codes NAF 2025, en décidant le sort de 56.12Y et de 56.21Y ;
+  - ou figer l'appartenance par SIRET d'après la correspondance que le stock donne aujourd'hui.
+
+### C5. Le canal d'alerte
+
+**Constat.** Le seul canal est l'e-mail de GitHub.
+- Le réveil a été rouge les 8, 12 et 15 octobre, et la base est restée en pause du 5-8 au 17
+  octobre : l'e-mail n'a pas suffi.
+- La désactivation des planifications après 60 jours sans commit emporterait aussi toute
+  vérification planifiée (D50).
+
+**Options**
+- *Les notifications de l'application mobile GitHub* : rien à construire, même source.
+- *Un ticket ouvert par le workflow en échec*, fermé quand il repasse au vert. Il reste visible
+  dans le dépôt, sans compte de plus.
+- *Un témoin extérieur* (*dead man's switch*) : un service qui alerte quand il n'a **pas** reçu
+  de signal. C'est le seul qui voie un dépôt dont les planifications sont désactivées. Un compte
+  et un secret de plus.
+- *Une messagerie* par webhook : un compte et un secret de plus.
+
+### C6. Lancements manuels et rattrapage
+
+**Constat.**
+- `workflow_dispatch` sur `sweep.yml` n'a aucune entrée et dépense.
+- Celui de `purge.yml` écrit par défaut.
+- Les 163 appels du 4 septembre ont été faits depuis un poste, sans acteur ni run. Un `--go`
+  local reste possible partout où la clé est présente.
+- Aucun acquittement n'existe pour une cellule irréductible.
+
+**Options**
+- *Rendre les deux déclenchements manuels secs par défaut*, avec une case à cocher pour écrire ou
+  dépenser. Cohérent avec la règle du dépôt : tout ce qui dépense est sec par défaut.
+- *Retirer la clé Places des postes*, pour qu'elle ne vive que dans les secrets du dépôt : toute
+  dépense passe alors par un run tracé. Le prix : plus de `--go` local, même pour un calibrage.
+- *Le rattrapage d'une passe manquée.* Le 1er se rattrape avant le 16 dans ses 450. Le 16 se
+  rattrape seulement après C1.
+- *L'acquittement d'une cellule irréductible* : une liste d'identifiants acquittés, versionnée et
+  relue, ou une colonne. À décider quand le cas se présentera, comme D39 le voulait — ou
+  maintenant.
+
+### C7. Ce que Google retire, change ou double
+
+**Constat, copie du 17/10.**
+- 64 fiches (46 `OPERATIONAL`) à au moins 10 m à l'intérieur d'une portée du 1er octobre n'ont
+  pas été renvoyées.
+- 181 fiches n'ont été renvoyées par aucun appel ce jour-là.
+- Aucune fiche n'est `CLOSED_PERMANENTLY` : le statut est écrasé sans historique.
+- Les 923 fiches sans échéance ne sont jamais rachetées exprès.
+- 7 paires de doublons probables, à 7 m ou moins.
+- 505 fantômes au sens de D44.
+
+**Options**
+- *Combien de temps garder une fiche absente*, une fois D45 r2 construite :
+  - pour toujours, vidée de son contenu — elle reste référençable par une candidature ;
+  - ou supprimée après N passes, sauf si une candidature la référence.
+  - Dépend de l'axe 0 pour l'identité.
+- *Les doublons* : ne rien faire pour 7 paires, ou masquer celle des deux qui n'est plus
+  renvoyée.
+- *Les 923 sans échéance* : les laisser au hasard des cellules achetées, ou les inclure dans la
+  couverture, à un coût à mesurer.
+
+### C8. La replanification
+
+**Constat.**
+- Le plan en place est parcouru sans fin. Un nouveau plan démarre sans aucune couverture : aucune
+  de ses cellules n'a de portée tant qu'elle n'a pas été interrogée.
+- 239 cellules de profondeur 0 portent plus de 12 points SIRENE : le plan a été posé sous
+  l'ancien plafond de 15.
+- 430 des 432 reprises tombent sur la division en quarts.
+
+**Options**
+- *Garder le plan.*
+- *Le recalibrer en place* : replanifier seulement ce qui n'a jamais été interrogé, en gardant les
+  cellules qui portent la couverture.
+- *Un nouveau plan* : un mois sans couverture, donc une extinction, sauf transition.
+
+Le choix se pose avec C4 : de nouveaux points SIRENE demandent des cellules.
+
+### C9. Les hypothèses de coût, en console
+
+**À relire par le propriétaire.**
+- Les plafonds journaliers des cinq méthodes : jamais relus depuis le 29 août. Les specs
+  écrivent 100, 500, 800 et 1 000 pour le même plafond.
+- Le montant et la devise de l'alerte budget : 1 $ dans D8, 1 € dans `technique/08`.
+- Les projets liés au compte de facturation : Google y agrège l'usage, et un projet voisin
+  entamerait les 1 000 gratuits sans que notre compteur le voie.
+- L'adresse du compte, pour l'axe 0.
+
+**Une option.** Abaisser le plafond journalier de `SearchNearbyRequest` à 500.
+- Une passe dépense au plus 450 : rien ne change pour le cycle.
+- Une clé qui fuit coûterait environ 490 à 510 $ par mois au lieu de 1 015 à 1 050 $.
+- Un rattrapage des deux passes le même jour échouerait sur un `429`, sans facture.
+- L'ordre des garde-fous de `technique/02` serait à réécrire : le compteur de 900 ne parlerait
+  plus avant Google, sur une journée.
+
+### C10. Les tests
+
+Rien ne joue une passe ou un cycle de bout en bout. Rien ne fige le masque de champs. Rien ne
+vérifie l'accord entre le cron et `CYCLE`.
+
+**Proposé**, à faire avec C1 : deux passes jouées sur PGlite contre une fausse API, avec rachats.
+C'est le test qui aurait montré le défaut de C1.
 
 ---
 
@@ -72,6 +330,28 @@ texte à lire. Construire D45 sans attendre — la purge va dans le sens de la c
 que soit la réponse. Ne pas étendre le stockage (D43) avant d'avoir la réponse. Les décisions D36
 à D44 sont écrites sous la lecture de D7 ; si elle tombe, elles tombent avec elle.
 
+> **Complété le 17 octobre 2026, au soir, depuis le cycle d'import.**
+>
+> **Ce qu'une lecture juridique aurait à trancher**, en plus de l'adresse et d'un éventuel
+> accord :
+> 1. une base reconstruite à chaque passe est-elle un cache ?
+> 2. le profil de rythme est-il un contenu « dérivé » ?
+> 3. un annuaire de prospection entre-t-il dans l'un des neuf usages EEA ?
+> 4. le test d'appartenance de la couverture — une position Places dans le disque d'une cellule —
+>    est-il l'analyse « point-in-polygon » qu'interdit la ToS §3.2.3(c)(iv) ?
+>
+> **Ce que chaque option ferait au cycle** est tabulé dans
+> [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 14. Pour l'option OSM, un comptage
+> Overpass du 17 octobre donne 3 347 lieux de restauration et de boisson sur Lyon et
+> Villeurbanne, dont 2 148 avec des horaires, soit 64 %. Les fiches Google en ont 80 %. Ce
+> comptage ne juge pas de la fraîcheur des horaires OSM.
+>
+> **Deux faits pour la session de code.**
+> - Une purge de l'identité par suppression emporterait les candidatures en cascade ; par mise à
+>   jour, elle demande une migration, car le nom et la position ne peuvent pas être nuls.
+> - Le commentaire de `schema.ts` qui dit l'identité « the only Google data we may store
+>   durably » contredit la lecture de cet axe.
+
 ### Laissé ouvert, et pourquoi
 
 - **L'axe 0**, ci-dessus.
@@ -107,6 +387,27 @@ seule donne au moins 100 verdicts à 95 % (D42).
 6. **D44** — hors ligne ; son critère « ni site ni avis » attend D43.
 7. **D43** — après l'axe 0.
 
+> **État au 17 octobre 2026, au soir.**
+> - **Construits** :
+>   - D45 règle 1 (commit `0fee11c`), qui écrit chaque jour depuis le 18 octobre : 122 fiches
+>     vidées ce jour-là, aucune depuis (relevé le 26 octobre) ;
+>   - D36, D38 et D39 (commit `05058b4`), dont la première passe planifiée est le 1er novembre ;
+>   - les règles 2 et 3 de D31 (PR #14).
+> - **D37** : construit en partie.
+>
+> L'implémentation « locale et non poussée » citée au point 2 a donc été remplacée par une
+> livraison.
+>
+> **À intercaler, dans l'ordre :**
+> 1. C1, avant le 16 novembre ;
+> 2. D49 et D48, qui touchent le cycle ;
+> 3. D50 ;
+> 4. puis C4 avant début janvier 2027, pour la NAF 2025.
+>
+> Sans échéance : retirer des logs du balayage le nom et la position des fiches hors de toute
+> portée ([`technique/14`](technique/14-cycle-d-import-mensuel.md) § 14). Le propriétaire l'a
+> jugé non grave le 26 octobre.
+
 ---
 
 ## Ce que la base dit aujourd'hui
@@ -124,6 +425,10 @@ seule donne au moins 100 verdicts à 95 % (D42).
 
 Deux chiffres méritent d'être lus ensemble : le balayage a coûté 900 appels et il en reste
 au moins 1 200 à faire ; le quota gratuit est de 1 000 par mois.
+
+> Ce tableau date du 29 août. L'état du 17 octobre — 4 653 fiches, 3 730 datées, 2 408 cellules
+> dont 609 jamais interrogées — est dans [`technique/14`](technique/14-cycle-d-import-mensuel.md)
+> § 0.
 
 ---
 

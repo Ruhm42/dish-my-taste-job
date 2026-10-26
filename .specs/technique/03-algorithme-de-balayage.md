@@ -1,6 +1,23 @@
 # Algorithme de balayage
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
+>
+> **Annoté le 17 octobre 2026.** Trois parties de cette spec décrivent l'ancien modèle de
+> balayage, conservé pour l'historique :
+> - le plafond de 15 établissements par cellule ;
+> - la subdivision en quatre ;
+> - un balayage « réussi » quand aucune troncature ne reste.
+>
+> Ce qui les remplace :
+> - au plus 12 établissements par cellule, et la replanification locale d'une troncature (D30 r2
+>   et r3) ;
+> - la couverture du contenu à chaque passe (D36), deux passes par mois (D38) ;
+> - ce qui fait échouer une passe (D39).
+>
+> Le plan en place a été posé sous l'ancien plafond : 239 cellules de profondeur 0 portent plus
+> de 12 points SIRENE. Et 430 des 432 reprises retombent sur les quarts.
+>
+> Voir [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md).
 
 ## Le problème
 

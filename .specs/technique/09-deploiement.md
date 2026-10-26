@@ -67,6 +67,17 @@ Et comme le seul poste coûteux s'exécute à un seul endroit, sur une planifica
 sous un plafond de quota posé chez Google, le montant à dépenser est **connu avant d'être
 engagé** : 692 appels, une fois par mois, sur 1 000 gratuits.
 
+> **Annoté le 17 octobre 2026.** Ce chiffre est le premier modèle. Depuis D38, c'est au plus 900
+> appels par mois du Pacifique, en deux passes de 450.
+>
+> Deux lignes de la table ci-dessus demandent une précision :
+> - la purge lancée à la main **écrit par défaut** : il faut cocher `dry_run` pour la rendre
+>   sèche ;
+> - l'ingestion « trimestrielle » n'a pas été rejouée depuis le 28 août.
+>
+> Une vérification quotidienne de l'âge de la dernière passe est décidée
+> ([D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour)).
+
 ---
 
 ## Comment le code arrive en production
@@ -122,6 +133,11 @@ C'est aussi le seul endroit du dépôt où le `--dry-run` posé par défaut sur 
 consommant du quota est explicitement levé. Cette levée est une décision, elle est écrite à
 un seul endroit, et elle se relit.
 
+> **Annoté le 17 octobre 2026.** En `--go`, le maillage est **sauté** dès qu'un plan existe : un
+> nouveau plan partirait sans couverture (D36). Et le `workflow_dispatch` du balayage n'a aucune
+> entrée : un déclenchement manuel dépense pour de vrai
+> ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C6).
+
 Trois conséquences qu'il faut avoir en tête :
 
 - **Aucun redéploiement n'est nécessaire après un balayage.** L'application lit la base à
@@ -158,6 +174,22 @@ seul, de reconstituer un annuaire.
 > Le même raisonnement interdit d'archiver la réponse brute du balayage en artefact de build,
 > en pièce jointe d'exécution ou dans un espace de stockage de secours : ce n'est pas le
 > support qui pose problème, c'est la durée.
+
+> **Annoté le 17 octobre 2026.** « La base se remplace » et « une purge qu'il faudrait penser à
+> appliquer » ne tiennent plus.
+> - Deux passes par mois rachètent une couverture, pas toute la base (D36, D38).
+> - Une purge quotidienne est nécessaire, et construite : l'affichage respectait l'échéance, pas
+>   le stockage (D45).
+> - L'interdiction d'un instantané dans git tient, et plus fort encore sous l'axe 0.
+>
+> Le même raisonnement vaut pour les logs Actions : gardés 90 jours, et **lisibles par tous**
+> sur un dépôt public, ils ne doivent porter que des agrégats.
+>
+> Or le balayage écrit aujourd'hui, dans son plan, le nom et la position de jusqu'à dix fiches
+> hors de toute portée, en `--go` comme à sec. La passe du 1er novembre sera la première à le
+> faire dans un run planifié. Jugé non grave par le propriétaire le 26 octobre — des noms déjà
+> publics, en quelques lignes. À retirer à l'occasion
+> ([`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 14).
 
 ---
 
@@ -264,6 +296,15 @@ relit à l'endroit où elle s'applique.
 > planification. D38 planifie deux passages, le 1er plafonné à 450 et le 16 sur le reste, et
 > retire le refus des 25 jours, qui bloquerait le second. Un déclenchement manuel de trop
 > dépense donc ce que la période permet encore, jamais au-delà.
+>
+> **Annoté le 17 octobre 2026, au soir.** « Jamais au-delà » est faux depuis D38. Le compteur
+> sous-compte la période dès que la passe du 16 rachète des cellules du 1er. Après le 16, une
+> relance est refusée ; et un mois resté sous 900 laisse un `--go` manuel dépasser 1 000 appels
+> réels le mois suivant.
+>
+> Règle provisoire proposée : aucun déclenchement manuel du balayage entre le 16 et la fin du
+> mois Pacifique. Voir [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 4 et
+> [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C1.
 
 Les deux protections sont nécessaires. Le plafond journalier seul autoriserait 24 000 appels
 sur un mois ; la règle des 25 jours seule ne protégerait pas d'une boucle.

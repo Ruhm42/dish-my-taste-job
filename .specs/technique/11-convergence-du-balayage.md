@@ -140,6 +140,10 @@ pas dans le quota de la période reste vieux, est compté, et le bandeau le dit.
 > Le plafond **journalier** de 800 (D15) impose au moins deux exécutions sur deux jours UTC
 > distincts pour dépenser 1 000 appels dans le mois. C'est déjà couvert par
 > [`10`](10-reprise-du-balayage.md) ; la planification doit simplement pouvoir être rejouée.
+>
+> **Annoté le 17 octobre 2026.** Le plafond journalier vaut **1 000**, pas 800
+> ([`02`](02-budget-google-et-garde-fous.md), *posés et vérifiés*). Une exécution peut dépenser
+> la période entière d'un seul tenant. Sous D38, aucune ne dépense plus de 450.
 
 ### 2. Une troncature se résout par une replanification locale, pas par une division en quatre
 
@@ -223,6 +227,11 @@ Passé 30 jours, les horaires d'un établissement ne sont plus affichés : la fi
 « Horaires à revérifier », et son verdict retombe à *À vérifier*. C'est la conséquence directe
 de D7, et c'est aussi le seul comportement honnête — un horaire de plus d'un mois présenté
 comme frais est le mode de défaillance que ce projet nomme comme le pire.
+
+> **Annoté le 17 octobre 2026.** D38, D39, `sweep.yml` et le code citent cette section comme
+> « D30 règle 6 ». L'entrée D30 du journal n'a que quatre règles ; ce qui a expiré « ne
+> s'affiche plus » y figure en une phrase, après elles. La règle vit ici. La citer par ce fichier
+> évite de chercher une sixième règle qui n'existe pas.
 
 Le nombre de fiches dans cet état est compté, dit dans le bandeau au même titre que
 l'avancement du balayage, et le cycle mensuel le rapporte à chaque exécution.

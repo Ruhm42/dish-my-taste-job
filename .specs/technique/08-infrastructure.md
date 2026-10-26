@@ -1,6 +1,6 @@
 # Infrastructure
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-08-29
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
 
 Quatre comptes, deux clés API, six variables d'environnement. Tout tient dans les offres
 gratuites — cette spec explique où, et ce qui pourrait faire basculer en payant.
@@ -53,6 +53,13 @@ d'appel retenu.
   delà, l'API répond par une erreur. Un script en boucle devient un échec, pas une facture.
 - **Alerte budget à 1 €**. Ne bloque rien, mais transforme une dérive silencieuse en
   notification.
+
+> **Annoté le 17 octobre 2026.** Le plafond journalier posé est **1 000**, lu en console le
+> 29 août ([`02`](02-budget-google-et-garde-fous.md), *posés et vérifiés*). Ni ~100 ni le 500 de
+> la liste plus bas.
+>
+> L'alerte est de 1 € ici et de 1 $ dans D8. C'est la console qui le dit, et le propriétaire qui
+> la lit ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C9).
 
 ---
 
@@ -129,6 +136,14 @@ dépôt** pour ne pas affecter les autres projets.
 
 **Tâche planifiée mensuelle** — déclenche le balayage le 1er de chaque mois. Voir
 [`06-pipeline-ingestion.md`](06-pipeline-ingestion.md).
+
+> **Annoté le 17 octobre 2026.** Trois tâches planifiées, plus une chaque jour :
+> - le balayage, **le 1er et le 16**, à 09:00 UTC (D38) ;
+> - la purge, chaque jour à 10:23 UTC (D45) ;
+> - le réveil, chaque jour, et son commit le lundi (D35).
+>
+> Leur seul canal d'alerte est l'e-mail de GitHub. Voir
+> [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md).
 
 **Intégration continue** — tests, typage et build sur chaque poussée de chaque branche, puis
 déploiement de `main`. Le scan de secrets de GitHub protège du commit d'une clé *reconnue* ; le
@@ -215,6 +230,13 @@ Actions manuelles, à réaliser hors du dépôt. Le repère ⚠️ signale ce qu
 > **Ordre volontaire** : les clés en dernier. Tant qu'aucune clé n'existe, aucun appel
 > facturable n'est possible — la fenêtre entre l'activation des API et la pose des quotas est
 > donc sans risque.
+
+> **Annoté le 17 octobre 2026.** Le point 6 dit 500 : le plafond a été relevé à 1 000 le
+> 28 août, et c'est cette valeur que [`02`](02-budget-google-et-garde-fous.md) tabule comme
+> vérifiée.
+>
+> Rien de cette liste n'a été relu en console depuis le 29 août : plafonds, alerte, projets
+> liés au compte de facturation ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C9).
 
 > **Aucun crédit d'essai disponible** sur ce compte : le compte de facturation ouvert est un
 > compte payant, l'essai gratuit ayant déjà été consommé. Il n'y a donc **pas de matelas de

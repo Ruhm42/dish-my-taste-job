@@ -23,6 +23,22 @@ se reprend sans dégât et sans double facturation.
 que nécessaire, notamment `compute:profiles`, qui permet de réajuster les règles d'inférence
 gratuitement.
 
+> **Annoté le 17 octobre 2026.** Plusieurs affirmations de cette spec décrivent le premier
+> modèle. Elles sont conservées pour l'historique.
+>
+> | Ce que dit la spec | Ce qui est vrai au 17 octobre |
+> |---|---|
+> | « ~400 appels » | jusqu'à 900 par mois Pacifique, en deux passes de 450 (D38) |
+> | « enchaîne 3→6 le 1er du mois » | le 1er et le 16 ; `plan:cells` est sauté en `--go` dès qu'un plan existe (D36) |
+> | « au plus 15 établissements », point d'arrêt à ~600 | 12 par cellule (D30 r3) ; le chiffre qui décide est la couverture, 622 en robuste (D37) |
+> | « subdivision automatique… jusqu'à convergence » ; « échoue … si une cellule tronquée n'a pas pu être résolue » | une troncature se replanifie (D30 r2) ; ce qui reste dû est un arriéré, rapporté, jamais rouge (D39) |
+> | « les cellules déjà traitées ne sont pas rejouées » | une passe rachète une couverture du contenu dû (D36) |
+> | « remplace intégralement les horaires » | seulement ce que la couverture rachète |
+> | `ingest:sirene` « trimestriel » | jamais rejoué depuis le 28 août ; dû (D41 r5) ; rythme à rouvrir ([`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C4) |
+> | « Console : consommation Enterprise ≈ 400 » | ≈ le nombre d'appels des deux passes, au plus 900 |
+>
+> Le cycle consolidé est dans [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md).
+
 ---
 
 ## 1. `ingest:sirene`
