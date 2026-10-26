@@ -715,5 +715,10 @@ toucher au quota.
 - *Étendre le périmètre à d'autres communes* — l'axe 3 dit qu'on ne finance déjà pas celui-ci.
 - *Mettre en cache les résultats de recherche* — les pages tiennent en quelques millisecondes ;
   ce serait de la complexité sans problème à résoudre.
+  > **Annoté le 26 octobre 2026.** En local seulement. En production, les fonctions tournaient
+  > à Washington, la base est en Irlande : un rendu passait environ une seconde à attendre la
+  > base, trois chargements simultanés environ trois secondes chacun.
+  > [D51](DECISIONS.md#d51--la-région-des-fonctions-suit-la-base-pas-les-utilisateurs) installe
+  > les fonctions à côté de la base, et l'argument redevient vrai : le cache reste écarté.
 - *Alerter sur les nouveaux établissements sans coupure* — la spec exclut les notifications, et
   le balayage mensuel ne donnerait de toute façon qu'une fraîcheur de trente jours.
