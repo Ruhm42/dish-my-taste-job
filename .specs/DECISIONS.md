@@ -2394,3 +2394,115 @@ Le premier signe serait la liste vide, jusqu'à quinze jours plus tard.
   qui emporte la vérification avec elle. Seul un témoin extérieur la verrait (C5).
 
 Le détail vit dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 7.
+
+---
+
+## D51 — La région des fonctions suit la base, pas les utilisateurs
+
+**Contexte.** Le 26 octobre 2026, le propriétaire a relancé des chargements simultanés de
+`/recherche` : tous en 200 — D46 tient —, mais lents. Un premier chargement, à 17:36:47 UTC, a
+pris environ **cinq secondes** ; le chiffre est lu sur les horodatages du journal des requêtes,
+pas mesuré.
+
+La cause n'est pas dans le code, elle est dans un réglage que personne n'a pris. Les fonctions
+du projet s'exécutent à **`iad1`, Washington** — `serverlessFunctionRegion: "iad1"` et
+`functionDefaultRegions: ["iad1"]` sur le projet, `regions: ["iad1"]` sur le déploiement de
+production, lus le 26 octobre par l'API de Vercel (`/v9/projects/…`). C'est la valeur par défaut
+de Vercel. Le dépôt n'a pas de `vercel.json`, et
+[`technique/09`](technique/09-deploiement.md) ne nomme aucune région : héritée, jamais décidée.
+
+Or la base et l'authentification Supabase sont en **Irlande**, AWS `eu-west-1`, derrière le
+pooler de cette région ; [`technique/08`](technique/08-infrastructure.md), qui annonçait Francfort
+ou Paris, se trompait. Les utilisateurs sont en France et en Espagne, et entrent par Paris
+(`cdg1`). Chaque page partait donc d'Europe, traversait l'Atlantique pour s'exécuter, et
+retraversait l'Atlantique à chaque lecture d'une base située à côté de ses lecteurs.
+
+Mesuré en local : le vrai `lib/db/client.ts`, sur son chemin pooler, contre une base de
+~4 477 fiches tirées du jeu de démonstration — la taille de la production —, à travers un proxy
+qui ajoute une latence fixe.
+
+| Aller-retour vers la base | Un rendu de `/recherche` | Trois chargements lancés ensemble, chacun |
+|---|---|---|
+| 72 ms — de `iad1` à `eu-west-1` | ~1,0 s | ~2,9 à 3,0 s |
+| 2 ms — de `dub1` à `eu-west-1` | ~50 ms | ~140 ms |
+
+Un rendu fait **13 allers-retours** vers la base à chaud, **15** à froid, avant
+l'authentification : les requêtes paramétrées en font deux, postgres.js attendant leur
+description avant de les exécuter (D46). À 72 ms, c'est une seconde par page. La file de D46
+multiplie ensuite : trois chargements servis par la même instance passent l'un après l'autre, et
+chacun attend les deux autres.
+
+Le tableau laisse de côté tout ce qui paie aussi l'aller-retour — l'appel de la fonction à
+l'authentification (`getUser()`), la poignée de main TLS et l'authentification SCRAM d'une
+connexion froide (`idle_timeout: 20` la referme après vingt secondes d'inactivité), le trajet de
+`cdg1` à la fonction — et le démarrage à froid, qui ne dépend pas de la région. Les cinq secondes
+de production en sont la somme : le tableau n'en est qu'une borne basse.
+
+**Options écartées**
+- *Garder `iad1`.* Rien à changer, et chaque aller-retour continue de traverser l'Atlantique. La
+  facture croît avec chaque lecture ajoutée à la page, et avec chaque visiteur simultané, que la
+  file de D46 sérialise.
+- *Changer la région dans le tableau de bord de Vercel.* Le même effet, sans fichier. Mais le
+  réglage reste invisible dans le dépôt — c'est la raison pour laquelle D46 a écarté de
+  désactiver Fluid compute depuis le tableau de bord —, et c'est exactement ainsi que `iad1`
+  s'est installé : rien ne le montrait, personne ne l'a lu. Un projet recréé ou réimporté
+  repartirait à `iad1` sans que rien ne l'annonce.
+- *L'option `--regions` du CLI, dans le workflow de déploiement.* Versionnée elle aussi, mais
+  attachée à une commande : le job de prévisualisation devrait la répéter, et tout autre chemin
+  de déploiement l'ignorerait. `vercel.json` est lu par chaque déploiement, quel que soit le
+  chemin.
+- *`cdg1` ou `fra1`, au plus près des utilisateurs.* Le navigateur parle une fois à la fonction ;
+  la fonction parle 13 à 15 fois à la base. À 10 ou 20 ms de l'Irlande, c'est 130 à 300 ms
+  d'allers-retours par rendu, contre une trentaine à `dub1`, pour gagner quelques millisecondes
+  sur un seul trajet. La latence qui compte est celle qui sépare la fonction de la base.
+- *Réduire le nombre d'allers-retours* — regrouper les lectures de la page, ou mettre ses
+  résultats en cache. Chaque lecture regroupée est un gain, mais l'authentification et la poignée
+  de main continuent de payer l'Atlantique, et la première lecture ajoutée rouvre la facture. Le
+  cache a déjà été écarté ([`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md)) ; son argument — des pages
+  de quelques millisecondes — redevient vrai une fois la base à 2 ms.
+- *Plusieurs régions.* Hobby n'en permet qu'une, et la base n'est que dans une.
+
+**Décision.**
+1. **Les fonctions s'exécutent à `dub1`**, Dublin — la région AWS `eu-west-1`, celle de la base
+   et de l'authentification Supabase.
+2. **La région s'écrit dans `vercel.json`, et nulle part ailleurs** : `"regions": ["dub1"]`.
+   Vercel ignore le réglage du projet dès qu'un déploiement déclare la sienne. On ne touche pas
+   ce réglage : il restera à `iad1`, sans effet.
+3. **La région des fonctions suit la base, pas les utilisateurs.** Si la base change un jour de
+   région, cette ligne change avec elle, dans la même décision.
+
+**Conséquences.** D'après la mesure, le temps passé à attendre la base tombe d'environ une
+seconde à une cinquantaine de millisecondes par rendu, et de trois secondes à environ 140 ms pour
+trois chargements lancés ensemble. Ce que la mesure laisse de côté baisse aussi, sauf le
+démarrage à froid.
+
+Le prix de la file de D46 redevient ce que D46 en disait : « quelques millisecondes par
+instruction ». C'était vrai en local, où D46 a fait sa reproduction et où la base est à côté ;
+à `iad1`, c'était 72 ms par aller-retour. La file reste : c'est elle qui protège la
+connexion. Cette décision ne la remplace pas, elle rend son coût négligeable.
+
+Les fonctions lisent la session des utilisateurs, leur adresse comprise, et liront leurs
+candidatures : à `iad1`, elles le faisaient à Washington. `technique/08` voulait une base en
+Europe pour que les données personnelles restent dans l'UE ; elles sont désormais traitées dans
+la région qui les stocke.
+
+Le middleware n'est pas concerné : Vercel le déploie dans ses régions d'entrée quel que soit ce
+réglage — en moins grand nombre sur Hobby.
+
+Le coût ne bouge pas. Hobby permet n'importe quelle région, une seule ; en déclarer une deuxième
+ferait échouer le déploiement avant même le build — un échec bruyant, pas une facture.
+
+La mise en œuvre tient en une ligne, dans une session distincte. La CI ne peut pas la vérifier :
+toutes les pages sont derrière le login. Après le déploiement :
+- la région **du déploiement** — pas celle du projet, qui restera `iad1` — vaut `dub1`. Si
+  `vercel inspect --json` la porte, le job de production l'affirme à côté de `readyState` et de
+  `target` : une région perdue ferait alors échouer le déploiement au lieu de ralentir l'outil ;
+- connecté, le propriétaire charge `/recherche`, puis recharge trois onglets ensemble : la
+  réponse doit paraître immédiate.
+
+**Leçon de méthode.** Une mesure locale met la base à zéro milliseconde : elle mesure le code,
+pas le déploiement. « Les pages tiennent en quelques millisecondes »
+([`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md)) et « quelques millisecondes par instruction » (D46)
+étaient vrais en local et faux en production, d'un facteur vingt, et rien ne pouvait le montrer
+tant que la latence n'était pas ajoutée à la main. Une valeur par défaut est une décision que
+personne n'a prise : celle-ci coûtait une seconde par page sans avoir jamais été écrite.
