@@ -164,6 +164,10 @@ couverture servie en entier. 82 fiches à horaires étaient déjà échues à la
 
 Les 163 appels du 04/09 n'ont **ni acteur ni run** : un lancement local, que rien ne trace.
 
+> **Annoté le 26 octobre 2026.** D52 donne cet historique : le journal du § 5, une ligne par
+> exécution. Ses lignes du passé sont celles de ce tableau, plus août. Jusqu'à sa construction,
+> ce qui précède reste vrai.
+
 ## 4. Le garde-fou de dépense, et son défaut depuis D38
 
 ### Ce qu'il lit
@@ -210,57 +214,187 @@ est pas une.
 
 Aucun test ne couvre ce cas. Les tests de `loggedFloor` supposent une cellule par appel.
 
-### Ce que ça demande
+### Rejoué sur douze mois, 26 octobre 2026
 
-L'invariant à poser, et le correctif, sont au propriétaire : section C1 de
-[`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md). Le journal par passe du § 5 en est l'option
-probable. **Il doit être construit avant le 16 novembre 2026**, premier jour où le défaut est
-exposé.
+Même copie, même graine, sans un appel. Un script local rejoue `simulate:passes` en suivant
+chaque tampon, les appels réels, et ce que lirait chaque garde-fou. Il retrouve la pire heure de
+la simulation, 91,5 %.
 
-D'ici là, la règle provisoire proposée : **aucun `--go` ni `workflow_dispatch` de `sweep.yml`
+| Passe du 16 | Rachats | Tampons de la période | Plancher | Lecture actuelle | Journal (D52) |
+|---|---|---|---|---|---|
+| 16/11/2026 | 234 | 666 | 900 | refus, manque 234 | 900 |
+| 16/12/2026 à 16/10/2027 | 186 à 249 | 651 à 714 | 900 | refus, chaque mois | 900 |
+| 16/11 coupée à 200 appels | 23 | 627 | 650 | refus de la reprise | 650 ; la reprise dépense 250 |
+| puis 16/12, complète | 249 | 651 | 650 | **651**, aucun refus | 900 |
+
+Le défaut revient donc à chaque passe du 16, et non une fois.
+
+**L'option qui interdit au 16 de racheter**, simulée avec le même script, graines 1 à 3 :
+- pire heure **69,5 %** au lieu de 91,5 %, le 31/03/2027 ; moyenne 99,1 % au lieu de 99,5 % ;
+- onze passes du 16 sur douze prévoient entre **69,5 et 74,8 %**, sous les 80 % de D39 r3 —
+  février excepté, à 99,9 %.
+
+Les tampons y redeviendraient exacts, au prix d'un rouge par mois.
+
+### Ce qui est décidé
+
+[D52](../DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) :
+la dépense de la période se lit dans le journal du § 5, où chaque appel est réservé avant d'être
+fait. Les tampons des cellules ne servent plus que de contrôle. Le plancher tiré de `sweep_run`
+disparaît. **Le code est sur `main` avant le 16 novembre 2026, 09:00 UTC.**
+
+D'ici là, la règle provisoire tient : **aucun `--go` ni `workflow_dispatch` de `sweep.yml`
 entre le 16 et la fin du mois Pacifique.** Un refus « ledger missing » après le 16 n'est pas
 une perte de lignes : c'est ce défaut, et il ne faut pas « restaurer » quoi que ce soit pour le
 lever.
 
-## 5. Le journal par passe — *brouillon*
+Si la date est manquée, la passe du 16 elle-même part : l'ancien garde-fou ne refuse qu'après
+elle. Ce sont sa reprise et tout ce qui la suit dans le mois qui sont refusés, et une passe
+coupée relâche décembre.
 
-> **Brouillon** — proposition, attend la décision C1 du propriétaire.
+## 5. Le journal des exécutions
 
-**Ce qu'il remplace.** La ligne unique de `sweep_run`, écrasée à chaque passe, comme registre
-de dépense. Il remplace aussi les logs Actions comme seul historique.
+> **Acté** par [D52](../DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel)
+> le 26 octobre 2026, sauf « ce qu'est un bon mois », qui reste *brouillon*.
 
-**Une ligne par exécution du balayage**, refus compris, avec :
+**Ce qu'il remplace.** La ligne unique de `sweep_run` comme registre de dépense, et les logs
+Actions comme seul historique. `sweep_run` reste la ligne du plan.
 
-- **l'origine** : déclencheur (planifié, manuel, local), acteur, SHA, identifiant du run GitHub
-  s'il y en a un ;
-- **le cadre** : début, fin, période Pacifique, passe (1er, 16, hors calendrier), plafond de la
-  passe, dépense de la période au départ ;
-- **la dépense** : appels faits, **comptés appel par appel** et écrits au fil de l'eau, pour
-  qu'une exécution tuée laisse son compte ;
-- **le verdict** : statut et défauts au sens de D39 ;
-- **ce qui a été servi** : couverture choisie (robuste ou fiches connues), cellules de
-  couverture servies sur prévues, rejeux de cellules vides, appels de découverte ;
-- **la fraîcheur** : prévision de fin, part de fiches utilisables au départ, fiches hors de
-  toute portée ;
-- **ce qui a été trouvé** : part des lieux renvoyés avec horaires, fiches nouvelles, fiches
-  absentes une fois D45 r2 construite.
+**Une ligne par exécution du balayage en `--go`**, refus compris. Le mode sec n'écrit rien. Une
+ligne écrite à la main — le passé, une réconciliation — porte `source = hand` et une note qui
+donne sa source.
 
-**Aucun contenu Places** : des comptes et des dates, rien sur un établissement nommé. C'est une
-métadonnée à nous ; elle n'a pas d'échéance de conservation.
+### Les colonnes
 
-**Comment il corrige le § 4.**
-- La dépense de la période se lit dans le journal : la somme des appels de ses exécutions. Elle
-  ne dépend plus d'un tampon qu'un rachat écrase.
-- Une exécution ne doit alors pas franchir une frontière de période sans que ses appels soient
-  rangés de part et d'autre. C'est un point de construction, à trancher en même temps.
-- Le contrôle de cohérence s'inverse : les tampons ne peuvent qu'être **inférieurs ou égaux** au
-  journal. Un journal inférieur aux tampons signale des appels non journalisés, et refuse.
+Table `sweep_execution`. Les noms sont indicatifs ; ils suivent la règle du dépôt, en anglais.
 
-**Ce qu'il permet en plus.** La vérification quotidienne du § 7, sur une donnée exacte. La
-définition d'un bon mois ci-dessous. Et une comparaison d'une passe à l'autre, qui ne dépend
-plus d'un log qui expire.
+| Colonne | Contenu | Requise le 16/11 |
+|---|---|---|
+| `id` | identifiant | oui |
+| `run_id` | le plan parcouru : clé étrangère vers `sweep_run`, **sans cascade** — supprimer un plan ne doit pas effacer sa dépense. Nulle pour une réconciliation qu'aucun plan ne porte | oui |
+| `source`, `note` | `sweep` ou `hand` ; d'où vient le chiffre, obligatoire pour `hand` | oui |
+| `trigger`, `actor`, `commit_sha`, `github_run_id` | l'origine : `schedule`, `workflow_dispatch` ou `local`, puis l'acteur, le SHA et le run GitHub quand ils existent | oui |
+| `started_at`, `finished_at` | début et fin ; fin nulle tant que l'exécution tourne, ou si elle a été tuée | oui |
+| `period` | la période Pacifique, `2026-11` (`monthKey`) | oui |
+| `pass` | `first` ou `second` ; nulle pour le passé d'avant D38 | oui |
+| `pass_ceiling`, `spent_at_start` | le plafond de la passe et la dépense de la période, lus au départ | oui |
+| `calls_made` | **les appels réservés, un par un, avant chaque requête** | oui |
+| `status`, `error` | `running`, `refused`, `capped`, `succeeded`, `failed`, et `recorded` pour une ligne à la main ; les défauts de D39, ou la raison du refus | oui |
+| `cover`, `cover_planned`, `cover_served` | la couverture servie, robuste ou fiches connues ; ses cellules servies sur prévues | non |
+| `empty_replays`, `discovery_calls` | rejeux de cellules vides, appels de découverte | non |
+| `fresh_at_start`, `forecast_at_start`, `forecast_at_end` | part des fiches utilisables au départ ; prévision du plan, puis prévision stockée à la fin | non |
+| `out_of_reach_records` | fiches hors de toute portée, comptées | non |
+| `places_returned`, `places_with_hours`, `places_new` | lieux renvoyés, dont avec horaires (D48 r2), et fiches nouvelles | non |
 
-**Ce qu'est un bon mois**, proposé :
+Un index sur `period`.
+
+Les colonnes de compte rendu sont nullables : si le temps manque avant le 16, le code les laisse
+vides, jamais l'inverse. Elles entrent pourtant dans la même migration, parce que c'est
+l'application à la main qui coûte. Les fiches absentes de D45 r2 attendent leur propre colonne.
+
+**Aucun contenu Places** : des comptes, des dates et des identifiants, rien sur un établissement
+nommé. C'est une métadonnée à nous, sans échéance de conservation.
+
+### Comment il compte
+
+- **Réserver.** Avant chaque requête, une instruction incrémente `calls_made` sur la ligne de
+  l'exécution. La requête ne part que si l'instruction a réussi.
+- **Lire la période.** La somme des `calls_made` des lignes de la période, `running` comprises :
+  une exécution tuée a laissé son compte. Le plafond est imputé du maximum de cette somme et des
+  cellules tamponnées dans la période.
+- **Une exécution, une passe, une période.** `spendOne` ne remet plus le compteur à zéro au
+  changement de période. Il arrête l'exécution avant le premier appel d'une autre passe, et à
+  moins d'une minute de minuit Pacifique en fin de période. L'arrêt sort `capped`.
+- **Contrôler**, sous le verrou, avant d'ouvrir la ligne :
+  - les tampons de la période ne dépassent pas la somme de son journal, plus un ;
+  - `sweep_run.calls_made` du plan ne dépasse pas la somme du journal du plan.
+
+  Si l'un manque, c'est un refus, écrit comme une ligne `refused`. Son message dit la sortie : la
+  dépense réelle établie en console, une ligne `hand` qui la porte, puis une relance.
+- **Clore.** À chaque fin d'exécution, la ligne reçoit son statut, et `sweep_run.calls_made`
+  devient la somme du journal du plan. Une ligne laissée `running` par une exécution tuée est
+  close en `failed` par la suivante, qui tient le verrou ; ses appels restent comptés.
+- **Le verrou consultatif ne change pas.** C'est lui qui empêche deux exécutions de lire la même
+  marge.
+
+### La migration
+
+Appliquée à la main en production, **avant la fusion** du code, puisque `sweep.yml` exécute
+`main` à chaque planification. Ni le 1er ni le 16 avant que la passe du jour ait fini. En une
+transaction :
+
+1. la table, telle que `drizzle-kit` la génère depuis `schema.ts`. Jamais `db:push` vers la
+   production ;
+2. la RLS activée, sans politique. Les privilèges par défaut du schéma `public` donnent tous les
+   droits à `anon` sur une table nouvelle : sans RLS, la clé publiable, publique, pourrait effacer
+   le journal ;
+3. les lignes du passé, `source = hand`, `status = recorded`, sur le plan en place :
+
+   | Période | Appels | Note |
+   |---|---|---|
+   | 2026-08 | 900 | premier balayage, 28 et 29/08 UTC, lancé d'un poste |
+   | 2026-09 | 737 | run `33515957346`, planifié, 01/09, arrêté sur `HTTP 500` |
+   | 2026-09 | 163 | lancement local du 04/09, sans run |
+   | 2026-10 | 900 | run `36887894355`, planifié, 01/10, arrêté au plafond |
+
+   et une ligne de plus par exécution de l'ancien code depuis, d'après son log ;
+4. la vérification : la somme de ces lignes égale `sweep_run.calls_made`. Sinon, `rollback`.
+
+Puis la fusion. Le déploiement échoue sur le garde-fou de `schema.ts`, comme prévu, et se
+relance par `workflow_dispatch` (D32).
+
+Comparées aux tampons, ces lignes disent ce que le § 0 laissait voir : août vaut 900 appels au
+journal et **0** tampon. Les rachats de septembre et d'octobre ont déplacé tous ses tampons.
+
+### Critères d'acceptation
+
+Joués à sec, sans un appel Google, sur une base de travail créée dans le conteneur
+`dmtj-db-cycle` depuis `dmtj` (`create database … template dmtj`). Jamais sur `dmtj_exp`, qui
+porte les tampons fictifs de l'expérience du § 4, ni sur `dmtj` lui-même.
+
+1. **La migration.** La table existe, RLS active. Quatre lignes du passé, de somme 2 700 =
+   `sweep_run.calls_made`. Par période : 900, 900, 900, là où les tampons disent 0, 899, 900.
+2. **Octobre plein.** `sweep:google --dry-run --as-of=2026-10-28T12:00:00Z` : 900 dépensés, rien
+   à dépenser ; le seul refus est « already spent ».
+3. **Novembre neuf.** `--as-of=2026-11-01T09:00:00Z` : 0 dépensé, 450 possibles.
+4. **Deux passes, avec rachats.** Les choix de `planPass` pour le 01/11 et le 16/11, aux heures
+   de `simulate:passes` graine 1, sont rejoués comme au § 4 : tampons écrits comme le balayage
+   les écrit, une ligne de journal par passe avec ses appels, `sweep_run.calls_made` réécrit
+   comme en fin d'exécution. À sec au 20/11 : **900** dépensés, 666 tampons, rien à dépenser,
+   aucun refus de perte. L'ancien code y lit « missing at least 234 ».
+5. **Le 16 coupé.** Même rejeu, passe du 16 arrêtée à 200 appels : 650 dépensés, 627 tampons,
+   **250** possibles, aucun refus.
+6. **Le mois d'après.** Ce novembre à 650, puis un décembre complet : à sec au 20/12, **900**
+   dépensés, 651 tampons, rien à dépenser. L'ancien code y lit 651 et autorise 249 appels.
+7. **Ce qui échappe au journal.** La ligne du 16/11 supprimée : refus, dont le message nomme
+   l'écart et la sortie. `sweep_run.calls_made` relevé de 10 à la main : refus sur le total du
+   plan.
+8. **Les tests**, dans `npm test` : la réservation précède la requête ; aucune requête si elle
+   échoue ; l'arrêt à la borne de passe et à moins d'une minute de minuit Pacifique ; la lecture
+   de la période et les deux contrôles, sur les cas 4 à 7. PGlite sert déjà aux tests de la
+   purge.
+9. **En production, après la migration.** `relrowsecurity` vrai. La Data API, avec la clé
+   publiable, renvoie `[]` sur la table, qui a pourtant quatre lignes. À sec, la dépense de la
+   période égale la somme de son journal.
+
+Et le critère qu'on ne verra qu'en vrai : **le 16 novembre 2026, la passe du 16 dépense. La somme
+du journal de 2026-11 égale les appels que donnent les logs de ses exécutions, et la console de
+novembre ne dit pas plus.**
+
+Le test de bout en bout, deux passes sur PGlite contre une fausse API, reste le choix C10.
+
+### Ce qu'il permet en plus
+
+- La vérification quotidienne du § 7 (D50), sur une donnée exacte. Elle lit les lignes finies, et
+  ne compte pas un refus comme une passe.
+- La part de lieux renvoyés avec horaires de D48 r2, consignée à chaque passe.
+- La définition d'un bon mois, ci-dessous.
+- Une comparaison d'une passe à l'autre qui ne dépend plus d'un log qui expire.
+
+### Ce qu'est un bon mois — *brouillon*
+
+> **Brouillon** — proposé, non tranché par D52.
+
 - les deux passes ont eu lieu, sans défaut D39 ;
 - aucune période n'a imputé moins que la dépense réelle, et la console de facturation le
   confirme ;
@@ -290,6 +424,15 @@ qu'il veut dire, quoi regarder, quoi faire, et ce qu'il ne faut pas faire.
 | `refused to start: … already spent` | la passe n'a plus rien à dépenser | — | attendre le 16 ou le 1er. Si une passe manuelle a précédé la planifiée, ce rouge est attendu | relever le plafond |
 | `forecast freshness … under 80 %` | la liste va s'éteindre au-delà du creux structurel | la couverture servie et la part des lieux renvoyés avec horaires | à instruire. Une passe manquée se rattrape à la main avant le 16 | masquer le rouge |
 | *(D48)* lieux renvoyés avec horaires sous 50 % | Google ne renvoie plus les horaires : masque de champs ou réponse changés | le masque, la réponse brute d'une cellule | arrêter tout `--go` jusqu'à comprendre | relancer : chaque passe effacerait d'autres horaires |
+
+> **Annoté le 26 octobre 2026.** Deux lignes de ce tableau changent quand D52 est construite.
+> - `interrupted: HTTP 5xx` : après le 16, une relance reprend jusqu'au plafond de la période.
+> - `refused to start: … ledger missing` disparaît. Le remplacent deux refus : des cellules
+>   tamponnées dans la période, ou un total de plan dans `sweep_run`, au-delà de ce que le journal
+>   a réservé. Ils veulent dire qu'une dépense n'est pas passée par le journal — un ancien code
+>   lancé d'un poste, une ligne effacée. À regarder : la console. À faire : une ligne à la main qui
+>   porte la dépense réelle et sa source (§ 5). À ne pas faire : éditer `calls_made` d'une ligne
+>   existante.
 
 Un cycle rouge envoie aujourd'hui un **e-mail GitHub, et rien d'autre**. Les 8, 12 et 15
 octobre, le réveil a été rouge trois fois sans que rien ne bouge, et la base est restée en pause
@@ -384,6 +527,7 @@ Pas de verrou partagé, ni de groupe de concurrence commun aux workflows : D49 d
 **Une passe manquée.**
 - Le 1er manqué : une relance avant le 16 rattrape dans le plafond de 450.
 - Le 16 manqué : la relance n'est sûre qu'avant toute autre dépense de la seconde moitié (§ 4).
+  *Annoté le 26/10 : une fois D52 construite, elle l'est jusqu'à la fin du mois Pacifique.*
   Le 1er suivant ne peut pas rattraper au-delà de 450 sans changer la règle.
 
 **Aucun acquittement** n'existe pour une cellule irréductible : D39 en fait un rouge à chaque
@@ -459,7 +603,7 @@ l'écran.
 | Quota gratuit *Nearby Search Enterprise* : 1 000 par mois | doc, D5 |
 | Plafond journalier `SearchNearbyRequest` | **1 000**, lu en console le 29/08 ; jamais relu depuis. Les specs écrivent 100 (`08`), 500 (`08`), 800 (`02`, `09`, `11`) et 1 000 (`02`) |
 | Alerte budget | 1 $ selon D8, 1 € selon `08` : le propriétaire lit la console |
-| Compteur du script | 900 par période ; il **ne garantit plus la dépense réelle** depuis D38 (§ 4) |
+| Compteur du script | 900 par période ; il **ne garantit plus la dépense réelle** depuis D38 (§ 4). *Le 26/10 : D52 le rétablit, à construire avant le 16/11* |
 | Masque de champs | une constante unique ; **aucun test ne la fige** ; le commentaire de `config.ts:78-81` sur `places.rating` est faux (D43) |
 
 **Ce que coûterait une clé qui fuit.**
@@ -550,6 +694,9 @@ Tout se vérifie à sec, sur une copie locale, sans un appel Google.
 7. `simulate:passes` consigne sa ligne `lowest forecast`, et le plafond du 1er cite la simulation
    qui le fixe.
 
+Les points 1 à 3 sont précisés, avec les chiffres attendus et la façon de les jouer, par les
+critères d'acceptation de D52 au § 5.
+
 Et le critère qu'on ne verra qu'en vrai : **le 16 novembre 2026, la passe du 16 dépense, et rien
 de ce qui suit dans le mois ne peut dépasser 900 appels réels.**
 
@@ -573,6 +720,12 @@ Les mesures en production passent par une transaction ouverte en `read only`.
 - **Doublons** : paires à 7 m ou moins, `similarity(name, name) >= 0.6` (`pg_trgm`).
 - **Défaut du § 4** : script local qui rejoue `planPass` aux heures de la simulation (graine 1)
   et tamponne une base d'expérience. Puis `sweep:google --dry-run --as-of=…` sur cette base.
+- **Douze mois du § 4, 26/10** : script local, en mémoire, sur `dmtj` en lecture seule. Il rejoue
+  la boucle de `simulate:passes` — même graine, mêmes heures, mêmes choix de `planPass` — et suit
+  le dernier tampon de chaque cellule, les appels réels de chaque période, le plancher que
+  `loggedFloor` tirerait d'une ligne `sweep_run` cumulée, et la somme qu'en ferait le journal.
+  L'option sans rachat retire de la couverture, à chaque passe, les cellules déjà tamponnées dans
+  la période. Il retrouve la pire heure de `simulate:passes`, 91,5 %.
 - **SIRENE** : DuckDB sur le permalien de `config.ts`, même filtre que `ingest:sirene`, comparé
   par SIRET à la copie locale.
 - **OSM** : Overpass, `amenity` ∈ {restaurant, fast_food, cafe, bar, pub} dans les communes INSEE

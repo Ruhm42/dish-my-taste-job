@@ -163,6 +163,12 @@ consommation ou une base incomplète passeraient inaperçues.
 > ([`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 5 ;
 > [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C1).
 
+> **Annoté le 26 octobre 2026.** Décidé par
+> [D52](../DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) :
+> une table `sweep_execution`, une ligne par exécution, dont les colonnes sont au § 5 de
+> [`14`](14-cycle-d-import-mensuel.md). `sweep_run` reste la ligne du plan ; son `calls_made`
+> devient la somme du journal pour ce plan, et le balayage n'en tire plus de plancher.
+
 ---
 
 ## Colonnes à ajouter — décidées le 17 octobre 2026
@@ -198,6 +204,10 @@ anglais.
 > - une purge de l'identité par suppression emporterait les candidatures, que la clé étrangère
 >   supprime en cascade ;
 > - par mise à jour, elle demande de rendre nullables `name`, `lat` et `lng`.
+
+> **Annoté le 26 octobre 2026.** Le journal par passe est décidé (D52), et il **ne rejoint pas**
+> la migration ci-dessus : il a une date, le 16 novembre, elle n'en a pas. Sa migration est la
+> sienne, appliquée seule, RLS activée — voir [`14`](14-cycle-d-import-mensuel.md) § 5.
 
 ---
 

@@ -169,6 +169,11 @@ jours entre deux balayages et à l'alerte budget.
 > Voir [`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 4 et
 > [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md), C1.
 
+> **Annoté le 26 octobre 2026.** Tranché par
+> [D52](../DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) :
+> la dépense de la période se lit dans un journal où chaque appel est réservé avant d'être fait.
+> La propriété 2 tiendra de nouveau pour un mois quand il sera construit, avant le 16 novembre.
+
 **Les quatre métriques à zéro rendent la décision D5 structurelle** : un `Place Details`
 appelé par erreur ne coûte rien, il échoue. Ce n'est plus une convention à respecter, c'est
 une contrainte appliquée par Google.

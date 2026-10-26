@@ -36,6 +36,16 @@ C3, C4) et **le 16 novembre** (C1).
 
 ### C1. Le garde-fou de dépense ne protège plus après le 16 — avant le 16 novembre
 
+> **Tranché le 26 octobre 2026**, par délégation du propriétaire — voir
+> [D52](DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) et
+> [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4 et § 5.
+> - Le journal par passe, une ligne par exécution, chaque appel réservé avant d'être fait. La
+>   période se lit dans sa somme ; les tampons ne servent plus que de contrôle.
+> - L'interdiction de racheter est écartée sur mesure : pire heure 69,5 % au lieu de 91,5 %, et
+>   onze passes du 16 sur douze sous les 80 % de D39.
+> - Reste à construire, migration comprise, **avant le 16 novembre 2026 à 09:00 UTC**. La règle
+>   provisoire ci-dessous tient jusque-là.
+
 **Constat.** Le compteur impute à la période le maximum de deux lectures : les cellules
 tamponnées dans la période, et un plancher tiré de `sweep_run`.
 
@@ -266,6 +276,10 @@ vérifie l'accord entre le cron et `CYCLE`.
 
 **Proposé**, à faire avec C1 : deux passes jouées sur PGlite contre une fausse API, avec rachats.
 C'est le test qui aurait montré le défaut de C1.
+
+> **Annoté le 26 octobre 2026.** D52 exige les tests de la réservation, de la lecture de la
+> période et de ses deux contrôles, sur les cas mesurés. Ce test de bout en bout n'en est pas une
+> condition : il reste à décider ici.
 
 ---
 
