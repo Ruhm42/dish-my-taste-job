@@ -399,13 +399,14 @@ seule donne au moins 100 verdicts à 95 % (D42).
 > livraison.
 >
 > **À intercaler, dans l'ordre :**
-> 0. avant le 1er novembre, retirer des logs du balayage le nom et la position des fiches hors
->    de toute portée : les logs d'un dépôt public sont lisibles par tous
->    ([`technique/14`](technique/14-cycle-d-import-mensuel.md) § 14) ;
 > 1. C1, avant le 16 novembre ;
 > 2. D49 et D48, qui touchent le cycle ;
 > 3. D50 ;
 > 4. puis C4 avant début janvier 2027, pour la NAF 2025.
+>
+> Sans échéance : retirer des logs du balayage le nom et la position des fiches hors de toute
+> portée ([`technique/14`](technique/14-cycle-d-import-mensuel.md) § 14). Le propriétaire l'a
+> jugé non grave le 26 octobre.
 
 ---
 

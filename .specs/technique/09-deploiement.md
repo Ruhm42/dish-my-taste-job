@@ -187,7 +187,8 @@ seul, de reconstituer un annuaire.
 >
 > Or le balayage écrit aujourd'hui, dans son plan, le nom et la position de jusqu'à dix fiches
 > hors de toute portée, en `--go` comme à sec. La passe du 1er novembre sera la première à le
-> faire dans un run planifié. À retirer par la session de code
+> faire dans un run planifié. Jugé non grave par le propriétaire le 26 octobre — des noms déjà
+> publics, en quelques lignes. À retirer à l'occasion
 > ([`14-cycle-d-import-mensuel.md`](14-cycle-d-import-mensuel.md) § 14).
 
 ---

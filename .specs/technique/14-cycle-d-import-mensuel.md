@@ -518,7 +518,9 @@ Ce qui manque :
   fiches hors de toute portée.
 - Sous Actions, ces lignes vont dans un log gardé 90 jours et lisible par tous, puisque le dépôt
   est public. Le run du 1er novembre sera le premier à le faire.
-- Le comptage suffit au rapport. À retirer **avant le 1er novembre** par la session de code.
+- Le comptage suffit au rapport. À retirer à l'occasion, sans urgence : dix noms de restaurants
+  déjà publics sur la carte de Google, dans un log que personne ne lit. Le propriétaire l'a jugé
+  non grave le 26 octobre. C'est une affaire de cohérence avec la règle du dépôt, pas un risque.
 
 **Ce qu'une purge de l'identité coûterait.**
 - Par `DELETE`, elle supprimerait les candidatures en cascade (`schema.ts:91`).
