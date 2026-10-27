@@ -59,9 +59,9 @@ interface PlanState {
  * What the plan is, and what it still hides — reported, never a reason to fail (D39).
  *
  * Scoped to the run the sweep would pick — the most recent one with cells — and not to the
- * whole table. A recalibration leaves the previous plan's rows in place, on purpose: their
- * `queried_at` is the spend ledger. Counting them here would have the cycle announce a figure
- * the sweep does not walk.
+ * whole table. A recalibration leaves the previous plan's rows in place, on purpose: the spend
+ * journal is checked against their `queried_at`. Counting them here would have the cycle
+ * announce a figure the sweep does not walk.
  *
  * Read whole rather than counted in SQL: resolution is recursive, it is the same rule the
  * sweep reports its own truncations with, and the table is a few thousand rows.

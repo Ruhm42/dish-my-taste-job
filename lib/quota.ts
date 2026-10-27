@@ -100,19 +100,27 @@ export function monthKey(now: Date): string {
   return `${year}-${String(month).padStart(2, '0')}`
 }
 
+export type Pass = 'first' | 'second'
+
+/**
+ * The half of the period `now` falls in, on the Pacific calendar like the period: the 16th's
+ * pass fires at 09:00 UTC, which is already the 16th in California.
+ */
+export function passOf(now: Date, secondPassDay: number): Pass {
+  return partsIn(now).day < secondPassDay ? 'first' : 'second'
+}
+
 /**
  * What the period may have spent by `now`: the first pass's ceiling until the second pass's
  * day opens, the period's full ceiling from then on (D38).
  *
  * Read on the period's total, never on an execution's. A manual rerun on the 3rd shares the
  * first half with the 1st's pass — otherwise every rerun would open another first half.
- * And on the Pacific calendar, like the period: the 16th's pass fires at 09:00 UTC, which is
- * already the 16th in California.
  */
 export function passCeiling(
   now: Date, ceilings: { first: number; full: number; secondPassDay: number },
 ): number {
-  return partsIn(now).day < ceilings.secondPassDay ? ceilings.first : ceilings.full
+  return passOf(now, ceilings.secondPassDay) === 'first' ? ceilings.first : ceilings.full
 }
 
 /**

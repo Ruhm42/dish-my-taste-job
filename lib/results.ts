@@ -241,9 +241,9 @@ export interface SweepProgress {
  * The cell counts are scoped to the run the sweep walks — the most recent one — while
  * `found` and `sirene` stay global, because they count what is in the database rather than
  * what a plan owes. A recalibration opens a new run and leaves the previous plan's rows in
- * place on purpose (their `queried_at` is the spend ledger), so counting every row would
- * add the abandoned plan's pending cells to the banner and promise zones nobody will ever
- * explore.
+ * place on purpose (the spend journal is checked against their `queried_at`), so counting
+ * every row would add the abandoned plan's pending cells to the banner and promise zones
+ * nobody will ever explore.
  */
 export async function fetchSweepProgress(): Promise<SweepProgress> {
   const empty = { found: 0, queried: 0, pending: 0, truncated: 0, known: 0, sirene: 0 }

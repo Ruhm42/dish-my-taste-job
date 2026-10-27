@@ -74,11 +74,11 @@ jobs:
       #
       # No `continue-on-error`, no `|| true`: a red job means look (D39) — an interruption
       # (HTTP error, 429, a cancel, the database out of reach), a failed or irreducible cell, a
-      # truncation that lost its recovery cells, a refusal to start (lock held, ledger that
-      # proves nothing, ceiling already spent), or a forecast worst hour under 80%. A pass that
-      # stops on its planned ceiling ends `capped`, green. The discovery backlog and the
-      # truncations waiting their turn go in the run's notice, never in its colour: they are
-      # there every month, and an alert that fires every month is one nobody reads.
+      # truncation that lost its recovery cells, a refusal to start (lock held, calls that
+      # escaped the spend journal, ceiling already spent), or a forecast worst hour under 80%.
+      # A pass that stops on its planned ceiling ends `capped`, green. The discovery backlog
+      # and the truncations waiting their turn go in the run's notice, never in its colour:
+      # they are there every month, and an alert that fires every month is one nobody reads.
       - name: Run the sweep in live mode
         env:
           GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
