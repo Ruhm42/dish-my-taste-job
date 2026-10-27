@@ -1,6 +1,6 @@
 # Déploiement
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-10-17
+> **Statut** : acté · **Dernière mise à jour** : 2026-10-26
 
 L'outil doit tourner **sur le web, gratuitement, pour deux ou trois personnes**. Cette spec
 dit où tourne quoi, comment le résultat du balayage atteint la production, et surtout ce qui
@@ -35,13 +35,22 @@ flowchart LR
 
 | Quoi | Où | Quand | Déclencheur |
 |---|---|---|---|
-| Application web | Vercel Hobby | À chaque visite | Requête d'un utilisateur |
+| Application web | Vercel Hobby, fonctions à `dub1` — Dublin ([D51](../DECISIONS.md#d51--la-région-des-fonctions-suit-la-base-pas-les-utilisateurs)) | À chaque visite | Requête d'un utilisateur |
 | CI puis déploiement | GitHub Actions | À chaque poussée | Poussée + manuel |
-| Base + authentification | Supabase, région Europe | En continu | — |
+| Base + authentification | Supabase, AWS `eu-west-1` — Irlande | En continu | — |
 | Balayage | GitHub Actions | Le 1er et le 16 du mois, 09:00 UTC ([D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16)) | Planification + manuel |
 | Purge du contenu expiré | GitHub Actions | Chaque jour à 10:23 UTC, job distinct du réveil ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)) | Planification + manuel |
 | Maintien en vie | GitHub Actions | Chaque jour (base), chaque lundi (commit) | Planification + manuel |
 | Ingestion SIRENE et géocodage | Poste local | Trimestriel | À la main |
+
+**Les fonctions tournent à côté de la base, pas à côté des utilisateurs.** Un rendu de
+`/recherche` fait 13 à 15 allers-retours vers la base, et un seul vers le navigateur : c'est le
+premier trajet qu'il faut raccourcir. `dub1` est la région de la base et de l'authentification
+Supabase ; elle s'écrit dans `vercel.json`, qui prévaut sur le réglage du projet, et nulle part
+ailleurs. Avant cette décision, prise le 26 octobre 2026, les fonctions tournaient à `iad1`,
+Washington — la valeur par défaut de Vercel, héritée sans avoir été choisie, qui coûtait un
+aller-retour transatlantique à chaque lecture. Le middleware, lui, s'exécute en périphérie quel
+que soit ce réglage. Voir [D51](../DECISIONS.md#d51--la-région-des-fonctions-suit-la-base-pas-les-utilisateurs).
 
 **Le balayage ne tourne pas sur Vercel**, et ce n'est pas un détail de commodité. Une
 fonction Hobby est plafonnée en durée, et la planification Hobby ne descend pas sous la
@@ -381,7 +390,9 @@ de données.
 
 ### Vercel
 9. Importer le dépôt, renseigner les variables d'environnement de production — et les cocher
-   aussi pour **Preview**, sans quoi les prévisualisations de branche échouent au build
+   aussi pour **Preview**, sans quoi les prévisualisations de branche échouent au build. La
+   région des fonctions ne se règle pas ici : `vercel.json` la porte (D51), et un projet
+   réimporté sans ce fichier repartirait à `iad1`
 10. Une fois le domaine attribué : compléter la **restriction par référent** de la clé Maps
     et les URL de redirection Supabase. ⚠️ Tant que ce n'est pas fait, la clé Maps est
     utilisable par n'importe qui. Y ajouter le motif des URL de prévisualisation, sinon la

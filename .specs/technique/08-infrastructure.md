@@ -68,6 +68,11 @@ d'appel retenu.
 **Région Europe** (Francfort ou Paris) : latence, et données personnelles qui restent dans
 l'UE.
 
+> **Annoté le 26 octobre 2026.** Le projet est en **Irlande**, AWS `eu-west-1` — ni Francfort
+> ni Paris. La latence que cette région devait gagner, les fonctions Vercel la perdaient :
+> elles tournaient à Washington. Elles la rejoignent à `dub1`
+> ([D51](../DECISIONS.md#d51--la-région-des-fonctions-suit-la-base-pas-les-utilisateurs)).
+
 **Base** — extension `pg_trgm` à activer pour l'appariement de noms. Pas de PostGIS (D12).
 L'offre gratuite plafonne à 500 Mo ; 4 000 établissements avec leurs horaires en occupent
 quelques dizaines.
