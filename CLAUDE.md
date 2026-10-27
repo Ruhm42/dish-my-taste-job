@@ -141,3 +141,7 @@ Actions tab — `workflow_dispatch` skips the guard. Never point `db:push` at pr
 - **Fluid compute shares the module-level connection across requests.** One instance serves
   several requests on `lib/db/client.ts`'s single connection, so ordering one page's queries
   does not protect it; the client's one-statement queue does (D46).
+- **The function region lives in `vercel.json`, not in the project settings.** `dub1`, next to
+  the Supabase pooler in eu-west-1 (D51). The project still says `iad1`, and Vercel ignores it
+  once a deployment declares regions: read a deployment's `regions`
+  (`vercel api /v13/deployments/<id>`), never the project's. `vercel inspect --json` omits it.
