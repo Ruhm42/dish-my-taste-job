@@ -2500,6 +2500,12 @@ toutes les pages sont derrière le login. Après le déploiement :
 - connecté, le propriétaire charge `/recherche`, puis recharge trois onglets ensemble : la
   réponse doit paraître immédiate.
 
+> **Annoté le 27 octobre 2026, à la mise en œuvre.** `vercel inspect --json` ne porte pas la
+> région : le job de production ne l'affirme donc pas. Elle se lit sur le déploiement par
+> `vercel api /v13/deployments/<id>`, champ `regions` — une commande encore en bêta, qu'on ne
+> met pas dans un job qui suit un déploiement déjà en ligne. Relevé avant la mise en œuvre :
+> `["iad1"]` sur le déploiement de production.
+
 **Leçon de méthode.** Une mesure locale met la base à zéro milliseconde : elle mesure le code,
 pas le déploiement. « Les pages tiennent en quelques millisecondes »
 ([`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md)) et « quelques millisecondes par instruction » (D46)
