@@ -13,28 +13,45 @@ Quand la source change, on la corrige d'abord, puis l'item.
 ## Un fichier par jour
 
 `AAAA-MM-JJ.md`, et seulement pour les jours qui portent quelque chose. Le jour est celui où
-l'item devient vérifiable ou celui où il doit être fait au plus tard.
+l'item devient vérifiable ou celui où il doit être fait au plus tard. La première ligne est la
+date en toutes lettres : `# Dimanche 1er novembre 2026`.
 
-**En tête**, la liste : une case par item, l'heure UTC, un verbe.
+**En tête**, la liste : une case par item, `- [ ] **Verbe**, heure — ce qui est à faire.` Le
+verbe est l'un de trois :
 - **Vérifier** : lire un résultat et le comparer à ce qui est attendu. En lecture seule.
 - **Faire** : une action, avec ce qu'elle touche.
 - **Décider** : un choix ouvert qui a une date limite. Il se tranche dans
   [`PROCHAINES-ETAPES`](../PROCHAINES-ETAPES.md) ou par une décision, pas ici.
 
-**Puis le détail de chaque item** :
-- *Quand* — l'heure, et le retard possible ;
-- *Comment* — la commande ou la requête, en lecture seule quand c'est une vérification ;
-- *Attendu* — le chiffre ou l'état, mesuré d'avance quand c'est possible ;
-- *Sinon* — ce que ça veut dire, et le renvoi vers ce qu'il faut faire ;
-- *Vient de* — la décision (`Dxx`), le choix (`Cx`) ou la section de spec.
+**Puis `## Détail`**, une section `###` par item, **dans l'ordre de la liste**. Chacune porte
+des champs, en italique en tête de ligne, selon le verbe :
 
-**Une fois fait**, la case se coche et l'item reçoit une ligne datée : ce qui a été observé, avec
-les chiffres. Le fichier reste : comme le journal des décisions, l'agenda se relit comme une
-chronologie. Un item qui glisse se déplace vers son nouveau jour, et l'ancien garde une ligne qui
-dit où il est passé.
+| Verbe | Champs, tous requis |
+|---|---|
+| Vérifier, Faire | *Quand* — l'heure, et le retard possible · *Comment* — la commande, la requête ou le run à lire · *Attendu* — le chiffre ou l'état, avec sa date de mesure · *Sinon* — ce que ça veut dire, et vers quoi se tourner · *Vient de* |
+| Décider | *Quand* — la date limite, et pourquoi · *Quoi* — les options, ou le choix qui les chiffre · *Si rien n'est décidé* — ce qui se passe par défaut · *Vient de* |
+
+*Vient de* porte au moins un lien : la décision (`Dxx`), le choix (`Cx`) ou la section de spec.
+
+**Une fois fait**, la case se coche, `- [x]`, et le détail finit sur une ligne
+`- *Fait le AAAA-MM-JJ* :` qui dit ce qui a été observé, chiffres compris. Le fichier reste :
+comme le journal des décisions, l'agenda se relit comme une chronologie.
+
+**Un item qui glisse** change de jour. L'ancien jour garde, à la place de la case,
+`- [x] **Déplacé** au [AAAA-MM-JJ](AAAA-MM-JJ.md) — ce qui était prévu.`, sans détail : le
+détail suit l'item.
 
 **Qui l'alimente.** Une décision, une annotation ou un choix qui crée une échéance ajoute son item
 ici, dans le même commit.
+
+**Ce qui le tient.**
+- `tests/agenda.test.ts`, dans `npm test` et donc dans la CI, vérifie ce format sur chaque
+  fichier : le titre et son jour de semaine, les verbes, un détail par item dans l'ordre, les
+  champs, un lien dans *Vient de*, une ligne « Fait le » sur chaque case cochée et sur elles
+  seules, un « Déplacé » qui pointe vers son jour, des liens qui mènent quelque part. Un fichier
+  mal formé fait échouer la CI.
+- La skill `agenda` (`.claude/skills/agenda/`) donne aux sessions la marche à suivre : quand un
+  travail crée une échéance, comment l'écrire, la clore ou la déplacer, avec des modèles.
 
 ## Les heures
 

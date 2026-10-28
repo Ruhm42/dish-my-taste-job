@@ -2767,6 +2767,17 @@ dans le dépôt : seulement dans une mémoire de session et une note de passatio
    un fichier que si une occurrence porte quelque chose de particulier.
 6. **Qui crée une échéance l'inscrit**, dans le même commit : une décision, une annotation, un
    choix.
+7. **Le format est tenu par la CI, et la marche à suivre par une skill.**
+   - Un test, dans `npm test`, vérifie chaque fichier du jour : le titre, les verbes, un détail
+     par item dans l'ordre, les champs que le verbe demande, une source liée, une ligne
+     « Fait le » sur chaque item coché, des liens qui mènent quelque part.
+   - La skill `agenda` dit aux sessions quand un travail crée une échéance, et comment l'écrire,
+     la clore ou la déplacer.
+
+   Écarté : *une convention seule*, dans le README. La règle 6 ne vaut que si l'écriture est
+   systématique, et une convention se perd à la première session pressée. Écarté aussi : *des
+   hooks de session*, qui rappelleraient l'agenda à chaque modification d'une spec. Ils pourront
+   venir si la skill ne suffit pas.
 
 **Conséquences.**
 - Les dates qui commandent la suite sont lisibles d'un coup : le 31 octobre (C2 et C3 à

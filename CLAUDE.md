@@ -11,7 +11,9 @@ decision records the options that were rejected and why.
 **Dates drive this project**: two passes a month, 30-day expiries, a Pacific quota month.
 What has to be checked or done on a given day lives in [`.specs/agenda/`](.specs/agenda/README.md),
 one file per day (D53). Read today's file and the next ones before touching the cycle. Anything
-you decide that creates a deadline gets its agenda item in the same commit.
+you decide or ship that creates a deadline gets its agenda item in the same commit — the
+`agenda` skill has the procedure and the templates, and `tests/agenda.test.ts` fails CI on a
+malformed day file.
 
 ## Language rules — non-negotiable
 
