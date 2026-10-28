@@ -1,6 +1,6 @@
 # Prochaines étapes
 
-> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-26
+> **Statut** : brouillon · **Dernière mise à jour** : 2026-10-28
 
 Ce document n'est pas un journal de décisions : rien ici n'est acté. C'est l'état mesuré du
 produit au 29 août 2026 et les axes qui en découlent, chacun avec ses options, pour que
@@ -26,6 +26,10 @@ y était tranchable l'a été :
 Ce qui suit revient au propriétaire. Rien n'y est acté : chaque point donne le constat mesuré,
 les options et leurs conséquences. Deux échéances commandent l'ordre : **le 1er novembre** (C2,
 C3, C4) et **le 16 novembre** (C1).
+
+> **Annoté le 28 octobre 2026.** Les dates de ces choix sont aussi dans l'[agenda](agenda/README.md)
+> (D53) : C2 et C3 au [31 octobre](agenda/2026-10-31.md), la NAF 2025 de C4 au
+> [1er janvier 2027](agenda/2027-01-01.md).
 
 > **Relu le 26 octobre 2026.**
 > - Rien de ce qui suit n'a bougé en production : même plan, aucune ré-ingestion, mêmes
@@ -60,6 +64,11 @@ C3, C4) et **le 16 novembre** (C1).
 > Reste la fusion de #30 puis de #32, **avant le 1er novembre à 09:00 UTC**. Sinon la passe du 1er
 > tourne sur l'ancien code, qui ne réserve rien au journal : sa ligne s'écrit à la main, d'après son
 > log, avant le 16. Sans elle, le 16 refuse de démarrer.
+>
+> **Fusionné et déployé le 28 octobre 2026**, avant le 1er novembre : la passe du 1er tourne donc
+> sur le journal. Ce qu'il faut vérifier après elle, puis après celle du 16, est dans
+> l'[agenda](agenda/README.md) : [1er novembre](agenda/2026-11-01.md),
+> [16 novembre](agenda/2026-11-16.md), [2 décembre](agenda/2026-12-02.md).
 
 **Constat.** Le compteur impute à la période le maximum de deux lectures : les cellules
 tamponnées dans la période, et un plancher tiré de `sweep_run`.
@@ -108,6 +117,11 @@ réelle.* C'est la seule propriété qui permette au compteur de garantir le zé
 
 ### C2. La passe du 1er novembre
 
+> **Tranché le 28 octobre 2026** par le propriétaire : on garde 450. La passe du 1er rafraîchit
+> 450 des 622 cellules de la couverture robuste, et environ 4 % des fiches restent échues du 31/10
+> au 16/11. Relever le plafond, même pour un mois, regrouperait de nouveau les échéances que D38
+> étale.
+
 **Constat.**
 - `simulate:passes`, graines 1 à 10, sur la copie du 17/10 et à partir du 01/11 09:00 UTC :
   pire heure 91,5 %, `lowest forecast` 91,5 %. Consigné sous D38.
@@ -131,6 +145,10 @@ réelle.* C'est la seule propriété qui permette au compteur de garantir le zé
   changement de la base.
 
 ### C3. La coupure du 31 octobre au 1er novembre
+
+> **Tranché le 28 octobre 2026** par le propriétaire : la coupure est acceptée, une fois, comme
+> D38 l'a prévu. Aucun lancement manuel. La liste par défaut reste vide du 31/10 vers 16:00 UTC
+> jusqu'à la passe planifiée du 01/11, soit 17 à 25 heures environ.
 
 **Constat.**
 - Les 3 608 horaires valides expirent tous le 31/10, entre 15:54 et 16:24 UTC.

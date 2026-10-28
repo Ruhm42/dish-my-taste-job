@@ -2723,3 +2723,66 @@ réelle.** C'est la seule propriété qui permette au compteur de garantir le z�
 
 Le contenu du journal, la migration et les critères d'acceptation, jouables à sec sur une copie,
 vivent dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 5.
+
+---
+
+## D53 — Les échéances vivent dans un agenda, un fichier par jour
+
+**Contexte.** Le projet est réglé sur des dates qu'il ne choisit pas : deux passes par mois
+([D38](#d38--deux-passages-par-mois-le-1er-et-le-16)), trente jours de vie pour chaque horaire
+([D7](#d7--re-balayage-mensuel-complet)), un quota qui se renouvelle à minuit Pacifique
+([D47](#d47--la-période-du-quota-est-le-mois-du-pacifique)), un stock SIRENE publié le 1er, des
+logs Actions effacés à 90 jours et des logs Vercel à une heure. Ce qu'il faut vérifier à ces
+dates était dispersé : dans les décisions, dans les choix de
+[`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md) et dans les sections de `technique/`.
+
+Le 28 octobre 2026, D52 a été construite et déployée. La première exécution réelle de son
+journal est la passe du 1er novembre, et la vérification de sa ligne n'était écrite nulle part
+dans le dépôt : seulement dans une mémoire de session et une note de passation, hors du dépôt.
+
+**Options écartées**
+- *Une section datée dans `PROCHAINES-ETAPES`.* Le document mêle déjà constats et arbitrages, sur
+  plus de 700 lignes. Une échéance passée y reste dans la prose, et rien n'y dit ce qui a été
+  vérifié.
+- *Un seul fichier d'échéancier.* Il grossit sans fin, et le jour s'y cherche. Un fichier par jour
+  se trouve par son nom, se clôt, et se relit comme une chronologie.
+- *Des tickets ou des jalons GitHub.* Hors des specs, qui sont la source de vérité. Ils ne suivent
+  pas une branche, et ne se relisent pas avec le reste.
+- *Des rappels planifiés*, une tâche qui se déclenche le jour dit. Ils déclenchent sans consigner.
+  Un rappel pourra lire l'agenda ; il ne le remplace pas.
+
+**Décision.**
+1. **[`agenda/`](agenda/README.md)**, un fichier par jour, `AAAA-MM-JJ.md`, et seulement pour les
+   jours qui portent quelque chose : le jour où l'item devient vérifiable, ou celui où il doit
+   être fait au plus tard.
+2. **En tête, la liste** : une case par item, l'heure UTC, un verbe — *Vérifier*, *Faire* ou
+   *Décider*. **Puis le détail** de chaque item : quand, comment, ce qui est attendu, ce que veut
+   dire l'inverse, et d'où il vient.
+3. **L'agenda ne décide rien.** Chaque item renvoie à sa décision, à son choix ou à sa section de
+   spec. Un choix ouvert y figure comme *Décider*, avec sa date limite ; il se tranche ailleurs.
+4. **Un item fait se coche et reçoit sa ligne datée**, chiffres compris. Le fichier reste. Un item
+   qui glisse change de jour, et l'ancien jour dit où il est passé.
+5. **Ce qui revient** — chaque jour, chaque lundi, le 1er et le 16 — vit dans le
+   [README](agenda/README.md) de l'agenda, avec la liste à relire après chaque passe. Un jour n'a
+   un fichier que si une occurrence porte quelque chose de particulier.
+6. **Qui crée une échéance l'inscrit**, dans le même commit : une décision, une annotation, un
+   choix.
+7. **Le format est tenu par la CI, et la marche à suivre par une skill.**
+   - Un test, dans `npm test`, vérifie chaque fichier du jour : le titre, les verbes, un détail
+     par item dans l'ordre, les champs que le verbe demande, une source liée, une ligne
+     « Fait le » sur chaque item coché, des liens qui mènent quelque part.
+   - La skill `agenda` dit aux sessions quand un travail crée une échéance, et comment l'écrire,
+     la clore ou la déplacer.
+
+   Écarté : *une convention seule*, dans le README. La règle 6 ne vaut que si l'écriture est
+   systématique, et une convention se perd à la première session pressée. Écarté aussi : *des
+   hooks de session*, qui rappelleraient l'agenda à chaque modification d'une spec. Ils pourront
+   venir si la skill ne suffit pas.
+
+**Conséquences.**
+- Les dates qui commandent la suite sont lisibles d'un coup : le 31 octobre (C2 et C3 à
+  trancher), le 1er novembre (la première ligne du journal), le 16 (le critère réel de D52), le
+  2 décembre (novembre clos en console), le 1er janvier 2027 (la NAF 2025, C4).
+- Une preuve qui expire — un log Actions, un log Vercel — se relève dans le fichier du jour avant
+  de disparaître.
+- Un document de plus à tenir. La règle 6 en est le prix.
