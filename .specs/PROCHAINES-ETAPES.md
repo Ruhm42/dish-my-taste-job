@@ -46,6 +46,13 @@ C3, C4) et **le 16 novembre** (C1).
 > - Reste à construire, migration comprise, **avant le 16 novembre 2026 à 09:00 UTC**. La règle
 >   provisoire ci-dessous tient jusque-là.
 
+> **Construit le 28 octobre 2026**, [PR #32](https://github.com/Ruhm42/dish-my-taste-job/pull/32) :
+> le code, les tests et la migration `drizzle/manual/d52-sweep-execution.sql`. Les critères 1 à 7
+> du § 5 de [`technique/14`](technique/14-cycle-d-import-mensuel.md) passent à sec sur la copie, aux
+> chiffres attendus ; le critère 8 est dans `npm test`. Reste, dans l'ordre : la migration à la main
+> en production, le critère 9, puis la fusion. Le chemin `--go` n'a été joué de bout en bout sur
+> aucune base : c'est C10.
+
 **Constat.** Le compteur impute à la période le maximum de deux lectures : les cellules
 tamponnées dans la période, et un plancher tiré de `sweep_run`.
 
