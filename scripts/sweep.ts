@@ -8,7 +8,8 @@
  * The counters are indexed on the QUOTA PERIOD, never on the sweep: a sweep that outlives
  * the month paying for it must still be resumable (D28, spec technique/10). Inside the
  * period, the first pass may only bring it to CYCLE.firstPassCeiling; the 16th's takes the
- * rest (D38).
+ * rest (D38). What the period has spent is read from the spend journal, where every call is
+ * booked before it is made, and an execution never books outside its own pass (D52).
  *
  * Everything a cell collects expires 30 days later (D7), and the cells overlap: what a pass
  * refreshes is a greedy COVER of the content due first, drawn from the complete cells — not
@@ -28,17 +29,22 @@
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --as-of=2026-11-16T09:00:00Z
  *   node --env-file=.env.local --import tsx scripts/sweep.ts --simulate-fault=429   # dry, rehearses D39
  */
-import { and, count, desc, eq, gte, inArray, isNotNull, lt } from 'drizzle-orm'
+import { execFileSync } from 'node:child_process'
+import { and, count, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm'
 import { db, isTransactionPooler, sql as rawSql } from '../lib/db/client'
-import { cell, restaurant, sireneEstablishment, sweepRun } from '../lib/db/schema'
+import { cell, restaurant, sireneEstablishment, sweepExecution, sweepRun } from '../lib/db/schema'
 import {
   DISTRICT_BY_COMMUNE, SWEEP, FIELD_MASK, GRID, COMMUNE_NAMES, FREE_MONTHLY_QUOTA,
   GOOGLE_TO_SIRENE_RATIO, MAX_NEARBY_RESULTS, HOURS_TTL_DAYS, GOOGLE_PLACE_TYPES, CYCLE,
   COMMUNE_CODES,
 } from '../lib/config'
 import {
-  callsLeft, monthKey, monthWindow, nextScheduledPass, passCeiling, type Window,
+  callsLeft, monthKey, monthWindow, nextScheduledPass, passCeiling, passOf, type Pass,
 } from '../lib/quota'
+import {
+  bookCall, bookedForPlan, closeAbandoned, journalGap, openExecution, periodSpend, planSpend,
+  type NewExecution,
+} from '../lib/spend-journal'
 import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
@@ -178,15 +184,13 @@ const SWEEP_CAPPED = 'capped'
 const SWEEP_FAILED = 'failed'
 
 /**
- * The run this execution has opened and not yet written its summary to.
+ * The run and the journal row this execution has opened and not yet closed.
  *
- * `calls_made` is only written at the end of an execution, and the spend guard reads it as
- * the one record a cleanup of the cell table cannot erase (`loggedFloor`). An execution that
- * dies without writing it leaves that record short by everything it spent.
+ * Its calls are in the journal already, booked one by one: what an execution that dies without
+ * closing leaves behind is a row still `running`, which the next one closes (D52).
  */
 let openRun: {
   id: string
-  previousCalls: number
   previousCellsQueried: number
   state: State
 } | null = null
@@ -195,19 +199,22 @@ async function recordInterruption(reason: string): Promise<void> {
   const run = openRun
   if (!run) return
   openRun = null
+  const finishedAt = new Date()
   try {
+    await db.update(sweepExecution).set({ finishedAt, status: SWEEP_FAILED, error: reason })
+      .where(eq(sweepExecution.id, run.state.executionId))
     await db.update(sweepRun).set({
-      finishedAt: new Date(),
-      callsMade: run.previousCalls + run.state.calls,
+      finishedAt,
+      callsMade: bookedForPlan(run.id),
       cellsQueried: run.previousCellsQueried + run.state.cellsQueried,
       status: SWEEP_FAILED,
       error: reason,
     }).where(eq(sweepRun.id, run.id))
   } catch (error) {
     console.error(
-      `! the run could not record the ${run.state.calls} call(s) this execution spent: ` +
-      `${errorReason(error)}\n` +
-      `  sweep_run.calls_made for ${run.id} is short by that much.`,
+      `! the interruption could not be recorded: ${errorReason(error)}\n` +
+      `  The ${run.state.calls} call(s) this execution spent are booked in the journal all the ` +
+      'same; the next execution closes its row.',
     )
   }
 }
@@ -252,7 +259,7 @@ function onStopSignal(signal: keyof typeof EXIT_CODE): void {
   void (async () => {
     try {
       // Bounded, so the unlock always gets its share of the grace period. Recording first is
-      // deliberate — a successor that takes the lock then reads an up-to-date calls_made — but a
+      // deliberate — a successor that takes the lock then finds the row closed, with why — but a
       // write stuck on a slow pooler must not let the grace timer exit with the lock still held,
       // which through Supavisor is the 4 September leak again. A failed write must not either.
       await Promise.race([
@@ -288,21 +295,31 @@ interface SirenePoint {
   commune: string | null
 }
 
-interface State {
-  calls: number
+/** What one execution may still book, and to which pass (D52 rule 4). */
+export interface Budget {
+  /** The quota period every call of this execution falls in, `monthKey`. */
+  period: string
+  pass: Pass
+  ceiling: number
   /**
-   * Calls billed inside the CURRENT quota period, all runs and all executions taken
-   * together — the sweep's own total is not what Google bills (D28).
-   *
-   * It carries the period it was measured for: an execution can outlive its month (the
-   * first sweep already outlived its day), and a counter that did not notice would refuse
-   * calls the new period allows.
+   * The period's spend, all plans and all executions taken together — the sweep's own total is
+   * not what Google bills (D28). Charged once, under the lock, then counted up call by call.
    */
   periodSpent: number
-  period: string
+  /** Calls this execution booked. */
+  calls: number
+}
+
+interface State extends Budget {
+  /** This execution's row in the journal, which every call is booked on. */
+  executionId: string
+  /** The cells this execution booked a call for. */
+  paid: Set<string>
   cellsQueried: number
   seen: Set<string>
   withHours: Set<string>
+  /** Places the database did not hold before this execution. */
+  created: Set<string>
   withoutCommune: Set<string>
   sirenePoints: SirenePoint[]
   /**
@@ -512,6 +529,7 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
     await db.insert(restaurant).values(row)
       .onConflictDoUpdate({ target: restaurant.googlePlaceId, set: row })
 
+    if (!stored) state.created.add(id)
     state.seen.add(id)
     if (hours) state.withHours.add(id)
   }
@@ -520,50 +538,91 @@ async function writePlaces(places: GooglePlace[], state: State): Promise<void> {
 // --- Processing one cell --------------------------------------------------------------
 
 /**
- * Books one call against the quota period, and refuses when the pass is out. Called BEFORE
- * the request: a call we cannot account for is a call we must not make.
- *
- * A sweep runs for hours and can outlive its own period, so the period is re-read on every
- * cell rather than once at startup. Crossing into a new one resets the counter to zero:
- * nothing carries over, in either direction (D28). No query needed for that, since nothing
- * else can have queried a cell in a period we have only just entered.
- *
- * The ceiling is the pass's, read at the call: the first half of the period stops at
- * CYCLE.firstPassCeiling, the rest at the period's (D38).
+ * How close to Pacific midnight the last call of a period may be booked. Google's month rolls
+ * over there, and a request booked later could reach it in a period whose journal never heard
+ * of it.
  */
-function spendOne(state: State, now: Date): void {
+export const PERIOD_END_MARGIN_MS = 60_000
+
+/**
+ * Why a call at `now` would leave the pass this execution books to, or null (D52 rule 4).
+ *
+ * An execution belongs to one pass of one period, so every call on its row falls in the row's
+ * period, and nothing carries over from one period to the next. A sweep runs for hours, so this
+ * is asked before every call. No scheduled pass comes near these bounds: only a manual run
+ * started late on the last day of the month, or on the 15th, Pacific time, stops on them.
+ */
+export function leavesPass(budget: Pick<Budget, 'period' | 'pass'>, now: Date): string | null {
+  const period = monthKey(now)
+  if (period !== budget.period) return `the quota period has rolled over to ${period}`
+  if (monthWindow(now).end.getTime() - now.getTime() < PERIOD_END_MARGIN_MS) {
+    return `less than a minute is left before Pacific midnight closes ${period}`
+  }
+  const pass = passOf(now, CYCLE.secondPassDay)
+  if (pass !== budget.pass) return `the ${pass} pass of ${period} has opened`
+  return null
+}
+
+/**
+ * Books one call against the quota period, and refuses when the pass is out. Called BEFORE
+ * the request: a call the journal does not hold is a call we must not make (D52 rule 2).
+ *
+ * A booking that fails stops the execution as a defect (D39): the call was not made, and
+ * carrying on would mean calling without counting. A call booked and then never sent counts one
+ * too many, which is the safe side.
+ *
+ * The ceiling is the pass's: the first half of the period stops at CYCLE.firstPassCeiling, the
+ * rest at the period's (D38).
+ */
+export async function spendOne(budget: Budget, now: Date, book: () => Promise<void>): Promise<void> {
   if (stopping) throw new Error('stop signal received: no further call is booked')
 
-  const period = monthKey(now)
-  if (period !== state.period) {
-    state.period = period
-    state.periodSpent = 0
-  }
-
-  const ceiling = passCeiling(now, PASS_CEILINGS)
-  if (callsLeft(state.periodSpent, ceiling) <= 0) {
+  const bound = leavesPass(budget, now)
+  if (bound) {
     throw new CeilingReached(
-      `ceiling of ${ceiling} calls reached for this pass of ${state.period} — ` +
-      `${state.periodSpent} spent in the period, ${state.calls} of them by this execution.`,
+      `${bound}: this execution books to the ${budget.pass} pass of ${budget.period} and ends ` +
+      `here, ${budget.calls} call(s) spent (D52 rule 4).`,
+    )
+  }
+  if (callsLeft(budget.periodSpent, budget.ceiling) <= 0) {
+    throw new CeilingReached(
+      `ceiling of ${budget.ceiling} calls reached for this pass of ${budget.period} — ` +
+      `${budget.periodSpent} spent in the period, ${budget.calls} of them by this execution.`,
     )
   }
 
-  state.periodSpent++
-  state.calls++
+  try {
+    await book()
+  } catch (error) {
+    throw new Error(`the call could not be booked in the journal, so it was not made: ${errorReason(error)}`)
+  }
+  budget.periodSpent++
+  budget.calls++
+}
+
+/** The one way a call goes out: booked first, sent only once the journal holds it. */
+export async function sendBooked<T>(
+  budget: Budget, now: Date, book: () => Promise<void>, send: () => Promise<T>,
+): Promise<T> {
+  await spendOne(budget, now, book)
+  return send()
 }
 
 async function processCell(c: CellRow, state: State): Promise<void> {
-  spendOne(state, new Date())
-
-  let places: GooglePlace[]
-  try {
-    places = await queryGoogle(c.lat, c.lng, c.radius)
-  } catch (error) {
-    await db.update(cell)
-      .set({ status: 'failed', queriedAt: new Date() })
-      .where(eq(cell.id, c.id))
-    throw error
+  const book = async () => {
+    await bookCall(db, state.executionId)
+    state.paid.add(c.id)
   }
+  const places = await sendBooked(state, new Date(), book, async () => {
+    try {
+      return await queryGoogle(c.lat, c.lng, c.radius)
+    } catch (error) {
+      await db.update(cell)
+        .set({ status: 'failed', queriedAt: new Date() })
+        .where(eq(cell.id, c.id))
+      throw error
+    }
+  })
   state.cellsQueried++
 
   const maxDistance = places.reduce((max, p) => {
@@ -641,119 +700,24 @@ async function processCell(c: CellRow, state: State): Promise<void> {
   )
 }
 
-// --- What the quota period has already paid for -----------------------------------------
+// --- Where an execution comes from -------------------------------------------------------
 
-export interface LoggedRun {
-  startedAt: Date | null
-  finishedAt: Date | null
-  callsMade: number
-}
-
-function periodIndex(d: Date): number {
-  const [year, month] = monthKey(d).split('-').map(Number)
-  return year * 12 + month
-}
-
-/**
- * Calls the `sweep_run` logbook proves were made inside `w`, whatever the cell table holds.
- *
- * `calls_made` is a run total, and under D30 rule 1 one run is walked period after period
- * for as long as the plan stands — so it cannot be attributed to a window as it is. What can
- * be: no period ever books more than `ceiling`, so whatever a run's total holds beyond
- * `ceiling` for each OTHER period it was active in was booked in this one.
- *
- * Exact while the run spent the whole ceiling in each of those periods, which is the regime
- * D30 predicts for as long as the plan costs more than the quota. Looser by whatever they
- * left unspent — down to nothing once enough of them have — and never above the truth, as
- * long as every one of those periods stayed under the ceiling. One that did not is charged
- * to this one: that errs towards refusing a call, never towards billing one.
- *
- * A run with no `finished_at` is running or was killed: it may have been active up to
- * `clock`, the real time, which is what bounds it. `clock` and not the window, so a
- * simulated past period does not credit itself with calls made after it.
- */
-export function loggedFloor(runs: LoggedRun[], w: Window, ceiling: number, clock: Date): number {
-  const target = periodIndex(w.start)
-  let floor = 0
-  for (const r of runs) {
-    if (!r.startedAt) continue
-    const first = periodIndex(r.startedAt)
-    const last = Math.max(first, periodIndex(r.finishedAt ?? clock))
-    if (target < first || target > last) continue
-    floor += Math.max(0, r.callsMade - (last - first) * ceiling)
+/** For the journal row: the workflow run when there is one, the checkout otherwise. */
+function executionOrigin(): Pick<NewExecution, 'trigger' | 'actor' | 'commitSha' | 'githubRunId'> {
+  return {
+    trigger: process.env.GITHUB_EVENT_NAME ?? 'local',
+    actor: process.env.GITHUB_ACTOR ?? process.env.USER ?? null,
+    commitSha: process.env.GITHUB_SHA ?? localCommit(),
+    githubRunId: process.env.GITHUB_RUN_ID ?? null,
   }
-  return floor
 }
 
-/**
- * How far the cell ledger may fall short of the logbook before the sweep refuses to spend.
- *
- * An execution stops at its first error, so each one can widen the gap by at most one call,
- * in either of two ways:
- *
- *  - the call in flight is booked but its `queried_at` never lands (a throw in `writePlaces`,
- *    in the measurement write, or in the truncation transaction);
- *  - the failed branch does stamp `queried_at`, but a resume in the same period flips failed
- *    cells back to pending and queries them again, overwriting that stamp — two calls, one
- *    stamp.
- *
- * Production carries exactly one — 1,800 calls logged, 1,799 cells stamped. Five covers a
- * period in which the monthly cycle and a handful of resumes each ended one of those ways.
- *
- * The slack decides nothing about spending: the larger of the two readings is what the
- * ceiling is charged with either way. It only decides whether the gap is noise or rows
- * that went missing — and a gap beyond it is a LOWER bound on what went missing, since the
- * logbook floor itself can read short. That is why it refuses instead of carrying on.
- */
-export const LEDGER_SLACK = 5
-
-export interface PeriodSpend {
-  /** Cells whose `queried_at` falls in the window: the cell ledger. */
-  stamped: number
-  /** What the logbook proves, see `loggedFloor`. */
-  logged: number
-  /** What the ceiling is charged with. */
-  charged: number
-}
-
-/**
- * Calls booked inside one window, all runs taken together — read twice, because neither
- * record is complete on its own.
- *
- * The cell ledger: one call writes one `queried_at`, the success branch through
- * `measurement` and the error branch through the `failed` update. It loses a billed call
- * when a throw in `writePlaces`, in the measurement update or in the truncation transaction,
- * or a kill, lands between Google's response and that write. It loses every call of a row
- * that is deleted — the reason for the second reading. A cell requeried in a later period
- * moves its entry out of the EARLIER period: that can under-count a period already closed,
- * never the one being spent.
- *
- * The logbook survives a cleanup of the cell table, and is what a same-month `--go` after
- * one would otherwise have spent past the free quota.
- */
-async function spentIn(w: Window): Promise<PeriodSpend> {
-  const [cells] = await db.select({ n: count() }).from(cell)
-    .where(and(gte(cell.queriedAt, w.start), lt(cell.queriedAt, w.end)))
-  const runs = await db.select({
-    startedAt: sweepRun.startedAt, finishedAt: sweepRun.finishedAt, callsMade: sweepRun.callsMade,
-  }).from(sweepRun)
-  const stamped = cells?.n ?? 0
-  const logged = loggedFloor(runs, w, SWEEP.maxCallsPerPeriod, new Date())
-  return { stamped, logged, charged: Math.max(stamped, logged) }
-}
-
-export function ledgerLossMessage(spend: PeriodSpend, period: string): string | null {
-  const missing = spend.logged - spend.stamped
-  if (missing <= LEDGER_SLACK) return null
-  return (
-    `the cell ledger is missing at least ${missing} call(s) for ${period}: sweep_run proves ` +
-    `${spend.logged}, only ${spend.stamped} cell(s) carry a queried_at in the period.\n` +
-    'Cell rows queried in this period have been deleted, or a run\'s calls_made was edited. ' +
-    'The logbook is only a floor, so the real loss can be larger, and spending on top of an ' +
-    'unknown loss is how the free quota gets overrun.\n' +
-    'Restore the deleted rows, or establish from the billing console what was really spent ' +
-    `this period, before sweeping again. Allowed noise: ${LEDGER_SLACK} (LEDGER_SLACK).`
-  )
+function localCommit(): string | null {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return null
+  }
 }
 
 // --- What fails a pass (D39) ------------------------------------------------------------
@@ -761,7 +725,7 @@ export function ledgerLossMessage(spend: PeriodSpend, period: string): string | 
 export interface PassFacts {
   /** What stopped the walk, unless it was a planned ceiling — that is the normal end. */
   interruption: Error | null
-  /** Why the pass refused to start: the lock is held, the ledger proves nothing, or the ceiling is spent. */
+  /** Why the pass refused to start: the lock is held, calls escaped the journal, or the ceiling is spent. */
   refusal: string | null
   /** The lock could not be handed back: every later pass would be refused by it. */
   lockLeak: string | null
@@ -984,19 +948,20 @@ async function main() {
   const index = buildCoverIndex(cells, records, points.filter((p) => perimeter.has(p.communeCode)))
 
   // 3. What the period, and this pass, still allow. Read on the QUOTA PERIOD, never on the
-  // run: judging on the run total deadlocked the resume (D28).
-  const periodWindow = monthWindow(now)
+  // run: judging on the run total deadlocked the resume (D28). And on the journal, the one
+  // record that holds every call it paid for (D52).
   const period = monthKey(now)
-  const spend = await spentIn(periodWindow)
-  const periodSpent = spend.charged
+  const pass = passOf(now, CYCLE.secondPassDay)
   const ceiling = passCeiling(now, PASS_CEILINGS)
+  const spend = await periodSpend(db, now)
+  const periodSpent = spend.charged
   const headroom = callsLeft(periodSpent, ceiling)
-  const ledgerLoss = ledgerLossMessage(spend, period)
+  const gap = journalGap(spend, await planSpend(db, runId), runId)
   const nextPass = nextScheduledPass(now, CYCLE.scheduleDays, CYCLE.scheduleHourUtc)
 
   // 4. The empty cells this pass replays, then the cover, then discovery. Recomputed on every
   // pass, on the latest results (D36).
-  const secondPass = ceiling >= SWEEP.maxCallsPerPeriod
+  const secondPass = pass === 'second'
   const replays = emptyReplays(index.empty, now, secondPass).slice(0, headroom)
   const plan = planPass(index, { now, nextPass, ceiling: headroom - replays.length })
   const { queue, discovery } = passQueue(replays, plan.chosen.picks, cells)
@@ -1007,11 +972,11 @@ async function main() {
   console.log('--- Pass plan ---')
   console.log(`run                     : ${runId}`)
   console.log(`cells in the plan       : ${cells.length}  (${planned} at depth 0)`)
-  console.log(`this pass               : ${secondPass ? 'second' : 'first'} of ${period}, ceiling ${ceiling}` +
+  console.log(`this pass               : ${pass} of ${period}, ceiling ${ceiling}` +
     (secondPass ? '' : ` (the 16th takes the rest, up to ${SWEEP.maxCallsPerPeriod})`))
   console.log(`spent this period       : ${periodSpent}  (${period})`)
-  console.log(`  cells stamped         : ${spend.stamped}`)
-  console.log(`  logbook floor         : ${spend.logged}  (sweep_run, survives deleted cells)`)
+  console.log(`  booked in the journal : ${spend.booked}  (sweep_execution: every execution, every plan)`)
+  console.log(`  cells stamped         : ${spend.stamped}  (a cell re-bought in the period keeps one stamp)`)
   console.log(`THIS PASS CAN SPEND     : ${headroom}`)
   console.log(`next scheduled pass     : ${nextPass.toISOString()}  (+${CYCLE.maxScheduleDelayHours} h at worst)`)
 
@@ -1031,7 +996,7 @@ async function main() {
   console.log(`FORECAST                : ${percentOf(plan.chosen.forecast)} of the records with hours usable at ` +
     `${forecastHorizon(nextPass).toISOString()}, the worst hour before the next pass  ` +
     `(fails under ${percentOf(CYCLE.freshnessFloor)}, D39)`)
-  if (ledgerLoss) console.warn(`! ${ledgerLoss}`)
+  if (gap) console.warn(`! ${gap}`)
 
   // Every refusal to start is a defect (D39 rule 2): it says what it is waiting for.
   const spentOut = headroom === 0
@@ -1049,7 +1014,7 @@ async function main() {
     }
     const reasons = passFailures({
       interruption,
-      refusal: (await lockHolder()) ?? ledgerLoss ?? spentOut,
+      refusal: (await lockHolder()) ?? gap ?? spentOut,
       lockLeak: null,
       failedCells: 0,
       irreducibleCells,
@@ -1070,18 +1035,30 @@ async function main() {
     console.error('GOOGLE_PLACES_API_KEY is missing — see .specs/technique/08-infrastructure.md')
     process.exit(1)
   }
-  // Before the writes below, not after. Opening the run clears its recorded error and flips
-  // its failed cells back to pending; doing that only to refuse the first call would erase
-  // why the previous execution stopped.
-  if (ledgerLoss) {
-    console.error(`\nREFUSING TO START: ${ledgerLoss}`)
-    process.exit(1)
+
+  // Every refusal of a --go is a row of the journal, with no call on it (D52 rule 1). Written
+  // before the run is opened, not after: opening it clears its recorded error and flips its
+  // failed cells back to pending, and doing that only to refuse would erase why the previous
+  // execution stopped.
+  const journalRow = {
+    runId: knownRuns.some((r) => r.id === runId) ? runId : null,
+    ...executionOrigin(),
+    period,
+    pass,
+    passCeiling: ceiling,
   }
-  if (spentOut) {
-    console.error(
-      `\nREFUSING TO START: ${spentOut}. Nothing is left to spend before the next pass's ceiling ` +
-      'opens or the period rolls over. The run is untouched.',
-    )
+  const refuse = async (reason: string, spentAtStart: number): Promise<never> => {
+    console.error(`\nREFUSING TO START: ${reason}`)
+    try {
+      await db.insert(sweepExecution).values({
+        ...journalRow, spentAtStart, status: 'refused', finishedAt: new Date(), error: reason,
+      })
+    } catch (error) {
+      console.error(`! the refusal could not be written to the journal: ${errorReason(error)}`)
+    }
+    // Through releaseLock, not lock.release(): a signal may already have started giving this
+    // connection back, and releasing a postgres.js connection twice hands it to the pool twice.
+    await releaseLock()
     process.exit(1)
   }
 
@@ -1105,8 +1082,8 @@ async function main() {
     return
   }
   if (!acquired) {
-    console.error(
-      '\nREFUSING TO START: another sweep holds the lock on this database. Two sweeps ' +
+    await refuse(
+      'another sweep holds the lock on this database. Two sweeps ' +
       'reading the same remaining quota would each spend it in full.\n' +
       'If no sweep is running, the lock was leaked by one that was killed: through a pooler ' +
       'the backend stays parked still holding it. Find it with\n' +
@@ -1114,31 +1091,28 @@ async function main() {
       'and terminate that backend. Ask from a session-pooler connection — through the ' +
       'transaction pooler the question can land on the holding backend and be granted ' +
       're-entrantly, which reads as free when it is not.',
+      periodSpent,
     )
-    // Through releaseLock, not lock.release(): a signal may already have started giving this
-    // connection back, and releasing a postgres.js connection twice hands it to the pool twice.
-    await releaseLock()
-    process.exit(1)
   }
 
   // Re-read UNDER the lock. The figure printed above was read before it, and closing the
   // read-then-spend race is the only reason the lock exists: a sweep that finished in that
   // interval would otherwise have its calls counted twice over.
-  const lockedSpend = await spentIn(monthWindow(now))
-  const lockedLedgerLoss = ledgerLossMessage(lockedSpend, period)
-  if (lockedLedgerLoss) {
-    console.error(`\nREFUSING TO START: ${lockedLedgerLoss}`)
-    await releaseLock()
-    process.exit(1)
+  const abandoned = await closeAbandoned(db)
+  if (abandoned > 0) {
+    console.warn(`! ${abandoned} journal row(s) left running by a killed execution, closed as failed: their calls stay booked.`)
   }
-  const lockedPeriodSpent = lockedSpend.charged
-  if (callsLeft(lockedPeriodSpent, ceiling) <= 0) {
-    console.error(
-      `\nREFUSING TO START: ${lockedPeriodSpent} of ${ceiling} calls were spent in ${period} ` +
-      'while this execution was starting up. Nothing left to spend.',
+  const lockedSpend = await periodSpend(db, now)
+  const lockedRun = await planSpend(db, runId)
+  const lockedGap = journalGap(lockedSpend, lockedRun, runId)
+  if (lockedGap) await refuse(lockedGap, lockedSpend.charged)
+  if (callsLeft(lockedSpend.charged, ceiling) <= 0) {
+    await refuse(
+      `${lockedSpend.charged} of ${ceiling} calls already spent in this pass of ${period}. Nothing ` +
+      "is left to spend before the next pass's ceiling opens or the period rolls over. The run " +
+      'is untouched.',
+      lockedSpend.charged,
     )
-    await releaseLock()
-    process.exit(1)
   }
 
   // 5. The run may already exist (created by plan:cells, or interrupted and resumed).
@@ -1148,8 +1122,7 @@ async function main() {
     .where(eq(sweepRun.id, runId))
   const [current] = await db.select().from(sweepRun).where(eq(sweepRun.id, runId))
 
-  // A resume does not reset the counters: what was already spent has been spent.
-  const previousCalls = current.callsMade
+  // A resume does not reset the run's counters: its calls are the journal's, the rest add up.
   const previousCellsQueried = current.cellsQueried
   const runStartedAt = current.startedAt ?? new Date()
 
@@ -1168,26 +1141,41 @@ async function main() {
     )
   }
 
+  const executionId = await openExecution(db, {
+    ...journalRow,
+    runId,
+    spentAtStart: lockedSpend.charged,
+    status: 'running',
+    cover: plan.chosen.robust ? 'robust' : 'known',
+    coverPlanned: plan.chosen.picks.length,
+    freshAtStart: freshShare(records.map((r) => r.hoursExpiresAt), now),
+    forecastAtStart: plan.chosen.forecast,
+    outOfReachRecords: unreached.records.length,
+  })
   const state: State = {
-    calls: 0,
-    periodSpent: lockedPeriodSpent,
+    executionId,
     period,
+    pass,
+    ceiling,
+    periodSpent: lockedSpend.charged,
+    calls: 0,
+    paid: new Set(),
     cellsQueried: 0,
     seen: new Set(),
     withHours: new Set(),
+    created: new Set(),
     withoutCommune: new Set(),
     sirenePoints: points,
     quarterFallbacks: 0,
   }
-  openRun = { id: runId, previousCalls, previousCellsQueried, state }
+  openRun = { id: runId, previousCellsQueried, state }
 
   console.log('\n--- Sweep running ---')
   let interruption: Error | null = null
   let reachedCeiling = false
 
-  // What THIS execution has already paid for, and what it has been served: a cell whose call
-  // threw was paid for and served nothing.
-  const queriedHere = new Set<string>()
+  // What THIS execution has been served, beside `state.paid`: a cell whose call threw was paid
+  // for and served nothing.
   const served = new Set<string>()
 
   try {
@@ -1197,7 +1185,6 @@ async function main() {
     while (wave.length > 0) {
       for (const c of wave) {
         // Sequential and never parallel: the call counter has to stay exact.
-        queriedHere.add(c.id)
         await processCell(c, state)
         served.add(c.id)
         if (state.cellsQueried % 25 === 0) {
@@ -1205,7 +1192,7 @@ async function main() {
         }
       }
       const inPlan = await db.select().from(cell).where(eq(cell.sweepRunId, runId))
-      wave = inPlan.filter((c) => owesDiscovery(c) && !queriedHere.has(c.id)).sort(byDiscovery)
+      wave = inPlan.filter((c) => owesDiscovery(c) && !state.paid.has(c.id)).sort(byDiscovery)
     }
   } catch (error) {
     if (error instanceof CeilingReached) {
@@ -1243,14 +1230,14 @@ async function main() {
   // Cumulative across resumes: this is the counter we compare with the billing console.
   const [{ runTotal }] = await db.select({ runTotal: count() }).from(restaurant)
     .where(gte(restaurant.lastSeenAt, runStartedAt))
-  const resumed = previousCalls > 0
+  const resumed = lockedRun.booked > 0
   const coverServed = plan.chosen.picks.filter((p) => served.has(p.cell.id)).length
 
   console.log('\n--- Sweep summary ---')
   console.log(`CALLS SPENT              : ${state.calls}${reachedCeiling ? '  (the pass ceiling ended it)' : ''}`)
   console.log(`spent this period        : ${state.periodSpent}  (${state.period})`)
   if (resumed) {
-    console.log(`  run total              : ${previousCalls + state.calls} calls, ` +
+    console.log(`  run total              : ${lockedRun.booked + state.calls} calls, ` +
       `${previousCellsQueried + state.cellsQueried} cells queried`)
   }
   console.log(`empty cells replayed     : ${replays.filter((c) => served.has(c.id)).length} of ${replays.length}`)
@@ -1281,20 +1268,39 @@ async function main() {
     }
   }
 
+  const replayIds = new Set(replays.map((c) => c.id))
+  const coverIds = new Set(plan.chosen.picks.map((p) => p.cell.id))
+  const report = {
+    coverServed,
+    emptyReplays: replays.filter((c) => state.paid.has(c.id)).length,
+    discoveryCalls: [...state.paid].filter((id) => !replayIds.has(id) && !coverIds.has(id)).length,
+    forecastAtEnd: forecast,
+    placesReturned: state.seen.size,
+    placesWithHours: state.withHours.size,
+    placesNew: state.created.size,
+  }
+
   // Cleared before the write rather than after: a signal landing during it must not
   // overwrite the summary with a bare "interrupted".
   openRun = null
-  const writeRun = (failures: string[]) => db.update(sweepRun).set({
-    finishedAt: new Date(),
-    cellsPlanned: planned,
-    cellsQueried: previousCellsQueried + state.cellsQueried,
-    callsMade: previousCalls + state.calls,
-    truncatedUnresolved: unresolved,
-    irreducibleCells: irreducible,
-    placesFound: runTotal,
-    status: passStatus(failures, reachedCeiling),
-    error: failures.length === 0 ? null : failures.join(' ; '),
-  }).where(eq(sweepRun.id, runId))
+  const writeRun = async (failures: string[]) => {
+    const finishedAt = new Date()
+    const status = passStatus(failures, reachedCeiling)
+    const error = failures.length === 0 ? null : failures.join(' ; ')
+    await db.update(sweepExecution).set({ finishedAt, status, error, ...report })
+      .where(eq(sweepExecution.id, executionId))
+    await db.update(sweepRun).set({
+      finishedAt,
+      cellsPlanned: planned,
+      cellsQueried: previousCellsQueried + state.cellsQueried,
+      callsMade: bookedForPlan(runId),
+      truncatedUnresolved: unresolved,
+      irreducibleCells: irreducible,
+      placesFound: runTotal,
+      status,
+      error,
+    }).where(eq(sweepRun.id, runId))
+  }
   await writeRun(reasons)
 
   await releaseLock()

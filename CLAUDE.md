@@ -57,6 +57,11 @@ any overage bills a real card.
   the resume: a run's total only ever rises, so a run that reached the ceiling could never
   spend again — see D28 and `lib/quota.ts`. And the month is **Pacific**, the one Cloud
   Billing rolls over: a UTC month would reset ours eight hours before Google's.
+- **The month's spend is read from the journal, `sweep_execution`.** Every call is booked
+  there before it is made, and an execution stops at its pass's boundary rather than book into
+  another — see D52 and `lib/spend-journal.ts`. Cell stamps read short, since the 16th re-buys
+  what the 1st stamped, so they only check the journal: more stamps than bookings means
+  something spent outside it, and the sweep refuses.
 
 See [`.specs/technique/02-budget-google-et-garde-fous.md`](.specs/technique/02-budget-google-et-garde-fous.md)
 and [`.specs/technique/10-reprise-du-balayage.md`](.specs/technique/10-reprise-du-balayage.md).

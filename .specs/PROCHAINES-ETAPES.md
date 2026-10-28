@@ -46,6 +46,21 @@ C3, C4) et **le 16 novembre** (C1).
 > - Reste à construire, migration comprise, **avant le 16 novembre 2026 à 09:00 UTC**. La règle
 >   provisoire ci-dessous tient jusque-là.
 
+> **Construit le 28 octobre 2026**, [PR #32](https://github.com/Ruhm42/dish-my-taste-job/pull/32) :
+> le code, les tests et la migration `drizzle/manual/d52-sweep-execution.sql`. Les critères 1 à 7
+> du § 5 de [`technique/14`](technique/14-cycle-d-import-mensuel.md) passent à sec sur la copie, aux
+> chiffres attendus ; le critère 8 est dans `npm test`. Le chemin `--go` n'a été joué de bout en bout
+> sur aucune base : c'est C10.
+>
+> **Migration appliquée en production le 28 octobre 2026**, sous le nom `d52_sweep_execution` :
+> - RLS active, sans politique ; quatre lignes du passé, 2 700 appels = `sweep_run.calls_made` ;
+> - la Data API renvoie `[]` sur la table avec les deux clés publiques ;
+> - à sec, octobre lit 900 au journal, et le 1er novembre 0 dépensés, 450 possibles.
+>
+> Reste la fusion de #30 puis de #32, **avant le 1er novembre à 09:00 UTC**. Sinon la passe du 1er
+> tourne sur l'ancien code, qui ne réserve rien au journal : sa ligne s'écrit à la main, d'après son
+> log, avant le 16. Sans elle, le 16 refuse de démarrer.
+
 **Constat.** Le compteur impute à la période le maximum de deux lectures : les cellules
 tamponnées dans la période, et un plancher tiré de `sweep_run`.
 

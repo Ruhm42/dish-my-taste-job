@@ -1,5 +1,6 @@
+import { sql } from 'drizzle-orm'
 import {
-  boolean, doublePrecision, index, integer, jsonb, pgEnum, pgTable, real,
+  boolean, check, doublePrecision, index, integer, jsonb, pgEnum, pgTable, real,
   smallint, text, timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core'
 
@@ -172,3 +173,58 @@ export const sweepRun = pgTable('sweep_run', {
   status: text('status').notNull().default('running'),
   error: text('error'),
 })
+
+/**
+ * The spend journal: one row per `--go` execution of the sweep, refusals included, and one per
+ * figure written by hand — the past, a reconciliation (D52).
+ *
+ * A period's spend is the sum of its rows' `calls_made`, each call booked here before it is
+ * made. `sweep_run` stays the plan's row; its `calls_made` is rewritten from this table.
+ * See .specs/technique/14-cycle-d-import-mensuel.md § 5.
+ */
+export const sweepExecution = pgTable('sweep_execution', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  /** No cascade: deleting a plan must not erase what it spent. Null for a hand row no plan carries. */
+  runId: uuid('run_id').references(() => sweepRun.id),
+  /** 'sweep' | 'hand'. A hand row says where its figure comes from in `note`. */
+  source: text('source').notNull().default('sweep'),
+  note: text('note'),
+  /** 'schedule' | 'workflow_dispatch' | 'local'; null on a hand row. */
+  trigger: text('trigger'),
+  actor: text('actor'),
+  commitSha: text('commit_sha'),
+  githubRunId: text('github_run_id'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Null while the execution runs, or if it was killed. */
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  /** The Pacific month every call of the row was made in, `monthKey`. */
+  period: text('period').notNull(),
+  /** 'first' | 'second'; null for the past before D38. */
+  pass: text('pass'),
+  passCeiling: integer('pass_ceiling'),
+  spentAtStart: integer('spent_at_start'),
+  callsMade: integer('calls_made').notNull().default(0),
+  /** 'running' | 'refused' | 'capped' | 'succeeded' | 'failed', and 'recorded' for a hand row. */
+  status: text('status').notNull().default('running'),
+  error: text('error'),
+
+  // The pass's report, left null by a refusal and by a hand row.
+  /** 'robust' | 'known'. */
+  cover: text('cover'),
+  coverPlanned: integer('cover_planned'),
+  coverServed: integer('cover_served'),
+  emptyReplays: integer('empty_replays'),
+  discoveryCalls: integer('discovery_calls'),
+  freshAtStart: real('fresh_at_start'),
+  forecastAtStart: real('forecast_at_start'),
+  forecastAtEnd: real('forecast_at_end'),
+  outOfReachRecords: integer('out_of_reach_records'),
+  placesReturned: integer('places_returned'),
+  placesWithHours: integer('places_with_hours'),
+  placesNew: integer('places_new'),
+}, (t) => ({
+  byPeriod: index('sweep_execution_period').on(t.period),
+  // Hand rows are written in SQL, outside every code path: this is the only place that can
+  // hold them to naming their source.
+  handRowSaysWhy: check('sweep_execution_hand_note', sql`${t.source} <> 'hand' OR ${t.note} IS NOT NULL`),
+}))
