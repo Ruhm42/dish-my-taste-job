@@ -141,6 +141,10 @@ réelle.* C'est la seule propriété qui permette au compteur de garantir le zé
 
 ### C3. La coupure du 31 octobre au 1er novembre
 
+> **Tranché le 28 octobre 2026** par le propriétaire : la coupure est acceptée, une fois, comme
+> D38 l'a prévu. Aucun lancement manuel. La liste par défaut reste vide du 31/10 vers 16:00 UTC
+> jusqu'à la passe planifiée du 01/11, soit 17 à 25 heures environ.
+
 **Constat.**
 - Les 3 608 horaires valides expirent tous le 31/10, entre 15:54 et 16:24 UTC.
 - La période 2026-11 ouvre le 01/11 à 07:00 UTC, jour du changement d'heure en Californie.
