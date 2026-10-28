@@ -970,6 +970,12 @@ jours reste entière — et c'est un seul arbitrage, pas trois. Il ouvrira sa pr
 > L'invariant à rétablir est au propriétaire : [`PROCHAINES-ETAPES`](PROCHAINES-ETAPES.md), C1,
 > et [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4.
 
+> **Annoté le 26 octobre 2026.** Tranché par
+> [D52](#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) : la dépense de
+> la période se lit dans un journal des exécutions, tenu appel par appel. Le refus continue de se
+> prononcer sur la période, comme ici ; il change de source. Jusqu'à sa construction, ce qui
+> précède reste vrai.
+
 ---
 
 ## D29 — Fermés jamais listés, horaires inconnus écartés par défaut
@@ -1711,6 +1717,11 @@ passage du **16 décembre 2026** doit exister.
 > [D28](#d28--le-plafond-dappels-porte-sur-la-période-du-quota-pas-sur-le-balayage), son
 > annotation, et [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4.
 
+> **Annoté le 26 octobre 2026.** La règle 4 redevient vraie quand
+> [D52](#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) est construite,
+> avant le 16 novembre. Interdire au 16 de racheter ce que le 1er a tamponné, qui aurait suffi à
+> rendre les tampons exacts, a été simulé et écarté : la pire heure tomberait à 69,5 %.
+
 ---
 
 ## D39 — Ce qui fait échouer le cycle
@@ -1812,6 +1823,12 @@ C'est voulu, et il n'y a pas de mécanisme d'acquittement tant qu'il n'a pas ser
 >   Ce n'est pas une perte de lignes, c'est le défaut de comptage relevé sous D28.
 >
 > Voir [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 4 et § 6.
+
+> **Annoté le 26 octobre 2026.** Une fois
+> [D52](#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel) construite, le
+> refus « ledger missing » disparaît. Le remplacent deux refus de sens inverse : des cellules
+> tamponnées, ou un total de plan, au-delà de ce que le journal a réservé. Ils restent des défauts
+> au sens de la règle 2.
 
 ---
 
@@ -2512,3 +2529,135 @@ pas le déploiement. « Les pages tiennent en quelques millisecondes »
 étaient vrais en local et faux en production, d'un facteur vingt, et rien ne pouvait le montrer
 tant que la latence n'était pas ajoutée à la main. Une valeur par défaut est une décision que
 personne n'a prise : celle-ci coûtait une seconde par page sans avoir jamais été écrite.
+
+---
+
+## D52 — La dépense d'une période se lit dans un journal, tenu appel par appel
+
+**Contexte.** Avant de dépenser, le balayage impute à la période le maximum de deux lectures : les
+cellules dont le `queried_at` tombe dans la période, et un plancher tiré de l'unique ligne de
+`sweep_run` ([D28](#d28--le-plafond-dappels-porte-sur-la-période-du-quota-pas-sur-le-balayage)).
+Aucune des deux ne tient depuis [D38](#d38--deux-passages-par-mois-le-1er-et-le-16) :
+- la passe du 16 rachète des cellules que celle du 1er a déjà tamponnées dans la même période,
+  et une cellule ne garde qu'un tampon ;
+- le plancher n'est exact que si chaque autre période a dépensé 900 appels. Une période restée en
+  dessous le relâche d'autant, pour toutes les suivantes.
+
+Rejoué le 26 octobre 2026 sur la copie du 17 octobre, sans un appel : les choix de `planPass` aux
+heures de `simulate:passes` (graine 1), douze mois à partir du 1er novembre, en suivant les
+tampons et les deux lectures.
+
+| Scénario | Appels réels | Tampons | Ce que lit le garde-fou | Effet |
+|---|---|---|---|---|
+| Novembre, deux passes | 900 | 666 — 234 rachats | refus `missing at least 234` | tout lancement refusé jusqu'au 1er |
+| Chacun des onze mois suivants | 900 | 651 à 714 — 186 à 249 rachats | le même refus | idem |
+| Novembre, passe du 16 coupée à 200 appels | 650 | 627 | refus de la reprise, `missing at least 23` | la période reste à 650 |
+| Puis un décembre complet | 900 | 651 | **651**, sans refus | 249 appels autorisés : 1 149 réels dans le mois Pacifique |
+
+Novembre retrouve, par une autre voie, la mesure de [`technique/14`](technique/14-cycle-d-import-mensuel.md)
+§ 4. Le défaut n'est pas un accident de novembre : il revient chaque mois.
+
+L'invariant à rétablir : **la dépense imputée à une période n'est jamais inférieure à la dépense
+réelle.** C'est la seule propriété qui permette au compteur de garantir le zéro euro.
+
+**Options écartées**
+- *Interdire à la passe du 16 de racheter ce que le 1er a tamponné.* Aucune migration, et les
+  tampons redeviendraient exacts. Simulé sur douze mois, graines 1 à 3 : la pire heure tombe de
+  91,5 % à **69,5 %**, et onze passes du 16 sur douze prévoient entre 69,5 et 74,8 %, sous les
+  80 % qui les font échouer (D39 r3). Un rouge par mois : c'est défaire D38 r3, et la mesure dit
+  pourquoi elle existe.
+- *Tenir la règle provisoire pour toujours.* Le zéro euro reposerait sur l'attention, ce que
+  [D8](#d8--garde-fous-de-coût-avant-le-premier-appel) refuse. Et une passe du 16 coupée, non
+  reprise, relâche quand même le plancher des mois suivants.
+- *Une table d'une ligne par appel.* Exacte, et le passage de minuit s'y règle seul. Mais c'est
+  une table pour un seul chiffre, alors qu'un journal par exécution est voulu de toute façon —
+  D48 et D50 l'attendent, et les logs Actions qui tiennent lieu d'historique expirent à 90 jours.
+  Il porte le même compte. Et le passé ne s'y reconstitue pas sans inventer 2 700 lignes à des
+  instants qu'aucun log ne donne.
+- *Un compteur par période*, une ligne par mois. Exact, mais un chiffre sans détail : le jour où
+  il diverge de la console, rien ne dit quelle exécution s'est trompée.
+- *Plusieurs tampons par cellule.* Remet le registre de dépense dans la table que les nettoyages
+  touchent, la raison même du plancher, et la fait grossir sans fin.
+- *Une ligne de `sweep_run` par exécution.* `sweep_run` est l'identité du plan : l'application,
+  `cron-refresh`, `match:sirene` et la simulation le choisissent par `started_at`. Y mêler les
+  exécutions confondrait le plan et ses passages, la confusion même qui a produit le défaut.
+- *Lire la consommation chez Google*, par les métriques d'usage du projet. La source exacte, mais
+  un compte de service et un secret de plus, une autre API dans le chemin du garde-fou dont il
+  faudrait vérifier la gratuité, des métriques qui ne sont pas instantanées, et un périmètre par
+  projet qui ne voit pas mieux que nous les autres projets du compte de facturation (C9). La
+  console reste la vérification humaine.
+
+**Décision.**
+1. **Un journal des exécutions** : une ligne par exécution du balayage en `--go`, refus compris.
+   Le mode sec n'y écrit rien. Les lignes écrites à la main — le passé, une réconciliation — y
+   sont marquées comme telles et disent leur source.
+2. **Chaque appel est réservé avant d'être fait.** Une instruction incrémente le compte d'appels
+   de la ligne de l'exécution ; la requête ne part que si elle a réussi. Un échec de la
+   réservation arrête l'exécution, en défaut au sens de D39. Un appel réservé mais jamais parti
+   surcompte d'un : c'est le sens sûr.
+3. **La dépense d'une période est la somme des appels de ses lignes**, toutes exécutions et tous
+   plans confondus, lignes à la main comprises. Le plafond est imputé du maximum de cette somme
+   et des cellules tamponnées dans la période : c'est la somme, sauf si des appels ont échappé au
+   journal (règle 5). Le plancher tiré de `sweep_run` disparaît.
+4. **Une exécution appartient à une passe d'une période.** Elle s'arrête, comme sur un plafond,
+   avant le premier appel qui tomberait dans une autre passe, ou à moins d'une minute de minuit
+   Pacifique en fin de période. Tous ses appels sont donc dans la période de sa ligne, et la
+   minute laisse la requête arriver chez Google avant la bascule. Aucune passe planifiée
+   ne franchit ces bornes : seule une exécution manuelle lancée en fin de mois ou le 15 au soir,
+   heure du Pacifique, s'y arrête.
+5. **Deux contrôles remplacent celui de `ledgerLossMessage`**, tous deux dans le sens inverse de
+   l'ancien — rien n'a dépensé sans réserver :
+   - les cellules tamponnées dans la période ne dépassent pas les appels qu'elle a réservés, à un
+     près : un appel réservé avant minuit dont la réponse arrive après ;
+   - `sweep_run.calls_made` d'un plan ne dépasse pas la somme du journal pour ce plan.
+
+   Un écart, c'est une dépense qui n'est pas passée par le journal : un ancien code lancé d'un
+   poste, ou une ligne effacée ou modifiée. Le balayage refuse, et son message dit la sortie :
+   établir en console la dépense réelle, l'écrire au journal par une ligne à la main qui en donne
+   la source, puis relancer.
+6. **`sweep_run` reste la ligne du plan**, colonnes et sens inchangés. `calls_made` reste le total
+   du plan, mais il est réécrit à chaque fin d'exécution comme la somme du journal pour ce plan,
+   au lieu d'être incrémenté à part. Ses 2 700 appels ne sont ni effacés ni remis à zéro.
+7. **Le passé entre au journal**, par des lignes à la main, dans la migration :
+   - août : 900, le premier balayage des 28 et 29 août (UTC), lancé d'un poste ;
+   - septembre : 737, le run `33515957346` du 1er ; 163, le lancement local du 4, sans run ;
+   - octobre : 900, le run `36887894355` du 1er.
+
+   Leur somme doit égaler `sweep_run.calls_made` au moment où la migration s'applique, sinon elle
+   s'annule. Une exécution de l'ancien code entre-temps — la passe du 1er novembre, si la
+   migration vient après — y entre de la même façon, d'après son log.
+8. **La migration est appliquée à la main en production, avant la fusion**, en une transaction :
+   la table, **la RLS activée sans politique**, les lignes du passé, la vérification de la somme.
+   - Avant la fusion et non après : `sweep.yml` exécute le code de `main` à chaque planification,
+     que le déploiement Vercel ait eu lieu ou non.
+   - Ni le 1er ni le 16 avant que la passe du jour ait fini.
+   - Seule : la migration commune de D41, D42 et D45 n'a pas de date, celle-ci en a une.
+9. **Le code est sur `main` avant le 16 novembre 2026, 09:00 UTC.** D'ici là, la règle provisoire
+   tient : aucun `--go` ni `workflow_dispatch` de `sweep.yml` entre le 16 et la fin du mois
+   Pacifique.
+
+**Conséquences.**
+- Les trois scénarios du tableau se lisent juste. Rejoués avec la lecture de la règle 3, la
+  période vaut 900 après deux passes, une passe du 16 coupée se reprend jusqu'à 900, et le
+  décembre qui suit lit 900 et n'autorise rien.
+- La règle 4 de D38 redevient vraie une fois le code construit : le plafond de la période borne ce
+  qu'un mois dépense, relances comprises. Une passe du 16 manquée ou coupée se rattrape avant la
+  fin du mois (C6).
+- Un nouveau plan (C8) ne remet rien à zéro : la période se lit sur le journal, pas sur le plan.
+- Une instruction de plus par appel, à côté de celles que chaque appel écrit déjà.
+- **La RLS n'est pas une formalité.** Mesuré le 26 octobre en lecture seule : les privilèges par
+  défaut du schéma `public` donnent tous les droits à `anon` et `authenticated` sur toute table
+  nouvelle, et seule la RLS, active sur les cinq tables sans aucune politique, les en prive. Une
+  table créée en SQL sans elle serait modifiable par la Data API avec la clé publiable, qui est
+  une variable publique du dépôt. Effacer des lignes du journal, c'est rouvrir le plafond.
+- Le journal donne l'historique que les logs Actions perdent. La vérification de
+  [D50](#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour) le lit, et ne compte pas un refus
+  comme une passe. La part de lieux renvoyés avec horaires de
+  [D48](#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche) r2 s'y consigne.
+- `loggedFloor`, `LoggedRun` et `LEDGER_SLACK` disparaissent avec leurs tests ; les cas du tableau
+  deviennent des tests. La section coût de `CLAUDE.md` se met à jour avec le code.
+- **Ce qui reste invisible** : un ancien code tué sans rien écrire et qui n'aurait fait que
+  racheter ; un autre projet du même compte de facturation (C9). La console reste le dernier mot.
+
+Le contenu du journal, la migration et les critères d'acceptation, jouables à sec sur une copie,
+vivent dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 5.
