@@ -117,6 +117,11 @@ réelle.* C'est la seule propriété qui permette au compteur de garantir le zé
 
 ### C2. La passe du 1er novembre
 
+> **Tranché le 28 octobre 2026** par le propriétaire : on garde 450. La passe du 1er rafraîchit
+> 450 des 622 cellules de la couverture robuste, et environ 4 % des fiches restent échues du 31/10
+> au 16/11. Relever le plafond, même pour un mois, regrouperait de nouveau les échéances que D38
+> étale.
+
 **Constat.**
 - `simulate:passes`, graines 1 à 10, sur la copie du 17/10 et à partir du 01/11 09:00 UTC :
   pire heure 91,5 %, `lowest forecast` 91,5 %. Consigné sous D38.
