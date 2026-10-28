@@ -16,6 +16,7 @@ filtrer là-dessus. On le construit, sur la Métropole de Lyon.
 |---|---|
 | [`DECISIONS.md`](DECISIONS.md) | Journal des décisions actées, avec les options écartées |
 | [`PROCHAINES-ETAPES.md`](PROCHAINES-ETAPES.md) | État mesuré et axes à arbitrer — brouillon, rien n'y est acté |
+| [`agenda/`](agenda/README.md) | **Ce qui se vérifie ou se fait à une date**, un fichier par jour, chaque item renvoyant à sa décision |
 | [`fonctionnel/`](fonctionnel/) | Ce que l'outil fait, du point de vue de celui qui s'en sert |
 | [`technique/`](technique/) | Comment il le fait |
 

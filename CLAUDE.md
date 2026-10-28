@@ -8,6 +8,11 @@ The project reference lives in [`.specs/`](.specs/README.md). Read
 [`.specs/DECISIONS.md`](.specs/DECISIONS.md) before changing anything structural: every
 decision records the options that were rejected and why.
 
+**Dates drive this project**: two passes a month, 30-day expiries, a Pacific quota month.
+What has to be checked or done on a given day lives in [`.specs/agenda/`](.specs/agenda/README.md),
+one file per day (D53). Read today's file and the next ones before touching the cycle. Anything
+you decide that creates a deadline gets its agenda item in the same commit.
+
 ## Language rules — non-negotiable
 
 **Code is English. Always.** Identifiers, comments, commit messages, CLI output, test
