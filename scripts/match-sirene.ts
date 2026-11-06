@@ -14,7 +14,7 @@
  *
  *   node --env-file=.env.local --import tsx scripts/match-sirene.ts [--dry-run] [--threshold=0.45]
  */
-import { desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { db } from '../lib/db/client'
 import { restaurant, sweepRun } from '../lib/db/schema'
 import { loadCoverInputs } from '../lib/db/cover-inputs'
@@ -26,7 +26,7 @@ import { assign } from '../lib/sirene-match'
 import type { Candidate } from '../lib/sirene-match'
 import type { Category, GoogleOpeningHours } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
-import { hoursPurged } from '../lib/purge'
+import { hoursPurged, hoursUnchangedSince } from '../lib/purge'
 
 /** Matching radius, in meters. Beyond it, two establishments are neighbours, not the same. */
 const MAX_DISTANCE = 75
@@ -167,12 +167,16 @@ interface RestaurantRow {
  * Recomputes the profiles of only those establishments whose headcount just changed.
  * The split-shift verdict crosses opening hours WITH headcount: a headcount that moves
  * invalidates the profile computed before it.
+ *
+ * Only where the hours are still the ones read at the start (D49): a record the purge emptied
+ * since would get its expired schedule back. Returns how many were left for that reason.
  */
 async function recomputeProfiles(
   rows: RestaurantRow[],
   headcounts: Map<string, string | null>,
-): Promise<void> {
+): Promise<number> {
   const now = new Date()
+  let skipped = 0
 
   await db.transaction(async (tx) => {
     for (const r of rows) {
@@ -183,11 +187,14 @@ async function recomputeProfiles(
         category: r.category,
       })
 
-      await tx.update(restaurant)
+      const written = await tx.update(restaurant)
         .set({ ...profileColumns(windows, profile), profileComputedAt: now })
-        .where(eq(restaurant.id, r.id))
+        .where(and(eq(restaurant.id, r.id), hoursUnchangedSince(r)))
+        .returning({ id: restaurant.id })
+      if (written.length === 0) skipped++
     }
   })
+  return skipped
 }
 
 const pct = (n: number, total: number): string =>
@@ -412,8 +419,9 @@ async function main(): Promise<void> {
   if (changed.length === 0) {
     console.log('no headcount changed: profiles left untouched')
   } else {
-    await recomputeProfiles(changed, headcountsAfter)
-    console.log(`profiles recomputed: ${changed.length} establishments whose headcount changed`)
+    const skipped = await recomputeProfiles(changed, headcountsAfter)
+    console.log(`profiles recomputed: ${changed.length - skipped} establishments whose headcount changed`)
+    console.log(`  ${skipped} left unwritten: their hours were purged or swept since they were read (D49)`)
   }
 }
 
