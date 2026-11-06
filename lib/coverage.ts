@@ -354,10 +354,14 @@ export function forecastHorizon(nextPass: Date): Date {
  * A record with hours is one with an expiry date, not one whose hours are still stored: the
  * purge empties those at their expiry (D45), and a denominator that shrank with it would
  * read a dying base as a fresh one.
+ *
+ * A base with no expiry at all reads 0, not 1 (D48 rule 1): a sweep clears the expiry of every
+ * place Google returns without hours, so a base that lost them all would otherwise read fully
+ * fresh, and stay green on an empty list.
  */
 export function freshShare(expiries: (Date | null)[], horizon: Date): number {
   const dated = expiries.filter((e): e is Date => e !== null)
-  return dated.length === 0 ? 1 : dated.filter((e) => e > horizon).length / dated.length
+  return dated.length === 0 ? 0 : dated.filter((e) => e > horizon).length / dated.length
 }
 
 export interface PassPlan<C> {

@@ -1,6 +1,6 @@
 # Agenda — ce qui se vérifie ou se fait à une date
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-10-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-11-06
 
 Le projet vit au rythme de dates qu'on ne choisit pas : deux passes par mois, une échéance de
 30 jours sur chaque horaire, un quota qui se renouvelle à minuit Pacifique, des stocks publiés
@@ -103,10 +103,10 @@ En lecture seule, une fois le run de `sweep.yml` fini.
    `plan_total` et `journal_total` sont égaux.
 3. **Les étapes hors ligne** ont tourné, même après un échec du balayage : `match:sirene` puis
    `compute:profiles` ([D33](../DECISIONS.md#d33--un-balayage-en-échec-nemporte-plus-les-étapes-hors-ligne)).
-4. **La part des lieux renvoyés avec horaires**, que le résumé du balayage imprime : autour de
-   80 %. Sous 50 %, Google ne renvoie plus les horaires et on arrête tout `--go`
-   ([D48](../DECISIONS.md#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche) r2, pas encore
-   construite : à lire dans le log).
+4. **La part des lieux renvoyés avec horaires**, que le résumé du balayage imprime et que le
+   journal consigne (`places_with_hours` sur `places_returned`) : autour de 80 %. Sous 50 %,
+   Google ne renvoie plus les horaires : la passe sort rouge sur ce motif, et on arrête tout
+   `--go` ([D48](../DECISIONS.md#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche) r2).
 5. **Le lendemain**, la console de facturation ne compte pas plus de `Nearby Search` que le
    journal pour la période ([D52](../DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel)).
 

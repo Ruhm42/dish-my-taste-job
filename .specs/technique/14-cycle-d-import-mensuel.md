@@ -1,6 +1,6 @@
 # Le cycle d'import mensuel des points d'intérêt
 
-> **Statut** : acté, sauf les sections marquées *brouillon* · **Dernière mise à jour** : 2026-10-26
+> **Statut** : acté, sauf les sections marquées *brouillon* · **Dernière mise à jour** : 2026-11-06
 
 Cette spec est la référence consolidée du cycle de rafraîchissement : ce qui tourne, quand,
 dans quel ordre, ce que chaque pièce écrit, ce qui la fait échouer et quoi faire alors. Elle ne
@@ -433,6 +433,18 @@ qu'il veut dire, quoi regarder, quoi faire, et ce qu'il ne faut pas faire.
 >   lancé d'un poste, une ligne effacée. À regarder : la console. À faire : une ligne à la main qui
 >   porte la dépense réelle et sa source (§ 5). À ne pas faire : éditer `calls_made` d'une ligne
 >   existante.
+
+> **Annoté le 6 novembre 2026.** La ligne *(D48)* est construite. Sa raison affichée :
+> `places returned with opening hours … (N of M), under 50.0%: Google is no longer sending hours`.
+> - Elle précède `forecast freshness`, que la même perte fait tomber : quand les deux sortent
+>   ensemble, c'est elle qu'on suit.
+> - `forecast freshness` peut désormais lire 0,0 % : une base sans aucune échéance ne prévoit plus
+>   100 % (D48 r1).
+> - Une passe qui n'a renvoyé aucun lieu, une passe à sec comprise, n'est pas jugée sur les
+>   horaires.
+>
+> Le point 4 de *Comment on saura que c'est en ordre* est tenu par les tests de `passFailures` et
+> de `freshShare`, sans un appel.
 
 Un cycle rouge envoie aujourd'hui un **e-mail GitHub, et rien d'autre**. Les 8, 12 et 15
 octobre, le réveil a été rouge trois fois sans que rien ne bouge, et la base est restée en pause

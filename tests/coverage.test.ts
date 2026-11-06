@@ -261,7 +261,12 @@ describe('the freshness forecast (D39 rule 5)', () => {
   it('reads stored expiries against a horizon, ignoring records with no hours', () => {
     const horizon = new Date('2026-11-16T16:00:00Z')
     expect(freshShare([new Date('2026-12-01'), new Date('2026-11-10'), null], horizon)).toBe(0.5)
-    expect(freshShare([], horizon)).toBe(1)
+  })
+
+  it('reads a base with no expiry at all as 0, not as fresh (D48)', () => {
+    const horizon = new Date('2026-11-16T16:00:00Z')
+    expect(freshShare([], horizon)).toBe(0)
+    expect(freshShare([null, null], horizon)).toBe(0)
   })
 })
 
