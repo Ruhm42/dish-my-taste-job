@@ -733,9 +733,19 @@ export interface PassFacts {
   irreducibleCells: number
   /** Truncated cells without a single recovery cell: the recovery was lost. */
   orphanTruncations: number
+  /** Places this execution's calls returned, and how many of them carried opening hours. */
+  placesReturned: number
+  placesWithHours: number
   /** Share of the records with hours usable at the worst hour before the next pass. */
   forecast: number
 }
+
+/**
+ * Under this share of returned places with hours, Google has stopped sending them (D48 rule 2).
+ * Measured at 80% on 1 September, 81% on 1 October and on 1 November; a broken field mask
+ * gives zero. Reread if the measured share moves by more than ten points.
+ */
+export const HOURS_SHARE_FLOOR = 0.5
 
 /**
  * The defects of a pass, all of them and only them (D39). An empty list is a green pass.
@@ -759,6 +769,15 @@ export function passFailures(f: PassFacts): string[] {
   }
   if (f.orphanTruncations > 0) {
     reasons.push(`${f.orphanTruncations} truncated cell(s) without any recovery cell: the recovery was lost`)
+  }
+  // Before the forecast, which the same loss drags down: the source reads first, not its effect.
+  // A pass that returned no place, a dry run among them, has nothing to judge.
+  if (f.placesReturned > 0 && f.placesWithHours / f.placesReturned < HOURS_SHARE_FLOOR) {
+    reasons.push(
+      `places returned with opening hours ${percentOf(f.placesWithHours / f.placesReturned)} ` +
+      `(${f.placesWithHours} of ${f.placesReturned}), under ${percentOf(HOURS_SHARE_FLOOR)}: Google is no ` +
+      'longer sending hours — field mask or response changed. Stop every --go: each pass erases more expiries',
+    )
   }
   if (f.forecast < CYCLE.freshnessFloor) {
     reasons.push(
@@ -1019,6 +1038,8 @@ async function main() {
       failedCells: 0,
       irreducibleCells,
       orphanTruncations: orphans,
+      placesReturned: 0,
+      placesWithHours: 0,
       forecast: plan.chosen.forecast,
     })
     console.log('\nDRY RUN — no call made, nothing written. Add --go to actually spend.')
@@ -1224,7 +1245,8 @@ async function main() {
 
   const reasons = passFailures({
     interruption, refusal: null, lockLeak: null, failedCells: failed,
-    irreducibleCells: irreducible, orphanTruncations: orphanTruncations(finalCells), forecast,
+    irreducibleCells: irreducible, orphanTruncations: orphanTruncations(finalCells),
+    placesReturned: state.seen.size, placesWithHours: state.withHours.size, forecast,
   })
 
   // Cumulative across resumes: this is the counter we compare with the billing console.
@@ -1252,7 +1274,8 @@ async function main() {
   console.log(`discovery backlog        : ${backlog}  (reported, never red)`)
   console.log(`establishments found     : ${state.seen.size}`)
   if (resumed) console.log(`  run total              : ${runTotal}`)
-  console.log(`  with opening hours     : ${state.withHours.size} (${percent(state.withHours.size, state.seen.size)})`)
+  console.log(`  with opening hours     : ${state.withHours.size} (${percent(state.withHours.size, state.seen.size)})  ` +
+    `(fails under ${percentOf(HOURS_SHARE_FLOOR)}, D48)`)
   console.log(`  without a commune      : ${state.withoutCommune.size}`)
   console.log(`FORECAST                 : ${percentOf(forecast)} usable at ${forecastHorizon(nextPass).toISOString()}, ` +
     'the worst hour before the next pass')
