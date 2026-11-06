@@ -105,10 +105,10 @@ En lecture seule, une fois le run de `sweep.yml` fini.
    `compute:profiles` ([D33](../DECISIONS.md#d33--un-balayage-en-échec-nemporte-plus-les-étapes-hors-ligne)).
    Chacune imprime `N left unwritten` : non nul seulement si une purge ou un balayage est passé
    pendant l'étape ([D49](../DECISIONS.md#d49--la-purge-rattrape-ce-quune-étape-hors-ligne-réécrit)).
-4. **La part des lieux renvoyés avec horaires**, que le résumé du balayage imprime : autour de
-   80 %. Sous 50 %, Google ne renvoie plus les horaires et on arrête tout `--go`
-   ([D48](../DECISIONS.md#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche) r2, pas encore
-   construite : à lire dans le log).
+4. **La part des lieux renvoyés avec horaires**, que le résumé du balayage imprime et que le
+   journal consigne (`places_with_hours` sur `places_returned`) : autour de 80 %. Sous 50 %,
+   Google ne renvoie plus les horaires : la passe sort rouge sur ce motif, et on arrête tout
+   `--go` ([D48](../DECISIONS.md#d48--une-base-sans-échéance-ne-passe-pas-pour-fraîche) r2).
 5. **Le lendemain**, la console de facturation ne compte pas plus de `Nearby Search` que le
    journal pour la période ([D52](../DECISIONS.md#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel)).
 
