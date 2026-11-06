@@ -10,7 +10,7 @@
  * Runs every day from .github/workflows/purge.yml. See lib/purge.ts for what is cleared and
  * what is kept.
  */
-import { countToPurge, purgeExpiredHours } from '../lib/purge'
+import { countRewrittenAfterPurge, countToPurge, purgeExpiredHours } from '../lib/purge'
 import { db } from '../lib/db/client'
 import { errorReason } from '../lib/error-reason'
 
@@ -30,15 +30,27 @@ function parseArgs(args: string[]): { write: boolean } {
 async function main() {
   const { write } = parseArgs(process.argv.slice(2))
 
+  // Counted before the write, which cannot tell them apart afterwards: every record it clears
+  // ends up the same. A separate statement, so a writer in between can shift it; it is a
+  // report, not a guard.
+  const rewritten = await countRewrittenAfterPurge(db)
+
   if (!write) {
     const n = await countToPurge(db)
-    console.log(`${n} record(s) past their expiry still hold opening hours`)
+    console.log(`${n} record(s) past their expiry still hold opening hours or what derives from them`)
+    reportRewritten(rewritten)
     console.log('dry run: nothing written — pass --write to clear them')
     return
   }
 
   const n = await purgeExpiredHours(db)
   console.log(`${n} record(s) cleared of their expired opening hours`)
+  reportRewritten(rewritten)
+}
+
+/** D49: zero is expected. Anything else is a writer that put back what a purge had cleared. */
+function reportRewritten(n: number): void {
+  console.log(`${n} of them rewritten after an earlier purge, payload already gone (D49)`)
 }
 
 main()

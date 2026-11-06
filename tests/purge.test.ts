@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { PGlite } from '@electric-sql/pglite'
 import { drizzle } from 'drizzle-orm/pglite'
 import { createRequire } from 'node:module'
-import { inArray, sql, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import * as schema from '@/lib/db/schema'
 import { restaurant } from '@/lib/db/schema'
 import {
@@ -12,7 +12,10 @@ import {
 import { computeProfile, parseOpeningHours } from '@/lib/hours'
 import type { GoogleOpeningHours, GooglePeriod } from '@/lib/hours'
 import { profileColumns } from '@/lib/profile-columns'
-import { CLEARED, countToPurge, hoursPurged, purgeExpiredHours } from '@/lib/purge'
+import {
+  CLEARED, countRewrittenAfterPurge, countToPurge, hoursPurged, hoursUnchangedSince,
+  purgeExpiredHours,
+} from '@/lib/purge'
 
 /*
  * The purge is one UPDATE whose correctness lives in Postgres: `SET … = DEFAULT`, a date
@@ -261,5 +264,126 @@ describe('the recompute guard', () => {
   // Why the recompute scripts skip them: an empty payload reads as no hours at all.
   it('protects has_hours, which a recompute would clear', () => {
     expect(computeProfile({ windows: parseOpeningHours(null), headcountCode: '01' }).hasHours).toBe(false)
+  })
+})
+
+type Restaurant = typeof restaurant.$inferSelect
+
+/** What `compute:profiles` writes for a record it read: the profile of the payload it saw. */
+function recomputed(read: Restaurant) {
+  const windows = parseOpeningHours(read.rawOpeningHours as GoogleOpeningHours | null)
+  const profile = computeProfile({ windows, headcountCode: read.headcountCode, category: read.category })
+  return profileColumns(windows, profile)
+}
+
+describe('rewritten after the purge (D49)', () => {
+  // The race: an offline step reads the record, the purge empties it, the step writes back
+  // what it computed from the payload it had read — with no check, as before D49 rule 2.
+  async function race() {
+    const read = (await byPlace()).expired!
+    await purgeExpiredHours(db)
+    const purged = (await byPlace()).expired!
+    await db.update(restaurant).set(recomputed(read)).where(eq(restaurant.id, read.id))
+    return purged
+  }
+
+  it('is caught by the next purge, which leaves it as the first one did', async () => {
+    const purged = await race()
+    const rewritten = (await byPlace()).expired!
+    expect(rewritten.rawOpeningHours).toBeNull()
+    expect(rewritten.schedule).not.toBeNull()
+    // Why the recompute scripts cannot repair it: they skip it as purged.
+    expect(hoursPurged(rewritten)).toBe(true)
+
+    expect(await countToPurge(db)).toBe(1)
+    expect(await countRewrittenAfterPurge(db)).toBe(1)
+    expect(await purgeExpiredHours(db)).toBe(1)
+
+    expect((await byPlace()).expired).toEqual(purged)
+    expect(await countToPurge(db)).toBe(0)
+  })
+
+  it('still reads as expired hours, not unknown ones', async () => {
+    await race()
+    await purgeExpiredHours(db)
+    const after = (await byPlace()).expired!
+    expect(after.hasHours).toBe(true)
+    expect(await where(HOURS_EXPIRED)).toEqual(['expired'])
+    expect(await where(EXCLUDED_BECAUSE.unknownHours)).toEqual(['no-hours', 'no-period-expired'])
+  })
+
+  // Whoever the writer, and whatever it writes: one cleared column holding content is enough.
+  it.each(Object.keys(CLEARED).filter((c) => c !== 'rawOpeningHours'))(
+    'is caught when only %s was written back',
+    async (column) => {
+      const read = (await byPlace()).expired!
+      await purgeExpiredHours(db)
+      const purged = (await byPlace()).expired! as Record<string, unknown>
+      const value = (recomputed(read) as Record<string, unknown>)[column]
+      expect(value, 'the fixture must give this column content').not.toEqual(purged[column])
+
+      await db.update(restaurant).set({ [column]: value }).where(eq(restaurant.id, read.id))
+      expect(await countToPurge(db)).toBe(1)
+      expect(await purgeExpiredHours(db)).toBe(1)
+      expect(await countToPurge(db)).toBe(0)
+    },
+  )
+
+  it('counts nothing as rewritten on a first purge', async () => {
+    expect(await countRewrittenAfterPurge(db)).toBe(0)
+    expect(await countToPurge(db)).toBe(2)
+  })
+})
+
+describe('the conditional write of the offline steps (D49)', () => {
+  /** The guarded UPDATE both scripts make; true if the row was written. */
+  async function writeIfUnchanged(read: Restaurant): Promise<boolean> {
+    const written = await db.update(restaurant)
+      .set({ ...recomputed(read), profileComputedAt: new Date() })
+      .where(and(eq(restaurant.id, read.id), hoursUnchangedSince(read)))
+      .returning({ id: restaurant.id })
+    return written.length === 1
+  }
+
+  it('writes a record whose hours did not move', async () => {
+    const rows = await byPlace()
+    for (const id of ['fresh', 'expired', 'no-hours', 'no-period-expired']) {
+      expect(await writeIfUnchanged(rows[id]!), id).toBe(true)
+    }
+  })
+
+  // Postgres keeps microseconds; the Date the script read holds milliseconds.
+  it('matches a fetch date read back with its microseconds cut', async () => {
+    await db.update(restaurant)
+      .set({ hoursFetchedAt: sql`timestamptz '2026-10-01 16:24:00.123999+00'` })
+      .where(eq(restaurant.googlePlaceId, 'fresh'))
+    const read = (await byPlace()).fresh!
+    expect(read.hoursFetchedAt!.getUTCMilliseconds()).toBeGreaterThanOrEqual(123)
+    expect(await writeIfUnchanged(read)).toBe(true)
+  })
+
+  it('leaves a record the purge emptied after it was read', async () => {
+    const read = (await byPlace()).expired!
+    await purgeExpiredHours(db)
+    const purged = (await byPlace()).expired!
+
+    expect(await writeIfUnchanged(read)).toBe(false)
+    expect((await byPlace()).expired).toEqual(purged)
+    expect(await countToPurge(db)).toBe(0)
+  })
+
+  it('leaves a record a sweep refreshed after it was read', async () => {
+    const rows = await byPlace()
+    await db.update(restaurant)
+      .set({ hoursFetchedAt: sql`now()`, hoursExpiresAt: sql`now() + interval '30 days'` })
+      .where(inArray(restaurant.googlePlaceId, ['fresh', 'expired']))
+    // A place that had no hours, and now has some.
+    await db.update(restaurant)
+      .set({ rawOpeningHours: WEEKDAYS, hoursFetchedAt: sql`now()`, hoursExpiresAt: sql`now() + interval '30 days'` })
+      .where(eq(restaurant.googlePlaceId, 'no-hours'))
+
+    for (const id of ['fresh', 'expired', 'no-hours']) {
+      expect(await writeIfUnchanged(rows[id]!), id).toBe(false)
+    }
   })
 })

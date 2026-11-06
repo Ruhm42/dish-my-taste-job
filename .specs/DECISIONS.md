@@ -2452,6 +2452,32 @@ C'est rare, pas impossible, et le dommage ne se répare pas seul.
 
 Le détail vit dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 8.
 
+> **Annoté le 6 novembre 2026, après la construction.** Les deux règles sont construites, avant
+> la passe du 16 novembre.
+> - **Règle 1.** `HOURS_TO_PURGE` (`lib/purge.ts`) vise une fiche échue dès qu'une des colonnes que
+>   la purge vide tient autre chose que ce que la purge y écrit : les horaires bruts comme avant,
+>   la grille, ou une colonne du profil. Les colonnes se lisent dans `CLEARED`, leurs valeurs par
+>   défaut dans le schéma : une colonne ajoutée à la purge est une colonne surveillée.
+>   `has_hours` et les deux dates restent, la fiche se compte toujours *expirée*.
+> - La purge imprime en plus les fiches réécrites après une purge précédente :
+>   `N of them rewritten after an earlier purge`. Depuis la règle 2, c'est 0 ; un autre chiffre
+>   désigne un écrivain qui ne vérifie pas ce qu'il a lu.
+> - **Règle 2.** `compute:profiles` et `match:sirene` conditionnent leur `UPDATE` à ce qu'ils ont
+>   lu : la présence des horaires bruts, que la purge vide, et `hours_fetched_at`, qu'un balayage
+>   redate. La date se compare à la milliseconde près : Postgres garde les microsecondes, une
+>   date JavaScript non. La condition est dans l'`UPDATE` lui-même : si la purge valide pendant
+>   que l'étape attend le verrou de la ligne, Postgres relit la condition sur la ligne purgée.
+>   Chacune imprime `N left unwritten`.
+> - **Rejoué le 6 novembre**, sans un appel, sur des copies jetables de la base du 17 octobre. Une
+>   purge prend ses verrous, `compute:profiles` lit puis attend, la purge valide :
+>   - avant D49, les 3 730 fiches purgées reprennent leur grille et leur profil, et la purge
+>     élargie les compte toutes comme réécrites ;
+>   - avec D49, `compute:profiles` en laisse 3 730, et la purge suivante ne trouve rien.
+>
+> La production n'a pas été lue : la lecture a été refusée le 6 novembre. La première purge
+> élargie, le 7 novembre, dira si une course passée y a laissé du contenu échu :
+> [agenda](agenda/2026-11-07.md).
+
 ---
 
 ## D50 — L'âge de la dernière passe se vérifie chaque jour

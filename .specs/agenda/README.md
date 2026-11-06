@@ -71,7 +71,7 @@ quelque chose de particulier, et il renvoie alors ici pour le reste.
 | Rythme | Heure UTC planifiée | Quoi | Vient de |
 |---|---|---|---|
 | Chaque jour | 05:17 | le réveil de la base : des lectures par le pooler et par la Data API | [D35](../DECISIONS.md#d35--réveiller-la-base-chaque-jour-par-le-pooler-et-par-lapi-et-découpler-le-commit) |
-| Chaque jour | 10:23 | la purge des horaires échus, en écriture | [D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus) r1 |
+| Chaque jour | 10:23 | la purge des horaires échus, en écriture ; sa ligne `rewritten after an earlier purge` lit 0 | [D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus) r1, [D49](../DECISIONS.md#d49--la-purge-rattrape-ce-quune-étape-hors-ligne-réécrit) |
 | Chaque jour | 18:41 | l'âge de la dernière passe : rouge si aucune passe n'a fini neuf heures après la dernière planifiée | [D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour) |
 | Chaque lundi | 05:47 | le commit du réveil : sans commit pendant 60 jours, GitHub coupe toutes les planifications | [D19](../DECISIONS.md#d19--une-action-hebdomadaire-contre-les-deux-mises-en-veille), [D35](../DECISIONS.md#d35--réveiller-la-base-chaque-jour-par-le-pooler-et-par-lapi-et-découpler-le-commit) |
 | Le 1er et le 16 | 09:00 | une passe du cycle : voir ci-dessous | [D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16) |
@@ -103,6 +103,8 @@ En lecture seule, une fois le run de `sweep.yml` fini.
    `plan_total` et `journal_total` sont égaux.
 3. **Les étapes hors ligne** ont tourné, même après un échec du balayage : `match:sirene` puis
    `compute:profiles` ([D33](../DECISIONS.md#d33--un-balayage-en-échec-nemporte-plus-les-étapes-hors-ligne)).
+   Chacune imprime `N left unwritten` : non nul seulement si une purge ou un balayage est passé
+   pendant l'étape ([D49](../DECISIONS.md#d49--la-purge-rattrape-ce-quune-étape-hors-ligne-réécrit)).
 4. **La part des lieux renvoyés avec horaires**, que le résumé du balayage imprime et que le
    journal consigne (`places_with_hours` sur `places_returned`) : autour de 80 %. Sous 50 %,
    Google ne renvoie plus les horaires : la passe sort rouge sur ce motif, et on arrête tout

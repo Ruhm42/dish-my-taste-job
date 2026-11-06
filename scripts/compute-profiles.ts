@@ -14,14 +14,14 @@
  *
  * See .specs/technique/05-inference-des-horaires.md and 06-pipeline-ingestion.md (step 6).
  */
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { inferCategory, inferCuisine } from '../lib/category'
 import { computeProfile, parseOpeningHours } from '../lib/hours'
 import type {
   Category, Confidence, GoogleOpeningHours, RhythmProfile, ServiceWindow, SplitShiftRisk,
 } from '../lib/hours'
 import { profileColumns } from '../lib/profile-columns'
-import { hoursPurged } from '../lib/purge'
+import { hoursPurged, hoursUnchangedSince } from '../lib/purge'
 import { db } from '../lib/db/client'
 import { restaurant } from '../lib/db/schema'
 
@@ -215,25 +215,33 @@ function check(recomputed: Recomputed[]): void {
 }
 
 async function write(recomputed: Recomputed[]): Promise<void> {
-  const modified = recomputed.filter((r) => divergences(r).length > 0).length
   const now = new Date()
+  const skipped = new Set<Recomputed>()
 
   // We rewrite EVERY row, unchanged ones included: `profile_computed_at` must date the
   // last computation, not the last modification — otherwise we can no longer tell a row
   // that was put through the mill from one that was simply forgotten.
+  //
+  // Except a row whose hours moved since we read them (D49): purged, its profile would put
+  // expired content back; swept, it would overwrite the fresh profile with the old one.
   for (let i = 0; i < recomputed.length; i += BATCH_SIZE) {
     const batch = recomputed.slice(i, i + BATCH_SIZE)
     await Promise.all(
-      batch.map((r) =>
-        db
+      batch.map(async (r) => {
+        const written = await db
           .update(restaurant)
           .set({ ...writtenColumns(r), profileComputedAt: now })
-          .where(eq(restaurant.id, r.row.id)),
-      ),
+          .where(and(eq(restaurant.id, r.row.id), hoursUnchangedSince(r.row)))
+          .returning({ id: restaurant.id })
+        if (written.length === 0) skipped.add(r)
+      }),
     )
   }
 
-  console.log(`\n${recomputed.length} profile(s) written, ${modified} of them actually modified`)
+  const kept = recomputed.filter((r) => !skipped.has(r))
+  const modified = kept.filter((r) => divergences(r).length > 0).length
+  console.log(`\n${kept.length} profile(s) written, ${modified} of them actually modified`)
+  console.log(`${skipped.size} left unwritten: their hours were purged or swept since they were read (D49)`)
 }
 
 // ─────────────────────────────────────────────────────────────

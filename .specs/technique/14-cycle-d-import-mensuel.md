@@ -533,6 +533,21 @@ Rare, mais pas impossible, et le dommage dure.
 
 Pas de verrou partagé, ni de groupe de concurrence commun aux workflows : D49 dit pourquoi.
 
+> **Annoté le 6 novembre 2026.** Les deux règles sont construites.
+> - **La purge** vise une fiche échue dont une colonne de `CLEARED` (`lib/purge.ts`) tient autre
+>   chose que sa valeur par défaut. Son log ajoute `N of them rewritten after an earlier purge` :
+>   0 attendu.
+> - **`compute:profiles` et `match:sirene`** n'écrivent une fiche que si ses horaires bruts sont
+>   présents ou absents comme à la lecture, et si `hours_fetched_at` vaut, à la milliseconde, ce
+>   qui a été lu (`hoursUnchangedSince`). Leur log ajoute `N left unwritten`. Non nul, il dit
+>   qu'une purge ou un balayage est passé pendant l'étape : sans dommage, la fiche reste comme
+>   l'autre écriture l'a laissée.
+> - **Les tests** (`tests/purge.test.ts`) : le cas « réécrite après la purge », colonne par
+>   colonne, et l'écriture conditionnelle sur une fiche inchangée, purgée, rebalayée, et sur une
+>   date lue avec ses microsecondes. Le point 5 de *Comment on saura que c'est en ordre* est tenu
+>   par eux.
+> - **Le rejeu** de la course sur une copie, avant et après : voir l'annotation de D49.
+
 ## 9. Lancements manuels, rattrapage, coupure — *brouillon*
 
 > **Brouillon** — les faits sont mesurés ; les choix sont C2, C3 et C6.
