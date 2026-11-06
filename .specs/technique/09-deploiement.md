@@ -41,6 +41,7 @@ flowchart LR
 | Balayage | GitHub Actions | Le 1er et le 16 du mois, 09:00 UTC ([D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16)) | Planification + manuel |
 | Purge du contenu expiré | GitHub Actions | Chaque jour à 10:23 UTC, job distinct du réveil ([D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus)) | Planification + manuel |
 | Maintien en vie | GitHub Actions | Chaque jour (base), chaque lundi (commit) | Planification + manuel |
+| Âge de la dernière passe | GitHub Actions | Chaque jour à 18:41 UTC, workflow distinct ([D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour)) | Planification + manuel |
 | Ingestion SIRENE et géocodage | Poste local | Trimestriel | À la main |
 
 **Les fonctions tournent à côté de la base, pas à côté des utilisateurs.** Un rendu de

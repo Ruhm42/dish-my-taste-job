@@ -2519,6 +2519,28 @@ Le premier signe serait la liste vide, jusqu'à quinze jours plus tard.
 
 Le détail vit dans [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 7.
 
+> **Annoté le 6 novembre 2026, à la mise en œuvre.** Construite dans
+> `.github/workflows/pass-age.yml`, chaque jour à 18:41 UTC, juste après l'échéance d'une passe
+> (18:00). C'est un workflow à elle et non un job de `keepalive.yml` : son rouge porte son nom, et
+> lancer le réveil à la main pousse aussi un commit. Elle lit le journal de
+> [D52](#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel),
+> `sweep_execution`, et non plus `sweep_run`, par `psql` avec `ON_ERROR_STOP`
+> (`scripts/check-pass-age.sql`). Jusqu'à l'échéance d'une passe, elle lit la précédente.
+>
+> Compte comme une passe une exécution du balayage close depuis l'heure planifiée :
+> - **un échec compte** : la passe a eu lieu, et `sweep.yml` est déjà rouge. Le tenir pour une
+>   passe manquante ferait d'un défaut qui revient à chaque passe, une cellule irréductible, un
+>   rouge quotidien ;
+> - **un refus ne compte pas** : il n'a rien dépensé ni rafraîchi, comme D52 l'annonçait ;
+> - **une ligne à la main ne compte pas** : elle consigne une dépense après coup, avec les heures
+>   recopiées d'un log, que rien dans le code ne tient ;
+> - une ligne sans fin non plus : en cours, ou tuée puis close par la suivante.
+>
+> r2 : `CYCLE.maxScheduleDelayHours` vaut 8. Rejouée le 6 novembre sur une copie de la production
+> du jour, du 16 novembre et sur douze mois, graines 1 à 3, la simulation garde une pire heure de
+> **92,2 %**, la même qu'à 7 h. La première exécution qui regarde une passe est celle du
+> 16 novembre au soir.
+
 ---
 
 ## D51 — La région des fonctions suit la base, pas les utilisateurs
