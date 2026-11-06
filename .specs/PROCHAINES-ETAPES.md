@@ -295,6 +295,17 @@ Le choix se pose avec C4 : de nouveaux points SIRENE demandent des cellules.
   entamerait les 1 000 gratuits sans que notre compteur le voie.
 - L'adresse du compte, pour l'axe 0.
 
+> **Relu le 6 novembre 2026**, par `gcloud` et les API Service Usage et Cloud Billing Budget,
+> en lecture seule. Trois des quatre points sont réglés ; l'adresse reste au propriétaire.
+> - **Les plafonds journaliers** : `SearchNearbyRequest` à **1 000**. `GetPlaceRequest`,
+>   `SearchTextRequest`, `AutocompletePlacesRequest` et `GetPhotoMediaRequest` ont chacun un
+>   plafond posé par le projet, de valeur **0** (l'API omet les zéros). Conforme à
+>   [`technique/02`](technique/02-budget-google-et-garde-fous.md).
+> - **L'alerte budget** : **1 €**, seuils 50 % et 100 %, limitée à ce projet. C'est
+>   `technique/08` qui a raison ; D8 dit ce qui a été posé ce jour-là.
+> - **Le compte de facturation** ne porte qu'un projet, celui-ci : aucun voisin n'entame le
+>   quota gratuit.
+
 **Une option.** Abaisser le plafond journalier de `SearchNearbyRequest` à 500.
 - Une passe dépense au plus 450 : rien ne change pour le cycle.
 - Une clé qui fuit coûterait environ 490 à 510 $ par mois au lieu de 1 015 à 1 050 $.
