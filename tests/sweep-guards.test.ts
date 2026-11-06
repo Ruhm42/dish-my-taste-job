@@ -196,7 +196,8 @@ describe('passQueue — the order a pass walks', () => {
 describe('passFailures — what fails a pass (D39), and only that', () => {
   const clean = {
     interruption: null, refusal: null, lockLeak: null,
-    failedCells: 0, irreducibleCells: 0, orphanTruncations: 0, forecast: 0.9,
+    failedCells: 0, irreducibleCells: 0, orphanTruncations: 0,
+    placesReturned: 4341, placesWithHours: 3520, forecast: 0.9,
   }
 
   it('passes a pass that stopped on its ceiling and left a discovery backlog', () => {
@@ -227,6 +228,26 @@ describe('passFailures — what fails a pass (D39), and only that', () => {
   it('fails under the freshness floor, not at it', () => {
     expect(passFailures({ ...clean, forecast: 0.799 })[0]).toMatch(/forecast freshness/)
     expect(passFailures({ ...clean, forecast: 0.8 })).toEqual([])
+  })
+
+  it('fails when fewer than half the places returned carry hours, and names the source (D48)', () => {
+    const lost = passFailures({ ...clean, placesWithHours: 0 })
+    expect(lost).toHaveLength(1)
+    expect(lost[0]).toMatch(/places returned with opening hours 0\.0% \(0 of 4341\), under 50\.0%/)
+    expect(lost[0]).toMatch(/field mask/)
+    expect(passFailures({ ...clean, placesReturned: 100, placesWithHours: 49 })).toHaveLength(1)
+    expect(passFailures({ ...clean, placesReturned: 100, placesWithHours: 50 })).toEqual([])
+  })
+
+  it('does not judge the hours of a pass that returned no place, a dry run among them', () => {
+    expect(passFailures({ ...clean, placesReturned: 0, placesWithHours: 0 })).toEqual([])
+  })
+
+  it('reads a loss of hours before the forecast it drags down', () => {
+    const reasons = passFailures({ ...clean, placesWithHours: 0, forecast: 0 })
+    expect(reasons).toHaveLength(2)
+    expect(reasons[0]).toMatch(/opening hours/)
+    expect(reasons[1]).toMatch(/forecast freshness/)
   })
 
   it('lists every defect, and a failed pass is never capped', () => {

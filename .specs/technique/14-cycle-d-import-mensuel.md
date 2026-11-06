@@ -447,6 +447,18 @@ qu'il veut dire, quoi regarder, quoi faire, et ce qu'il ne faut pas faire.
 >   porte la dépense réelle et sa source (§ 5). À ne pas faire : éditer `calls_made` d'une ligne
 >   existante.
 
+> **Annoté le 6 novembre 2026.** La ligne *(D48)* est construite. Sa raison affichée :
+> `places returned with opening hours … (N of M), under 50.0%: Google is no longer sending hours`.
+> - Elle précède `forecast freshness`, que la même perte fait tomber : quand les deux sortent
+>   ensemble, c'est elle qu'on suit.
+> - `forecast freshness` peut désormais lire 0,0 % : une base sans aucune échéance ne prévoit plus
+>   100 % (D48 r1).
+> - Une passe qui n'a renvoyé aucun lieu, une passe à sec comprise, n'est pas jugée sur les
+>   horaires.
+>
+> Le point 4 de *Comment on saura que c'est en ordre* est tenu par les tests de `passFailures` et
+> de `freshShare`, sans un appel.
+
 Un cycle rouge envoie aujourd'hui un **e-mail GitHub, et rien d'autre**. Les 8, 12 et 15
 octobre, le réveil a été rouge trois fois sans que rien ne bouge, et la base est restée en pause
 neuf jours. Le canal est un choix du propriétaire (C5).

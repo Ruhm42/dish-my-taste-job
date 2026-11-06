@@ -2381,6 +2381,25 @@ Repère mesuré : la part des lieux renvoyés avec horaires valait **80 %** le 1
 - Le seuil se relit si la part mesurée bouge de plus de dix points. Le journal par passe la
   consignera, s'il est construit.
 
+> **Annoté le 6 novembre 2026, après la construction.** Les deux règles sont construites, avant
+> la passe du 16 novembre.
+> - Règle 1 : `freshShare` (`lib/coverage.ts`) lit 0 sur une base sans échéance. Elle sert la
+>   prévision stockée d'une passe réelle, l'alarme de `cron-refresh` et la colonne
+>   `fresh_at_start` du journal.
+> - Règle 2 : un défaut de plus dans `passFailures` (`scripts/sweep.ts`), affiché
+>   `places returned with opening hours … under 50.0%`. Il précède la prévision dans la raison :
+>   quand la perte des horaires fait aussi tomber la prévision, la source se lit d'abord. Une
+>   passe à sec ne renvoie aucun lieu, et n'est donc jamais jugée par cette règle.
+> - **Un écart.** La prévision *du plan* — celle que juge une passe à sec, et qui choisit la
+>   couverture — garde 1 quand aucune fiche n'est datée. À 0, elle ferait choisir la couverture
+>   des fiches connues, vide, au moment où il faut tout rebalayer. C'est la prévision stockée qui
+>   juge une passe réelle, et elle lit 0.
+> - Le journal de [D52](#d52--la-dépense-dune-période-se-lit-dans-un-journal-tenu-appel-par-appel)
+>   consigne la part à chaque exécution : `places_with_hours` sur `places_returned`. Le 1er
+>   novembre, 81 % (3 520 sur 4 341).
+>
+> Voir [`technique/14`](technique/14-cycle-d-import-mensuel.md) § 6.
+
 ---
 
 ## D49 — La purge rattrape ce qu'une étape hors ligne réécrit
