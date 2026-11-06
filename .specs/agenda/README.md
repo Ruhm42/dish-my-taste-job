@@ -1,6 +1,6 @@
 # Agenda — ce qui se vérifie ou se fait à une date
 
-> **Statut** : acté · **Dernière mise à jour** : 2026-10-28
+> **Statut** : acté · **Dernière mise à jour** : 2026-11-06
 
 Le projet vit au rythme de dates qu'on ne choisit pas : deux passes par mois, une échéance de
 30 jours sur chaque horaire, un quota qui se renouvelle à minuit Pacifique, des stocks publiés
@@ -72,7 +72,7 @@ quelque chose de particulier, et il renvoie alors ici pour le reste.
 |---|---|---|---|
 | Chaque jour | 05:17 | le réveil de la base : des lectures par le pooler et par la Data API | [D35](../DECISIONS.md#d35--réveiller-la-base-chaque-jour-par-le-pooler-et-par-lapi-et-découpler-le-commit) |
 | Chaque jour | 10:23 | la purge des horaires échus, en écriture | [D45](../DECISIONS.md#d45--purger-ce-qui-a-expiré-et-reconnaître-ce-que-google-ne-renvoie-plus) r1 |
-| Chaque jour | — | l'âge de la dernière passe — **décidé, pas construit** | [D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour) |
+| Chaque jour | 18:41 | l'âge de la dernière passe : rouge si aucune passe n'a fini neuf heures après la dernière planifiée | [D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour) |
 | Chaque lundi | 05:47 | le commit du réveil : sans commit pendant 60 jours, GitHub coupe toutes les planifications | [D19](../DECISIONS.md#d19--une-action-hebdomadaire-contre-les-deux-mises-en-veille), [D35](../DECISIONS.md#d35--réveiller-la-base-chaque-jour-par-le-pooler-et-par-lapi-et-découpler-le-commit) |
 | Le 1er et le 16 | 09:00 | une passe du cycle : voir ci-dessous | [D38](../DECISIONS.md#d38--deux-passages-par-mois-le-1er-et-le-16) |
 | Le 1er | 07:00 ou 08:00 | la période du quota se renouvelle | [D47](../DECISIONS.md#d47--la-période-du-quota-est-le-mois-du-pacifique) |

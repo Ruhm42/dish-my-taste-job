@@ -27,7 +27,8 @@ on:
     # clears both without leaving the day. The 16th's pass needs the same: its ceiling opens
     # on the 16th in California.
     #
-    # GitHub has started these up to seven hours late (CYCLE.maxScheduleDelayHours).
+    # GitHub has started these up to eight hours late (CYCLE.maxScheduleDelayHours), and a
+    # pass it drops turns .github/workflows/pass-age.yml red (D50).
     - cron: '0 9 1 * *'
     - cron: '0 9 16 * *'
   workflow_dispatch:
