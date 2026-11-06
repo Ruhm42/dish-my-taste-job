@@ -184,11 +184,17 @@ export const CYCLE = {
   /** When sweep.yml fires both passes. The two must agree. */
   scheduleDays: [1, 16],
   scheduleHourUtc: 9,
-  /** GitHub has started the scheduled run up to seven hours late (measured, D38). */
-  maxScheduleDelayHours: 7,
+  /**
+   * GitHub's worst start delay on a schedule, rounded up from what was measured (D50): 7 h 52 on
+   * the keepalive on 12 October 2026, 6 h 54 and 6 h 40 on the sweeps of 1 October and
+   * 1 November. Seven hours, the value before, was already exceeded. The forecast's worst hour
+   * and the simulation's draws read it; scripts/check-pass-age.sql writes its deadline out, and
+   * tests/pass-age.test.ts holds it to this value.
+   */
+  maxScheduleDelayHours: 8,
   /**
    * Content due before the next pass plus this margin is served first (D38 rule 3): the next
-   * pass can start seven hours late and takes a while to reach any given cell.
+   * pass can start eight hours late and takes a while to reach any given cell.
    */
   urgentMarginHours: 12,
   /** D39 rule 3: under this, the forecast worst hour fails the cycle. */

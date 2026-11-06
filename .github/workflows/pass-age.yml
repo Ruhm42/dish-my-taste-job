@@ -1,0 +1,49 @@
+# The age of the last pass, checked every day (D50).
+#
+# A pass that never runs produces no red: there is no run to fail. GitHub delays scheduled runs
+# by up to eight hours and, by its own doc, may drop one under load; a workflow disabled by hand
+# or a sweep that dies before opening its journal row look the same. The first sign would be an
+# empty list, up to two weeks later. This job reads the spend journal (D52) and fails when no
+# pass has finished since the last scheduled one, nine hours after it. What it counts as a pass
+# is written at the top of scripts/check-pass-age.sql.
+#
+# Its own workflow rather than a job of the keepalive: D35 decoupled the keepalive's jobs after
+# one failure stopped both, a red named after the keepalive would point at a paused database,
+# and a manual run of keepalive.yml pushes a commit as well. A manual run of this one only reads.
+#
+# What it cannot see: GitHub disabling every schedule after 60 days without a commit takes this
+# one down with the sweep. Only a witness outside the repository would (C5).
+# See .specs/technique/14-cycle-d-import-mensuel.md § 7.
+
+name: Pass age
+
+on:
+  schedule:
+    # A pass is due by 18:00 UTC on the 1st and the 16th: 09:00, eight hours of GitHub's delay,
+    # an hour of job. Scheduled after that, the run on a pass day reads that pass, red the same
+    # evening or at worst early the next morning. Off the round hour, because schedules on a
+    # round hour queue up on GitHub's side.
+    - cron: '41 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-pass-age:
+    # On a fork, the secret is not this project's.
+    if: github.repository == 'Ruhm42/dish-my-taste-job'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # For the SQL file only: psql is preinstalled on the runner, no dependency is installed.
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Through the pooler and the DATABASE_URL secret the sweep itself uses. ON_ERROR_STOP is
+      # also set in the file: without it psql exits 0 whatever failed.
+      - name: Check the age of the last pass
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1 --file scripts/check-pass-age.sql

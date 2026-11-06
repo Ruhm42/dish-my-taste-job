@@ -108,6 +108,10 @@ Outside the cycle, every day from `.github/workflows/purge.yml`:
 npm run purge:expired    # dry-run by default; --write clears hours past their expiry (D45)
 ```
 
+And every evening from `.github/workflows/pass-age.yml`, with psql alone: `scripts/check-pass-age.sql`
+fails when no pass has finished nine hours after the last scheduled one (D50). It holds the
+schedule and the delay written out; `tests/pass-age.test.ts` holds them to `CYCLE`.
+
 Scripts need env vars, so they run through `node --env-file=.env.local --import tsx`.
 
 ## CI and deploying

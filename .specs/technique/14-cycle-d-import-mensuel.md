@@ -12,8 +12,8 @@ Les pièces du cycle :
 
 - `sweep.yml` lance `cron-refresh.ts`, qui enchaîne `sweep:google`, `match:sirene` et
   `compute:profiles` ;
-- s'y ajoutent la purge (`purge.yml`), le réveil de la base (`keepalive.yml`) et les ingestions
-  SIRENE et BAN, faites à la main.
+- s'y ajoutent la purge (`purge.yml`), le réveil de la base (`keepalive.yml`), la vérification de
+  l'âge de la dernière passe (`pass-age.yml`) et les ingestions SIRENE et BAN, faites à la main.
 
 Elle est écrite sous la lecture des conditions Google que D7 a retenue : 30 jours de
 conservation. Cette lecture est mise en question par l'axe 0 de
@@ -69,6 +69,7 @@ Les requêtes sont en annexe.
 | `compute:profiles` | dans le cycle, même après un échec | à chaque passe | profil de chaque fiche, `schedule` compris | non | `--check` | D29, D33 |
 | `purge.yml` → `purge-expired.ts --write` | Actions | chaque jour, 10:23 UTC ; `workflow_dispatch` **écrit par défaut** | vide les horaires échus et ce qui en dérive | non | `--dry-run` | D45 r1 |
 | `keepalive.yml` | Actions | lectures chaque jour à 05:17 UTC ; commit le lundi à 05:47 UTC | un horodatage, le lundi | non | — | D19, D35 |
+| `pass-age.yml` → `check-pass-age.sql` | Actions | chaque jour, 18:41 UTC ; `workflow_dispatch` | rien : lecture seule | non | — | D50 |
 | `ingest:sirene`, `ingest:geocode` | poste local | « trimestriel », à la main | `sirene_establishment` | non | **aucun** | D13, D41 |
 | `simulate:passes` | poste local | avant de toucher `CYCLE` ou la couverture | rien | non | toujours sec | D38 |
 
@@ -114,6 +115,18 @@ charge.
 Le maximum mesuré, 7 h 52, dépasse les 7 h que suppose `CYCLE.maxScheduleDelayHours`.
 [D50](../DECISIONS.md#d50--lâge-de-la-dernière-passe-se-vérifie-chaque-jour) fixe la valeur à
 8 h. Rejouée avec 8 h, la simulation garde la même pire heure, 91,5 %.
+
+> **Annoté le 6 novembre 2026, à la mise en œuvre de D50.** `CYCLE.maxScheduleDelayHours` vaut
+> 8 h. Relevé depuis : **6 h 40** sur la passe du 01/11. Rejouée sur une copie de la production du
+> 06/11, `simulate:passes --from=2026-11-16T09:00:00Z`, graines 1 à 3 :
+>
+> | Retard maximal | Pire heure | Prévision la plus basse | Plafonds |
+> |---|---|---|---|
+> | 7 h | 92,2 % | 92,2 % | 900 et 450, tenus |
+> | 8 h | **92,2 %** | 92,2 % | 900 et 450, tenus |
+>
+> La pire heure tombe en avril ou mai 2027 selon la graine. La simulation ne lit pas le journal :
+> elle ouvre novembre à zéro et donne 900 appels à la passe du 16, à qui il en reste 450.
 
 La documentation de GitHub, lue le 17/10, permet un fuseau IANA dans `on.schedule`. Ce qu'il
 permettrait est un choix du propriétaire, au § 9.
@@ -461,6 +474,12 @@ neuf jours. Le canal est un choix du propriétaire (C5).
   couplage (D35).
 - **Le réveil** : vert chaque jour, ou la base se met en pause.
 - **La purge** : verte chaque jour, ou du contenu échu reste stocké.
+
+> **Annoté le 6 novembre 2026 : l'âge de la dernière passe est vérifié.**
+> `.github/workflows/pass-age.yml`, chaque jour à 18:41 UTC, passe `scripts/check-pass-age.sql` à
+> `psql`. Il lit le journal du § 5, pas `sweep_run`. Un échec y compte comme une passe, un refus,
+> une ligne à la main ou une ligne sans fin non : D50, annotation du même jour, dit pourquoi. Son
+> rouge nomme la passe attendue, son échéance, et la dernière ligne du journal.
 
 Une vérification planifiée meurt avec les autres planifications. Si GitHub désactive le dépôt
 après 60 jours sans commit, ou cesse de planifier, rien de ce qui précède ne le dit. Un témoin
